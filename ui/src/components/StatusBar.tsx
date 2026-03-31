@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import type { QueueStats } from '../hooks/useWebSocket';
 
 interface Props {
@@ -7,6 +8,14 @@ interface Props {
 }
 
 export function StatusBar({ connectivity, queueStats, updateAvailable }: Props) {
+  const [version, setVersion] = useState('...');
+
+  useEffect(() => {
+    fetch('/status')
+      .then((r) => r.json())
+      .then((data) => setVersion(data.version))
+      .catch(() => {});
+  }, []);
   const isOnline = connectivity === 'online';
   const connColor = isOnline ? '#4caf50' : connectivity === 'offline' ? '#f44336' : '#9e9e9e';
   const connLabel = connectivity === 'unknown' ? 'Connecting...' : isOnline ? 'Online' : 'Offline';
@@ -27,7 +36,7 @@ export function StatusBar({ connectivity, queueStats, updateAvailable }: Props) 
       </div>
 
       <div style={styles.section}>
-        <span style={styles.versionText}>v1.0.0</span>
+        <span style={styles.versionText}>v{version}</span>
         {updateAvailable && (
           <span style={styles.badge}>Update {updateAvailable}</span>
         )}

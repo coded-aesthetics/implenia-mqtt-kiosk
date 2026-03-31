@@ -23,9 +23,11 @@ export function UpdateBanner({ version, applying }: Props) {
       </span>
       <button
         style={styles.button}
-        onClick={() => window.location.reload()}
+        onClick={() => {
+          fetch('/api/update', { method: 'POST' });
+        }}
       >
-        Reload now
+        Install & restart
       </button>
     </div>
   );

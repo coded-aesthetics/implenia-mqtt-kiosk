@@ -31,6 +31,7 @@ export function useWebSocket() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectDelay = useRef(1000);
+  const wasApplyingUpdate = useRef(false);
 
   const connect = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -41,6 +42,11 @@ export function useWebSocket() {
 
     ws.onopen = () => {
       reconnectDelay.current = 1000;
+      // If we were applying an update and just reconnected, the server has restarted — reload
+      if (wasApplyingUpdate.current) {
+        window.location.reload();
+        return;
+      }
     };
 
     ws.onmessage = (event) => {
@@ -83,6 +89,7 @@ export function useWebSocket() {
             break;
 
           case 'update-applying':
+            wasApplyingUpdate.current = true;
             setState((prev) => ({ ...prev, updateApplying: true }));
             break;
         }
