@@ -1,3 +1,4 @@
+import net from 'node:net';
 import dns from 'node:dns';
 import { EventEmitter } from 'node:events';
 import { config } from './config.js';
@@ -17,8 +18,30 @@ class ConnectivityWatchdog extends EventEmitter {
   }
 
   async probe(): Promise<boolean> {
+    const host = config.CONNECTIVITY_PROBE_HOST;
+
+    // If host is an IP address, do a TCP connect to port 53 (DNS)
+    if (net.isIP(host)) {
+      return new Promise((resolve) => {
+        const socket = net.createConnection({ host, port: 53, timeout: 5000 });
+        socket.on('connect', () => {
+          socket.destroy();
+          resolve(true);
+        });
+        socket.on('timeout', () => {
+          socket.destroy();
+          resolve(false);
+        });
+        socket.on('error', () => {
+          socket.destroy();
+          resolve(false);
+        });
+      });
+    }
+
+    // Otherwise resolve as a hostname
     return new Promise((resolve) => {
-      dns.resolve(config.CONNECTIVITY_PROBE_HOST, (err) => {
+      dns.resolve(host, (err) => {
         resolve(!err);
       });
     });

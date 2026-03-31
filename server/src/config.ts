@@ -1,6 +1,10 @@
+import path from 'node:path';
 import { z } from 'zod';
 import dotenv from 'dotenv';
 
+// Load .env from project root (parent of server/)
+dotenv.config({ path: path.resolve(process.cwd(), '..', '.env') });
+// Also try cwd in case we're already at root
 dotenv.config();
 
 const envSchema = z.object({

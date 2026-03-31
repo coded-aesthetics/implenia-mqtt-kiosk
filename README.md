@@ -148,4 +148,3 @@ ui/src/
     UploadQueue.tsx    — Pending/uploaded/failed counts
   service-worker.ts   — Workbox precache + runtime caching
 ```
-# implenia-mqtt-kiosk
