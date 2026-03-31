@@ -12,6 +12,9 @@
     "start": "node server/dist/index.js",
     "lint": "npm run lint -w server && npm run lint -w ui"
   },
+  "overrides": {
+    "lodash": "4.17.21"
+  },
   "devDependencies": {
     "concurrently": "^9.1.2"
   }

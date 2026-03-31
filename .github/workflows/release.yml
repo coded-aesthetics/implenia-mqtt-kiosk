@@ -18,12 +18,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: |
-          rm -f package-lock.json
-          npm install --ignore-scripts
-          npm rebuild
+        run: npm ci
 
       - name: Build server
         run: npm run build -w server
