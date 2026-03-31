@@ -19,7 +19,7 @@ const envSchema = z.object({
   // Updater
   GITHUB_OWNER: z.string().min(1, 'GITHUB_OWNER is required'),
   GITHUB_REPO: z.string().min(1, 'GITHUB_REPO is required'),
-  UPDATE_CHECK_INTERVAL_MS: z.coerce.number().positive().default(3_600_000),
+  UPDATE_CHECK_INTERVAL_MS: z.coerce.number().positive().default(3_500_000),
 
   // Server
   PORT: z.coerce.number().positive().default(3000),
