@@ -10,7 +10,7 @@ export function UpdateBanner({ version, applying }: Props) {
     return (
       <div style={{ ...styles.banner, backgroundColor: '#1565c0' }}>
         <span style={styles.text}>
-          Applying update... The app will reload shortly.
+          Update wird installiert... Die App startet gleich neu.
         </span>
       </div>
     );
@@ -19,7 +19,7 @@ export function UpdateBanner({ version, applying }: Props) {
   return (
     <div style={styles.banner}>
       <span style={styles.text}>
-        Version {version} is available.
+        Version {version} verfügbar.
       </span>
       <button
         style={styles.button}
@@ -27,7 +27,7 @@ export function UpdateBanner({ version, applying }: Props) {
           fetch('/api/update', { method: 'POST' });
         }}
       >
-        Install & restart
+        Installieren & neustarten
       </button>
     </div>
   );

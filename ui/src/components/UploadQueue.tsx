@@ -9,19 +9,19 @@ export function UploadQueue({ stats }: Props) {
     <div style={styles.bar}>
       <div style={styles.stat}>
         <span style={styles.count}>{stats.pending}</span>
-        <span style={styles.label}>Pending</span>
+        <span style={styles.label}>Ausstehend</span>
       </div>
       <div style={styles.divider} />
       <div style={styles.stat}>
         <span style={{ ...styles.count, color: '#4caf50' }}>{stats.uploaded}</span>
-        <span style={styles.label}>Uploaded</span>
+        <span style={styles.label}>Hochgeladen</span>
       </div>
       <div style={styles.divider} />
       <div style={styles.stat}>
         <span style={{ ...styles.count, color: stats.failed > 0 ? '#f44336' : '#666688' }}>
           {stats.failed}
         </span>
-        <span style={styles.label}>Failed</span>
+        <span style={styles.label}>Fehlgeschlagen</span>
       </div>
     </div>
   );

@@ -66,7 +66,7 @@ export function SensorDisplay({ readings }: Props) {
   if (entries.length === 0) {
     return (
       <div style={styles.empty}>
-        Waiting for sensor data...
+        Warte auf Sensordaten...
       </div>
     );
   }

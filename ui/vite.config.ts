@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
       manifest: {
         name: 'Implenia Kiosk',
         short_name: 'Kiosk',
-        description: 'Construction site sensor kiosk',
+        description: 'Baustellen-Sensor-Kiosk',
         theme_color: '#1a1a2e',
         background_color: '#1a1a2e',
         display: 'standalone',

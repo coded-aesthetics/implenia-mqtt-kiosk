@@ -18,7 +18,7 @@ export function StatusBar({ connectivity, queueStats, updateAvailable }: Props) 
   }, []);
   const isOnline = connectivity === 'online';
   const connColor = isOnline ? '#4caf50' : connectivity === 'offline' ? '#f44336' : '#9e9e9e';
-  const connLabel = connectivity === 'unknown' ? 'Connecting...' : isOnline ? 'Online' : 'Offline';
+  const connLabel = connectivity === 'unknown' ? 'Verbinde...' : isOnline ? 'Verbunden' : 'Offline';
 
   return (
     <div style={styles.bar}>
@@ -30,8 +30,8 @@ export function StatusBar({ connectivity, queueStats, updateAvailable }: Props) 
       <div style={styles.section}>
         <span style={styles.text}>
           {queueStats.pending > 0
-            ? `${queueStats.pending} readings pending`
-            : 'Queue clear'}
+            ? `${queueStats.pending} Messwerte ausstehend`
+            : 'Warteschlange leer'}
         </span>
       </div>
 
