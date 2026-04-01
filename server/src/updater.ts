@@ -25,10 +25,7 @@ class UpdateManager extends EventEmitter {
 
   constructor() {
     super();
-    const pkgPath = path.join(process.cwd(), 'server', 'package.json');
-    const fallbackPath = path.join(process.cwd(), 'package.json');
-    const resolvedPath = fs.existsSync(pkgPath) ? pkgPath : fallbackPath;
-    const pkg = JSON.parse(fs.readFileSync(resolvedPath, 'utf-8'));
+    const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
     this.currentVersion = pkg.version;
     console.log(`[Updater] Current version: ${this.currentVersion}`);
   }
