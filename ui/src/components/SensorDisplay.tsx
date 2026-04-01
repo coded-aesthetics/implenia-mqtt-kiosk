@@ -10,17 +10,30 @@ function formatTopic(topic: string): string {
   return parts[parts.length - 1] || topic;
 }
 
+function isNoValue(v: unknown): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    return s === '' || s === 'NaN' || s === '-Infinity' || s === 'Infinity';
+  }
+  if (typeof v === 'number') return !Number.isFinite(v);
+  return false;
+}
+
 function parsePayload(payload: string): { value: string; unit: string } {
   try {
     const parsed = JSON.parse(payload);
     if (typeof parsed === 'object' && parsed !== null) {
-      const value = parsed.value ?? parsed.v ?? Object.values(parsed)[0];
+      const hasValue = 'value' in parsed || 'v' in parsed;
+      const raw = parsed.value ?? parsed.v;
       const unit = parsed.unit ?? parsed.u ?? '';
-      return { value: String(value), unit: String(unit) };
+      if (!hasValue || isNoValue(raw)) return { value: '–', unit: String(unit) };
+      return { value: String(raw), unit: String(unit) };
     }
+    if (isNoValue(parsed)) return { value: '–', unit: '' };
     return { value: String(parsed), unit: '' };
   } catch {
-    return { value: payload, unit: '' };
+    return { value: payload || '–', unit: '' };
   }
 }
 
