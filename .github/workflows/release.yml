@@ -37,6 +37,28 @@ jobs:
       - name: Build UI
         run: npm run build -w ui
 
+      - name: Smoke test server
+        run: |
+          MQTT_BROKER_URL=mqtt://127.0.0.1:1883 \
+          MQTT_TOPICS=sensors/# \
+          GITHUB_OWNER=test \
+          GITHUB_REPO=test \
+          PORT=3999 \
+          node server/dist/index.js &
+          SERVER_PID=$!
+          # Wait for server to be ready (up to 10s)
+          for i in $(seq 1 20); do
+            if curl -s http://127.0.0.1:3999/status > /dev/null 2>&1; then
+              echo "Server responded on /status"
+              kill $SERVER_PID
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "Server did not respond within 10s"
+          kill $SERVER_PID 2>/dev/null
+          exit 1
+
       - name: Get version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
