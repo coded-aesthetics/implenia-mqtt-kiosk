@@ -148,7 +148,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
         </div>
       )}
 
-      {status === 'empty' && !dismissedEmpty && (
+      {status === 'empty' && (
         <div style={styles.recordingRow}>
           <span style={styles.warningIcon}>!</span>
           <span style={styles.warningLabel}>Keine Messwerte aufgezeichnet</span>
