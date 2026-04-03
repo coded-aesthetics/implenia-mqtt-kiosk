@@ -6,10 +6,12 @@ import { config } from './config.js';
 import { connectivity } from './connectivity.js';
 import { mqttClient } from './mqtt.js';
 import { setupWebSocket, stopWebSocket } from './websocket.js';
-import { startUploader, stopUploader } from './upload.js';
 import { updater } from './updater.js';
 import { registerDataRoutes } from './routes/data.js';
 import { registerStatusRoutes } from './routes/status.js';
+import { registerConfigRoutes } from './routes/config.js';
+import { registerImpleniaRoutes } from './routes/implenia.js';
+import { registerRecordingRoutes } from './routes/recording.js';
 import { close as closeDb } from './db.js';
 
 const app = Fastify({
@@ -31,6 +33,9 @@ async function start(): Promise<void> {
   // Register routes
   registerDataRoutes(app);
   registerStatusRoutes(app);
+  registerConfigRoutes(app);
+  registerImpleniaRoutes(app);
+  registerRecordingRoutes(app);
   setupWebSocket(app);
 
   // SPA fallback: serve index.html for unmatched routes
@@ -41,7 +46,6 @@ async function start(): Promise<void> {
   // Start services
   connectivity.start();
   mqttClient.start();
-  startUploader();
   updater.start();
 
   // Start HTTP server
@@ -53,7 +57,6 @@ async function start(): Promise<void> {
 async function shutdown(signal: string): Promise<void> {
   console.log(`\n[Server] Received ${signal}, shutting down...`);
   updater.stop();
-  stopUploader();
   stopWebSocket();
   mqttClient.stop();
   connectivity.stop();

@@ -12,9 +12,9 @@ const envSchema = z.object({
   MQTT_BROKER_URL: z.string().url('MQTT_BROKER_URL must be a valid URL (e.g. mqtt://192.168.1.50:1883)'),
   MQTT_TOPICS: z.string().min(1, 'MQTT_TOPICS must be a comma-separated list of topics'),
 
-  // Implenia API
-  IMPLENIA_API_URL: z.string().url('IMPLENIA_API_URL must be a valid URL'),
-  IMPLENIA_API_KEY: z.string().min(1, 'IMPLENIA_API_KEY is required'),
+  // Implenia API (optional — can be configured at runtime via /api/config)
+  IMPLENIA_API_URL: z.string().url('IMPLENIA_API_URL must be a valid URL').optional(),
+  IMPLENIA_API_KEY: z.string().min(1).optional(),
 
   // Updater
   GITHUB_OWNER: z.string().min(1, 'GITHUB_OWNER is required'),

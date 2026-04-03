@@ -1,13 +1,11 @@
 import { useState, useEffect } from 'react';
-import type { QueueStats } from '../hooks/useWebSocket';
 
 interface Props {
   connectivity: 'online' | 'offline' | 'unknown';
-  queueStats: QueueStats;
   updateAvailable: string | null;
 }
 
-export function StatusBar({ connectivity, queueStats, updateAvailable }: Props) {
+export function StatusBar({ connectivity, updateAvailable }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -25,14 +23,6 @@ export function StatusBar({ connectivity, queueStats, updateAvailable }: Props) 
       <div style={styles.section}>
         <span style={{ ...styles.dot, backgroundColor: connColor }} />
         <span style={styles.text}>{connLabel}</span>
-      </div>
-
-      <div style={styles.section}>
-        <span style={styles.text}>
-          {queueStats.pending > 0
-            ? `${queueStats.pending} Messwerte ausstehend`
-            : 'Warteschlange leer'}
-        </span>
       </div>
 
       <div style={styles.section}>
@@ -77,7 +67,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   versionText: {
     fontSize: '0.8rem',
-    color: '#666688',
+    color: '#aaaaee',
   },
   badge: {
     fontSize: '0.75rem',

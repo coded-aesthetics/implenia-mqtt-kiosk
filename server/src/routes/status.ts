@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { connectivity } from '../connectivity.js';
 import { mqttClient } from '../mqtt.js';
 import { updater } from '../updater.js';
-import { getStats } from '../db.js';
+import { getActiveSession, getSessionReadingCount } from '../db.js';
 
 const startTime = Date.now();
 
@@ -21,7 +21,10 @@ export function registerStatusRoutes(app: FastifyInstance): void {
       uptime: Math.floor((Date.now() - startTime) / 1000),
       connectivity: connectivity.getState(),
       mqttConnected: mqttClient.connected,
-      queue: getStats(),
+      recording: (() => {
+        const s = getActiveSession();
+        return s ? { sessionId: s.id, elementName: s.element_name, readings: getSessionReadingCount(s.id) } : null;
+      })(),
       updateAvailable: updater.updateAvailable !== null,
     });
   });

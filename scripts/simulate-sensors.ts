@@ -5,6 +5,9 @@
  * Reads a -herstellen.csv file and continuously publishes random sensor
  * values via MQTT, matching the type and unit of each sensor.
  *
+ * Payloads are raw values (e.g. "12.5", "Kies") — NOT JSON.
+ * Unit information comes from the Implenia API sensor definitions.
+ *
  * Usage:
  *   npx tsx scripts/simulate-sensors.ts <path-to-csv> [options]
  *
@@ -12,6 +15,7 @@
  *   --broker  MQTT broker URL     (default: mqtt://127.0.0.1:1883)
  *   --prefix  MQTT topic prefix   (default: sensors)
  *   --interval  Publish interval in ms (default: 1000)
+ *   --max-bohrtiefe  Max depth for Bohrtiefe/Tiefe sensors in m (default: 50)
  *
  * Examples:
  *   npx tsx scripts/simulate-sensors.ts /path/to/dsv-sensors-herstellen.csv
@@ -27,7 +31,7 @@ const args = process.argv.slice(2);
 const csvPath = args.find((a) => !a.startsWith('--'));
 
 if (!csvPath) {
-  console.error('Usage: npx tsx scripts/simulate-sensors.ts <path-to-csv> [--broker url] [--prefix topic] [--interval ms]');
+  console.error('Usage: npx tsx scripts/simulate-sensors.ts <path-to-csv> [--broker url] [--prefix topic] [--interval ms] [--max-bohrtiefe m]');
   process.exit(1);
 }
 
@@ -39,6 +43,7 @@ function getArg(name: string, fallback: string): string {
 const brokerUrl = getArg('broker', 'mqtt://127.0.0.1:1883');
 const topicPrefix = getArg('prefix', 'sensors');
 const intervalMs = parseInt(getArg('interval', '1000'), 10);
+const maxBohrtiefe = parseFloat(getArg('max-bohrtiefe', '50'));
 
 // --- CSV parsing ---
 
@@ -108,11 +113,13 @@ function generateValue(sensor: Sensor): string {
 
   // ~5% chance of a "no value" reading
   if (Math.random() < 0.05) {
-    const nullVariants = ['null', 'NaN', '-Infinity', 'Infinity', '""', 'missing'];
+    const nullVariants = ['NaN', '', 'null'];
     return nullVariants[Math.floor(Math.random() * nullVariants.length)];
   }
 
-  const range = UNIT_RANGES[sensor.unit] || DEFAULT_DOUBLE_RANGE;
+  const isDepthSensor = /^(bohrtiefe|tiefe)$/i.test(sensor.name);
+  const baseRange = UNIT_RANGES[sensor.unit] || DEFAULT_DOUBLE_RANGE;
+  const range = isDepthSensor ? { ...baseRange, max: maxBohrtiefe } : baseRange;
   const prev = sensorState.get(sensor.name);
 
   let value: number;
@@ -146,6 +153,7 @@ if (sensors.length === 0) {
 
 console.log(`Loaded ${sensors.length} sensors from ${csvPath}`);
 console.log(`Connecting to ${brokerUrl}...`);
+console.log('Payload format: raw values (no JSON wrapping)');
 
 const client = mqtt.connect(brokerUrl, {
   reconnectPeriod: 5000,
@@ -162,7 +170,6 @@ client.on('connect', () => {
 
   setInterval(() => {
     if (cycle > 0) {
-      // Print separator between cycles
       console.log('');
     }
     cycle++;
@@ -171,46 +178,11 @@ client.on('connect', () => {
       const raw = generateValue(sensor);
       const topic = `${topicPrefix}/${sensor.name}`;
 
-      // Build payload based on the generated value
-      let payload: string;
-      let displayValue: string;
+      // Publish raw value directly — no JSON wrapping
+      client.publish(topic, raw);
 
-      switch (raw) {
-        case 'null':
-          payload = JSON.stringify({ value: null, unit: sensor.unit });
-          displayValue = 'null';
-          break;
-        case 'NaN':
-          payload = JSON.stringify({ value: 'NaN', unit: sensor.unit });
-          displayValue = 'NaN';
-          break;
-        case '-Infinity':
-          payload = JSON.stringify({ value: '-Infinity', unit: sensor.unit });
-          displayValue = '-Infinity';
-          break;
-        case 'Infinity':
-          payload = JSON.stringify({ value: 'Infinity', unit: sensor.unit });
-          displayValue = 'Infinity';
-          break;
-        case '""':
-          payload = JSON.stringify({ value: '', unit: sensor.unit });
-          displayValue = '""';
-          break;
-        case 'missing':
-          payload = JSON.stringify({ unit: sensor.unit });
-          displayValue = '(missing)';
-          break;
-        default:
-          if (sensor.type === 'Text') {
-            payload = JSON.stringify({ value: raw, unit: sensor.unit });
-          } else {
-            payload = JSON.stringify({ value: parseFloat(raw), unit: sensor.unit });
-          }
-          displayValue = sensor.unit ? `${raw} ${sensor.unit}` : raw;
-      }
-
-      client.publish(topic, payload);
-      console.log(`  ${sensor.name.padEnd(40)}${displayValue.padStart(16)}`);
+      const displayValue = raw === '' ? '(empty)' : raw === 'null' ? '(null)' : raw;
+      console.log(`  ${sensor.name.padEnd(40)}${displayValue.padStart(16)}  ${sensor.unit}`);
     }
   }, intervalMs);
 });

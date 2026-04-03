@@ -17,6 +17,7 @@ This runs on construction sites, not office desks. Every UI decision should refl
 - **High contrast** — Light text on dark backgrounds, bold color-coded status (green/red)
 - **No fine controls** — No small icons, sliders, or toggles. Everything oversized and obvious
 - **No modals or multi-step flows** — Information is always visible, never hidden behind clicks
+- **No scrolling** — All content must fit within the viewport. Scrollbars mean the layout is wrong. Workers glance at a screen, they don't scroll. Design layouts to fill available space (e.g. use flex with `min-height: 0`, `modus="vollbild"` for visualizations) rather than overflowing
 - **Landscape-first** — Industry PCs are typically widescreen. Use CSS Grid for responsive tile layouts
 - **Minimal text** — Use numbers, colors, and icons over paragraphs. Workers glance, they don't read
 - **Language: German** — All UI-facing text must be in German. Code, comments, and documentation stay in English

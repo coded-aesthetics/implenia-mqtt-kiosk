@@ -3,7 +3,8 @@ import type { WebSocket } from 'ws';
 import { mqttClient, type SensorMessage } from './mqtt.js';
 import { connectivity, type ConnectivityState } from './connectivity.js';
 import { updater } from './updater.js';
-import { getStats } from './db.js';
+import { getRecordingState } from './recording.js';
+import { getSessionReadingCount } from './db.js';
 
 const clients = new Set<WebSocket>();
 
@@ -11,23 +12,28 @@ function broadcast(data: Record<string, unknown>): void {
   const message = JSON.stringify(data);
   for (const ws of clients) {
     if (ws.readyState === 1) {
-      // OPEN
       ws.send(message);
     }
   }
 }
 
-// Broadcast queue stats periodically
+/** Public broadcast — used by recording routes to push state changes. */
+export function broadcastMessage(data: Record<string, unknown>): void {
+  broadcast(data);
+}
+
+// Broadcast recording count periodically
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 
-function broadcastStats(): void {
-  const stats = getStats();
-  broadcast({
-    type: 'queue-stats',
-    pending: stats.pending,
-    uploaded: stats.uploaded,
-    failed: stats.failed,
-  });
+function broadcastRecordingCount(): void {
+  const state = getRecordingState();
+  if (state.active && state.sessionId) {
+    broadcast({
+      type: 'recording-count',
+      sessionId: state.sessionId,
+      readingCount: getSessionReadingCount(state.sessionId),
+    });
+  }
 }
 
 export function setupWebSocket(app: FastifyInstance): void {
@@ -42,13 +48,11 @@ export function setupWebSocket(app: FastifyInstance): void {
       })
     );
 
-    const stats = getStats();
+    // Send current recording state
     socket.send(
       JSON.stringify({
-        type: 'queue-stats',
-        pending: stats.pending,
-        uploaded: stats.uploaded,
-        failed: stats.failed,
+        type: 'recording-state',
+        ...getRecordingState(),
       })
     );
 
@@ -100,8 +104,8 @@ export function setupWebSocket(app: FastifyInstance): void {
     broadcast({ type: 'update-applying' });
   });
 
-  // Broadcast stats every 10 seconds
-  statsTimer = setInterval(broadcastStats, 10_000);
+  // Broadcast recording count every 10 seconds (replaces old queue-stats)
+  statsTimer = setInterval(broadcastRecordingCount, 10_000);
 }
 
 export function stopWebSocket(): void {

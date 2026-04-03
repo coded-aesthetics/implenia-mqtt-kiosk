@@ -6,25 +6,45 @@ export interface SensorReading {
   receivedAt: number;
 }
 
-export interface QueueStats {
-  pending: number;
-  uploaded: number;
-  failed: number;
+export interface RecordingState {
+  active: boolean;
+  sessionId: number | null;
+  elementName: string | null;
+  startedAt: number | null;
+  readingCount: number;
+}
+
+export interface UploadProgress {
+  sessionId: number;
+  sensorsTotal: number;
+  sensorsCompleted: number;
+  sensorsFailed: number;
+  currentSensor: string | null;
 }
 
 interface WebSocketState {
   readings: Map<string, SensorReading>;
   connectivity: 'online' | 'offline' | 'unknown';
-  queueStats: QueueStats;
+  recordingState: RecordingState;
+  uploadProgress: UploadProgress | null;
   updateAvailable: string | null;
   updateApplying: boolean;
 }
+
+const INITIAL_RECORDING: RecordingState = {
+  active: false,
+  sessionId: null,
+  elementName: null,
+  startedAt: null,
+  readingCount: 0,
+};
 
 export function useWebSocket() {
   const [state, setState] = useState<WebSocketState>({
     readings: new Map(),
     connectivity: 'unknown',
-    queueStats: { pending: 0, uploaded: 0, failed: 0 },
+    recordingState: INITIAL_RECORDING,
+    uploadProgress: null,
     updateAvailable: null,
     updateApplying: false,
   });
@@ -42,7 +62,6 @@ export function useWebSocket() {
 
     ws.onopen = () => {
       reconnectDelay.current = 1000;
-      // If we were applying an update and just reconnected, the server has restarted — reload
       if (wasApplyingUpdate.current) {
         window.location.reload();
         return;
@@ -70,13 +89,38 @@ export function useWebSocket() {
             setState((prev) => ({ ...prev, connectivity: msg.state }));
             break;
 
-          case 'queue-stats':
+          case 'recording-state':
             setState((prev) => ({
               ...prev,
-              queueStats: {
-                pending: msg.pending,
-                uploaded: msg.uploaded,
-                failed: msg.failed,
+              recordingState: {
+                active: msg.active,
+                sessionId: msg.sessionId,
+                elementName: msg.elementName,
+                startedAt: msg.startedAt,
+                readingCount: msg.readingCount,
+              },
+            }));
+            break;
+
+          case 'recording-count':
+            setState((prev) => ({
+              ...prev,
+              recordingState: {
+                ...prev.recordingState,
+                readingCount: msg.readingCount,
+              },
+            }));
+            break;
+
+          case 'upload-progress':
+            setState((prev) => ({
+              ...prev,
+              uploadProgress: {
+                sessionId: msg.sessionId,
+                sensorsTotal: msg.sensorsTotal,
+                sensorsCompleted: msg.sensorsCompleted,
+                sensorsFailed: msg.sensorsFailed,
+                currentSensor: msg.currentSensor,
               },
             }));
             break;
