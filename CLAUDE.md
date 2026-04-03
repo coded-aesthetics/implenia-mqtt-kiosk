@@ -44,11 +44,20 @@ GitHub Actions builds, stamps the tag version into package.json, bundles `server
 
 The self-updater on the kiosk polls GitHub Releases hourly, compares semver against the root `package.json` version, and applies updates automatically via PM2 restart.
 
+## CI Quirks
+
+**Rollup platform binaries**: `package-lock.json` is generated on macOS and only contains resolved entries for macOS-specific optional dependencies (e.g. `@rollup/rollup-darwin-arm64`). Running `npm ci` on Linux (GitHub Actions) fails because the linux binary (`@rollup/rollup-linux-x64-gnu`) isn't in the lockfile. The CI workflow uses `npm install` instead of `npm ci` to let npm resolve platform-appropriate binaries. Do not switch CI back to `npm ci` without first ensuring the lockfile contains cross-platform entries.
+
+**lodash pinned to 4.17.21**: lodash 4.18.0 removed `assignWith` which breaks `workbox-build` (used by `vite-plugin-pwa`). The root `package.json` pins `"lodash": "4.17.21"` as a top-level override. Do not remove this pin.
+
+**GitHub Packages auth**: The `@coded-aesthetics/din4023` package is hosted on GitHub Packages (private). CI uses `GITHUB_TOKEN` with `packages: read` permission. The `.npmrc` scopes `@coded-aesthetics` to `npm.pkg.github.com`.
+
 ## Architecture
 
 ```
-MQTT broker → server/src/mqtt.ts → SQLite (buffer) → server/src/upload.ts → Implenia API
+MQTT broker → server/src/mqtt.ts → SQLite (mqtt_buffer + session_readings)
                                   ↘ WebSocket → Browser UI (React)
+              server/src/recording.ts → per-sensor batch upload → Implenia API
 ```
 
 - **Server**: Fastify, mqtt.js, better-sqlite3, TypeScript
