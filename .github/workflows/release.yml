@@ -23,11 +23,13 @@ jobs:
       - name: Authenticate GitHub Packages
         run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
 
-      # npm ci uses the lockfile which was generated on macOS and lacks
-      # linux-specific optional deps (e.g. @rollup/rollup-linux-x64-gnu).
-      # Using npm install ensures platform-appropriate binaries are resolved.
+      # The lockfile is generated on macOS and lacks linux-specific optional
+      # deps (e.g. @rollup/rollup-linux-x64-gnu). Deleting it forces npm to
+      # resolve platform-appropriate binaries fresh on the CI runner.
       - name: Install dependencies
-        run: npm install
+        run: |
+          rm -f package-lock.json
+          npm install
 
       - name: Build server
         run: npm run build -w server
