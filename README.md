@@ -40,8 +40,8 @@ The UI dev server runs on `http://localhost:5173` and proxies API/WS requests to
 |---|---|---|---|
 | `MQTT_BROKER_URL` | Yes | — | MQTT broker URL (e.g. `mqtt://192.168.1.50:1883`) |
 | `MQTT_TOPICS` | Yes | — | Comma-separated MQTT topics to subscribe |
-| `IMPLENIA_API_URL` | Yes | — | Implenia REST API base URL |
-| `IMPLENIA_API_KEY` | Yes | — | Bearer token for the API |
+| `IMPLENIA_API_URL` | No | — | Implenia REST API base URL / Can be set in UI |
+| `IMPLENIA_API_KEY` | No | — | Bearer token for the API / Can be set in UI |
 | `GITHUB_OWNER` | Yes | — | GitHub org/user for update checks |
 | `GITHUB_REPO` | Yes | — | GitHub repo name for update checks |
 | `GITHUB_TOKEN` | No | — | Token for private repo access |
