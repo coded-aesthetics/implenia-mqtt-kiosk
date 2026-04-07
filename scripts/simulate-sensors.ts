@@ -51,6 +51,8 @@ interface Sensor {
   name: string;
   type: 'Double' | 'Integer' | 'Text';
   unit: string;
+  source?: string; // Quelle: mqtt | kiosk | user | server (undefined = old 3-col CSV)
+  role?: string;   // Rolle: e.g. "depth", "is_completed"
 }
 
 function parseCsv(filePath: string): Sensor[] {
@@ -60,12 +62,15 @@ function parseCsv(filePath: string): Sensor[] {
   // Skip header
   return lines.slice(1)
     .map((line) => {
-      const [name, type, unit] = line.split(',').map((s) => s.trim());
+      const parts = line.split(',').map((s) => s.trim());
+      const [name, type, unit, source, role] = parts;
       if (!name || !type) return null;
       return {
         name,
         type: type as Sensor['type'],
         unit: unit || '',
+        source: source || undefined,
+        role: role || undefined,
       };
     })
     .filter((s): s is Sensor => s !== null);
@@ -144,14 +149,24 @@ function generateValue(sensor: Sensor): string {
 
 // --- Main ---
 
-const sensors = parseCsv(csvPath);
+const allSensors = parseCsv(csvPath);
+
+// Only publish mqtt-source sensors — that's what a real machine outputs.
+// Sensors without a source column (old 3-col CSVs) are included unchanged.
+const sensors = allSensors.filter(
+  (s) => s.source === undefined || s.source === 'mqtt',
+);
 
 if (sensors.length === 0) {
-  console.error('No sensors found in CSV file.');
+  console.error('No sensors found in CSV (or none with source=mqtt after filtering).');
   process.exit(1);
 }
 
-console.log(`Loaded ${sensors.length} sensors from ${csvPath}`);
+const skipped = allSensors.length - sensors.length;
+console.log(
+  `Loaded ${sensors.length} sensors from ${csvPath}` +
+  (skipped > 0 ? ` (${skipped} non-mqtt skipped)` : ''),
+);
 console.log(`Connecting to ${brokerUrl}...`);
 console.log('Payload format: raw values (no JSON wrapping)');
 
