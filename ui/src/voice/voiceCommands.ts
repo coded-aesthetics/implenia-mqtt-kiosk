@@ -8,6 +8,7 @@ export function buildCommands(): VoiceCommand[] {
       id: 'recording.start',
       phrases: [
         'aufzeichnung starten',
+        'aufzeichnung beginnen',
         'aufnahme starten',
         'aufnahme beginnen',
         'recording starten',
@@ -32,6 +33,7 @@ export function buildCommands(): VoiceCommand[] {
       id: 'recording.stop',
       phrases: [
         'aufzeichnung beenden',
+        'aufzeichnung stoppen',
         'aufnahme beenden',
         'aufnahme stoppen',
         'recording stoppen',

@@ -159,9 +159,17 @@ export function matchCommand(
 
   let best: { entry: ExpandedPhrase; score: number } | null = null;
 
+  // Try exact match first (Vosk grammar returns known phrases)
+  for (const entry of expanded) {
+    if (normalized === entry.phrase) {
+      if (!entry.command.precondition(ctx)) return null;
+      return { command: entry.command, params: entry.params, score: 1.0, matchedPhrase: entry.phrase };
+    }
+  }
+
   for (const entry of expanded) {
     const score = scoreMatch(tokens, entry.tokens);
-    if (score >= 0.5 && (!best || score > best.score)) {
+    if (score >= 0.4 && (!best || score > best.score)) {
       best = { entry, score };
     }
   }
@@ -190,11 +198,23 @@ export function matchCommandWithReason(
   const rawTokens = tokenize(normalized);
   const tokens = stripFillers(rawTokens);
 
+  // Try exact match first (Vosk grammar returns known phrases)
+  for (const entry of expanded) {
+    if (normalized === entry.phrase) {
+      if (!entry.command.precondition(ctx)) {
+        return { blocked: entry.command.preconditionHint ?? 'Befehl nicht verfügbar' };
+      }
+      return {
+        result: { command: entry.command, params: entry.params, score: 1.0, matchedPhrase: entry.phrase },
+      };
+    }
+  }
+
   let best: { entry: ExpandedPhrase; score: number } | null = null;
 
   for (const entry of expanded) {
     const score = scoreMatch(tokens, entry.tokens);
-    if (score >= 0.5 && (!best || score > best.score)) {
+    if (score >= 0.4 && (!best || score > best.score)) {
       best = { entry, score };
     }
   }

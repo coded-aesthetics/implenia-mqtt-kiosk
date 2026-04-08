@@ -12,7 +12,8 @@
   "dependencies": {
     "@coded-aesthetics/din4023": "0.0.5",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "vosk-browser": "^0.0.8"
   },
   "devDependencies": {
     "@types/react": "^19.0.12",

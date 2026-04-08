@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useSpeechRecognition } from './useSpeechRecognition';
+import { useVoskRecognition } from './useVoskRecognition';
 import { expandCommands, matchCommandWithReason } from '../voice/matchCommand';
 import { buildCommands } from '../voice/voiceCommands';
 import type { VoiceContext } from '../voice/matchCommand';
@@ -14,7 +14,7 @@ export type VoiceFeedback =
 
 export function useVoiceCommands(ctx: VoiceContext) {
   const { state: speech, startListening, stopListening, reset, isSupported } =
-    useSpeechRecognition();
+    useVoskRecognition(ctx.elementNames);
   const [feedback, setFeedback] = useState<VoiceFeedback>(null);
 
   const commands = useMemo(() => buildCommands(), []);
