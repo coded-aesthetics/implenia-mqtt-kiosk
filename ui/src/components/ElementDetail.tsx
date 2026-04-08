@@ -5,13 +5,15 @@ import type { SensorReading } from '../hooks/useWebSocket';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import type { Schicht } from '@coded-aesthetics/din4023/profile';
 
+export type ViewTab = 'messwerte' | 'vorgabe';
+
 interface Props {
   elementName: string;
   readings: Map<string, SensorReading>;
   vorgaben: VorgabenData | null;
+  activeTab: ViewTab;
+  setActiveTab: (tab: ViewTab) => void;
 }
-
-type ViewTab = 'messwerte' | 'vorgabe';
 
 function formatValue(v: unknown): string {
   if (v === null || v === undefined) return '–';
@@ -122,8 +124,7 @@ function buildSensorLookup(sensors: SensorDef[]): Map<string, SensorDef> {
 // Component
 // ---------------------------------------------------------------------------
 
-export function ElementDetail({ elementName, readings, vorgaben }: Props) {
-  const [activeTab, setActiveTab] = useState<ViewTab>('messwerte');
+export function ElementDetail({ elementName, readings, vorgaben, activeTab, setActiveTab }: Props) {
   const geoRef = useRef<HTMLDivElement>(null);
   const [geoHeight, setGeoHeight] = useState(0);
 
