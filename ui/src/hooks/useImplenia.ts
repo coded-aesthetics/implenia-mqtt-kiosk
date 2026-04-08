@@ -139,10 +139,17 @@ export function useVorgaben(elementName: string | null): VorgabenState {
 
 // --- Element sensor definitions ---
 
+export interface SensorMeta {
+  source?: string;
+  role?: string;
+  priority?: string;
+}
+
 export interface SensorDef {
   id: string;
   name: string;
   unit?: string;
+  meta?: SensorMeta | null;
 }
 
 export interface SensorDefs {
@@ -184,6 +191,58 @@ export function useElementSensors(elementName: string | null): SensorDefsState {
 }
 
 // --- Vorgaben sensor unit map ---
+
+// --- Herstellen (production) sensor definitions ---
+
+/** Returns all herstellen sensor definitions (with meta) for an element. */
+export function useHerstellenSensors(elementName: string | null): SensorDef[] {
+  const [sensors, setSensors] = useState<SensorDef[]>([]);
+
+  useEffect(() => {
+    if (!elementName) return;
+
+    fetch(`/api/elements/${encodeURIComponent(elementName)}/sensors`)
+      .then(async (r) => {
+        if (!r.ok) return;
+        const data: SensorDefs = await r.json();
+        setSensors([
+          ...(data.sensors_float ?? []),
+          ...(data.sensors_int ?? []),
+          ...(data.sensors_string ?? []),
+          ...(data.sensors_geo ?? []),
+        ]);
+      })
+      .catch(() => {});
+  }, [elementName]);
+
+  return sensors;
+}
+
+/** Returns all vorgaben sensor definitions (with meta) for an element. */
+export function useVorgabenSensors(elementName: string | null): SensorDef[] {
+  const [sensors, setSensors] = useState<SensorDef[]>([]);
+
+  useEffect(() => {
+    if (!elementName) return;
+
+    fetch(`/api/elements/${encodeURIComponent(elementName)}/vorgaben/sensors`)
+      .then(async (r) => {
+        if (!r.ok) return;
+        const data: SensorDefs = await r.json();
+        setSensors([
+          ...(data.sensors_float ?? []),
+          ...(data.sensors_int ?? []),
+          ...(data.sensors_string ?? []),
+          ...(data.sensors_geo ?? []),
+          ...(data.sensors_int_float ?? []),
+          ...(data.sensors_binary ?? []),
+        ]);
+      })
+      .catch(() => {});
+  }, [elementName]);
+
+  return sensors;
+}
 
 // --- Herstellen (production) sensor unit map ---
 
