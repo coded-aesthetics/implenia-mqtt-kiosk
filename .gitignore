@@ -6,3 +6,5 @@ dist/
 .env
 /app-next/
 *.tar.gz
+# Vosk speech model (downloaded via scripts/download-vosk-model.sh)
+ui/public/vosk-model-de.tar.gz
