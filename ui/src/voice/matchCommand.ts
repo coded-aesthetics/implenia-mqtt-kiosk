@@ -119,9 +119,28 @@ function scoreMatch(transcriptTokens: string[], phraseTokens: string[]): number 
   const lengthRatio = Math.min(transcriptTokens.length, phraseTokens.length)
     / Math.max(transcriptTokens.length, phraseTokens.length);
 
-  // Jaccard-style: matched / total unique tokens, dampened by length ratio
+  // Penalise out-of-order tokens: count how many matched pairs are in order
+  const matchedPairs: [number, number][] = [];
+  const usedForOrder = new Set<number>();
+  for (let pi = 0; pi < phraseTokens.length; pi++) {
+    for (let ti = 0; ti < transcriptTokens.length; ti++) {
+      if (usedForOrder.has(ti)) continue;
+      if (tokenMatchScore(transcriptTokens[ti], phraseTokens[pi]) > 0) {
+        matchedPairs.push([ti, pi]);
+        usedForOrder.add(ti);
+        break;
+      }
+    }
+  }
+  let inOrder = 0;
+  for (let i = 1; i < matchedPairs.length; i++) {
+    if (matchedPairs[i][0] > matchedPairs[i - 1][0]) inOrder++;
+  }
+  const orderRatio = matchedPairs.length <= 1 ? 1 : (inOrder + 1) / matchedPairs.length;
+
+  // Jaccard-style: matched / total unique tokens, dampened by length and order ratios
   const totalUnique = new Set([...transcriptTokens, ...phraseTokens]).size;
-  const score = (matchedScore / totalUnique) * lengthRatio * 0.85;
+  const score = (matchedScore / totalUnique) * lengthRatio * orderRatio * 0.85;
 
   return Math.min(score, 0.95);
 }
