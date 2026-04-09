@@ -50,10 +50,12 @@ function testCommands(): VoiceCommand[] {
     {
       id: 'nav.element',
       phrases: [
+        '{element}',
         'säule {element}', 'element {element}',
         'gehe zu {element}', 'öffne {element}',
       ],
-      precondition: () => true,
+      precondition: (ctx) => ctx.route.page === 'home',
+      preconditionHint: 'Navigation nur von der Startseite möglich',
       execute: noop,
       description: 'Element öffnen',
     },
@@ -80,6 +82,14 @@ function testCommands(): VoiceCommand[] {
       preconditionHint: 'Kein Element geöffnet',
       execute: noop,
       description: 'Vorgaben anzeigen',
+    },
+    {
+      id: 'comment.dictate',
+      phrases: ['kommentar', 'kommentar hinzufügen', 'anmerkung'],
+      precondition: (ctx) => ctx.route.page === 'element',
+      preconditionHint: 'Kein Element geöffnet',
+      execute: noop,
+      description: 'Kommentar diktieren',
     },
     {
       id: 'composite.herstellen',
@@ -115,6 +125,7 @@ function makeCtx(overrides: Partial<{
     elementNames: ELEMENT_NAMES,
     setActiveTab: () => {},
     navigate: () => {},
+    enqueueComment: () => {},
   };
 }
 
@@ -193,6 +204,13 @@ describe('matchCommand — exact matches', () => {
     expectMatch('schichtauftrag', 'nav.home', ctx);
   });
 
+  it('matches comment dictation phrases', () => {
+    const ctx = makeCtx({ page: 'element' });
+    expectMatch('kommentar', 'comment.dictate', ctx);
+    expectMatch('kommentar hinzufügen', 'comment.dictate', ctx);
+    expectMatch('anmerkung', 'comment.dictate', ctx);
+  });
+
   it('matches tab switching phrases', () => {
     const ctx = makeCtx({ page: 'element' });
     expectMatch('messwerte', 'tab.messwerte', ctx);
@@ -206,26 +224,42 @@ describe('matchCommand — exact matches', () => {
 });
 
 describe('matchCommand — element navigation', () => {
+  const homeCtx = makeCtx({ page: 'home' });
+
+  it('matches bare element names from home page', () => {
+    expectMatch('c drei', 'nav.element', homeCtx);
+    expectMatch('c null drei', 'nav.element', homeCtx);
+    expectMatch('b fünf', 'nav.element', homeCtx);
+    expectMatch('f vierundzwanzig', 'nav.element', homeCtx);
+  });
+
   it('matches element names with prefix keywords', () => {
-    expectMatch('säule c 03', 'nav.element');
-    expectMatch('säule c drei', 'nav.element');
-    expectMatch('säule c null drei', 'nav.element');
-    expectMatch('element c drei', 'nav.element');
-    expectMatch('gehe zu c drei', 'nav.element');
-    expectMatch('öffne c drei', 'nav.element');
+    expectMatch('säule c 03', 'nav.element', homeCtx);
+    expectMatch('säule c drei', 'nav.element', homeCtx);
+    expectMatch('säule c null drei', 'nav.element', homeCtx);
+    expectMatch('element c drei', 'nav.element', homeCtx);
+    expectMatch('gehe zu c drei', 'nav.element', homeCtx);
+    expectMatch('öffne c drei', 'nav.element', homeCtx);
   });
 
   it('resolves spoken variants to the original element name', () => {
-    expectElement('säule c drei', 'C-03');
-    expectElement('säule c null drei', 'C-03');
-    expectElement('säule c 03', 'C-03');
-    expectElement('gehe zu b fünf', 'B-05');
-    expectElement('gehe zu b null fünf', 'B-05');
-    expectElement('öffne f vierundzwanzig', 'F24');
-    expectElement('öffne f zwei vier', 'F24');
+    expectElement('säule c drei', 'C-03', homeCtx);
+    expectElement('säule c null drei', 'C-03', homeCtx);
+    expectElement('säule c 03', 'C-03', homeCtx);
+    expectElement('gehe zu b fünf', 'B-05', homeCtx);
+    expectElement('gehe zu b null fünf', 'B-05', homeCtx);
+    expectElement('öffne f vierundzwanzig', 'F24', homeCtx);
+    expectElement('öffne f zwei vier', 'F24', homeCtx);
   });
 
-  it('matches composite herstellen commands', () => {
+  it('blocks element navigation when not on home page', () => {
+    const elementCtx = makeCtx({ page: 'element' });
+    expectBlocked('säule c drei', elementCtx);
+    expectBlocked('c drei', elementCtx);
+    expectBlocked('gehe zu b fünf', elementCtx);
+  });
+
+  it('matches composite herstellen commands from any page', () => {
     const ctx = makeCtx({ active: false });
     expectMatch('c drei herstellen', 'composite.herstellen', ctx);
     expectMatch('säule c drei herstellen', 'composite.herstellen', ctx);
@@ -248,23 +282,26 @@ describe('matchCommand — filler word handling', () => {
   });
 
   it('strips fillers for element navigation', () => {
-    expectMatch('bitte öffne c drei', 'nav.element');
-    expectMatch('bitte gehe zu c drei', 'nav.element');
+    const homeCtx = makeCtx({ page: 'home' });
+    expectMatch('bitte öffne c drei', 'nav.element', homeCtx);
+    expectMatch('bitte gehe zu c drei', 'nav.element', homeCtx);
   });
 });
 
 describe('matchCommand — false positive rejection', () => {
   it('rejects reordered word salad from Vosk grammar', () => {
-    expectNoMatch('c gehe zu');
-    expectNoMatch('b gehe zu');
-    expectNoMatch('drei c säule');
+    const homeCtx = makeCtx({ page: 'home' });
+    expectNoMatch('c gehe zu', homeCtx);
+    expectNoMatch('b gehe zu', homeCtx);
+    expectNoMatch('drei c säule', homeCtx);
     expectNoMatch('herstellen c');
   });
 
   it('rejects partial phrases with missing key tokens', () => {
-    expectNoMatch('gehe zu');
-    expectNoMatch('säule');
-    expectNoMatch('öffne');
+    const homeCtx = makeCtx({ page: 'home' });
+    expectNoMatch('gehe zu', homeCtx);
+    expectNoMatch('säule', homeCtx);
+    expectNoMatch('öffne', homeCtx);
   });
 
   it('rejects gibberish', () => {
@@ -274,10 +311,11 @@ describe('matchCommand — false positive rejection', () => {
   });
 
   it('rejects bare element name fragments', () => {
-    // Single letters/numbers should not trigger navigation
-    expectNoMatch('c');
-    expectNoMatch('b');
-    expectNoMatch('drei');
+    // Single letters/numbers should not trigger navigation even from home
+    const homeCtx = makeCtx({ page: 'home' });
+    expectNoMatch('c', homeCtx);
+    expectNoMatch('b', homeCtx);
+    expectNoMatch('drei', homeCtx);
   });
 });
 
@@ -317,6 +355,11 @@ describe('matchCommand — precondition checks', () => {
     const ctx = makeCtx({ active: true });
     expectBlocked('c drei herstellen', ctx);
   });
+
+  it('blocks comment when not on element page', () => {
+    const ctx = makeCtx({ page: 'home' });
+    expectBlocked('kommentar', ctx);
+  });
 });
 
 describe('matchCommand — fuzzy tolerance', () => {
@@ -328,7 +371,8 @@ describe('matchCommand — fuzzy tolerance', () => {
 
   it('tolerates minor mispronunciations in element names', () => {
     // "deei" vs "drei" — edit distance 1
-    expectMatch('gehe zu c deei', 'nav.element');
+    const homeCtx = makeCtx({ page: 'home' });
+    expectMatch('gehe zu c deei', 'nav.element', homeCtx);
   });
 
   it('does not match with too many errors', () => {
@@ -337,22 +381,24 @@ describe('matchCommand — fuzzy tolerance', () => {
 });
 
 describe('elementNameVariants', () => {
+  const homeCtx = makeCtx({ page: 'home' });
+
   // Test the variant generation indirectly through matching
   it('handles hyphenated names like C-03', () => {
-    expectElement('säule c drei', 'C-03');
-    expectElement('säule c null drei', 'C-03');
-    expectElement('säule c 03', 'C-03');
+    expectElement('säule c drei', 'C-03', homeCtx);
+    expectElement('säule c null drei', 'C-03', homeCtx);
+    expectElement('säule c 03', 'C-03', homeCtx);
   });
 
   it('handles concatenated names like F24', () => {
-    expectElement('element f vierundzwanzig', 'F24');
-    expectElement('element f zwei vier', 'F24');
-    expectElement('element f 24', 'F24');
+    expectElement('element f vierundzwanzig', 'F24', homeCtx);
+    expectElement('element f zwei vier', 'F24', homeCtx);
+    expectElement('element f 24', 'F24', homeCtx);
   });
 
   it('handles names with leading zero like B-05', () => {
-    expectElement('gehe zu b fünf', 'B-05');
-    expectElement('gehe zu b null fünf', 'B-05');
-    expectElement('gehe zu b 05', 'B-05');
+    expectElement('gehe zu b fünf', 'B-05', homeCtx);
+    expectElement('gehe zu b null fünf', 'B-05', homeCtx);
+    expectElement('gehe zu b 05', 'B-05', homeCtx);
   });
 });

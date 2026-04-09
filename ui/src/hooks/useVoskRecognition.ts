@@ -12,7 +12,7 @@ export interface SpeechState {
 }
 
 const MODEL_URL = '/vosk-model-de.tar.gz';
-const SAMPLE_RATE = 16000;
+export const SAMPLE_RATE = 16000;
 
 // ── Grammar builder ──────────────────────────────────────────────────────────
 
@@ -44,6 +44,15 @@ const BASE_PHRASES: string[][] = [
   // tab.vorgabe
   [
     'vorgabe', 'vorgaben', 'vorgaben zeigen', 'sollwerte', 'spezifikation',
+  ],
+  // nav.comments
+  [
+    'kommentare', 'kommentarseite', 'warteschlange',
+    'kommentar warteschlange', 'zeige kommentare',
+  ],
+  // comment.dictate
+  [
+    'kommentar', 'kommentar hinzufügen', 'anmerkung',
   ],
 ];
 
@@ -93,7 +102,10 @@ function buildElementPhrases(name: string): string[] {
   const phrases: string[] = [];
 
   for (const v of variants) {
-    // Navigation patterns — always require a prefix keyword
+    // Bare element name (nav restricted to home page via precondition)
+    phrases.push(v);
+
+    // Navigation patterns with prefix keywords
     const navPatterns = [
       `säule ${v}`, `element ${v}`,
       `gehe zu ${v}`, `geh zu ${v}`, `öffne ${v}`,
@@ -147,7 +159,7 @@ export function buildGrammar(elementNames: string[]): string {
 let modelPromise: Promise<Model> | null = null;
 let modelFailed = false;
 
-function getModel(): Promise<Model> {
+export function getModel(): Promise<Model> {
   if (!modelPromise) {
     modelPromise = createModel(MODEL_URL, -1).catch((err) => {
       console.error('[Vosk] Failed to load model:', err);

@@ -12,6 +12,8 @@ import { registerStatusRoutes } from './routes/status.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerImpleniaRoutes } from './routes/implenia.js';
 import { registerRecordingRoutes } from './routes/recording.js';
+import { registerTranscribeRoutes } from './routes/transcribe.js';
+import { isWhisperAvailable } from './whisper.js';
 import { close as closeDb } from './db.js';
 
 const app = Fastify({
@@ -36,6 +38,7 @@ async function start(): Promise<void> {
   registerConfigRoutes(app);
   registerImpleniaRoutes(app);
   registerRecordingRoutes(app);
+  registerTranscribeRoutes(app);
   setupWebSocket(app);
 
   // SPA fallback: serve index.html for unmatched routes
@@ -47,6 +50,7 @@ async function start(): Promise<void> {
   connectivity.start();
   mqttClient.start();
   updater.start();
+  isWhisperAvailable(); // Log whisper status at startup
 
   // Start HTTP server
   await app.listen({ port: config.PORT, host: '0.0.0.0' });

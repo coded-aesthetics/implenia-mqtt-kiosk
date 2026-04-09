@@ -77,12 +77,14 @@ export function buildCommands(): VoiceCommand[] {
     {
       id: 'nav.element',
       phrases: [
+        '{element}',
         'säule {element}',
         'element {element}',
         'gehe zu {element}',
         'öffne {element}',
       ],
-      precondition: () => true,
+      precondition: (ctx) => ctx.route.page === 'home',
+      preconditionHint: 'Navigation nur von der Startseite möglich',
       execute: (_ctx, params) => {
         navigate(`element/${encodeURIComponent(params.element)}`);
       },
@@ -138,6 +140,40 @@ export function buildCommands(): VoiceCommand[] {
         ctx.setActiveTab('vorgabe');
       },
       description: 'Vorgaben anzeigen',
+    },
+
+    // --- Comment queue navigation ---
+    {
+      id: 'nav.comments',
+      phrases: [
+        'kommentare',
+        'kommentarseite',
+        'warteschlange',
+        'kommentar warteschlange',
+        'zeige kommentare',
+      ],
+      precondition: (ctx) => ctx.route.page !== 'comments',
+      preconditionHint: 'Bereits auf der Kommentarseite',
+      execute: () => {
+        navigate('comments');
+      },
+      description: 'Kommentare anzeigen',
+    },
+
+    // --- Comment dictation ---
+    {
+      id: 'comment.dictate',
+      phrases: [
+        'kommentar',
+        'kommentar hinzufügen',
+        'anmerkung',
+      ],
+      precondition: (ctx) => ctx.route.page === 'element',
+      preconditionHint: 'Kein Element geöffnet',
+      execute: () => {
+        // Dictation mode is handled by useVoiceCommands — this is a trigger only
+      },
+      description: 'Kommentar diktieren',
     },
 
     // --- Composite: navigate + start recording ---

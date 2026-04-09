@@ -62,6 +62,37 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
     }
   });
 
+  // Post a voice comment to an element's Kommentar string sensor
+  app.post('/api/comment/:elementName', async (request, reply) => {
+    if (!getApiConfig()) {
+      return reply.status(503).send({ error: 'Implenia API not configured' });
+    }
+    const { elementName } = request.params as { elementName: string };
+    const { text } = request.body as { text?: string };
+
+    if (!text || !text.trim()) {
+      return reply.status(400).send({ error: 'text is required' });
+    }
+
+    try {
+      const encoded = encodeURIComponent(elementName);
+      const data = await fetchImplenia(
+        `/api/v1/measuring-device/name:${encoded}/readings/batch`,
+        {
+          method: 'POST',
+          body: {
+            string_sensors: { Kommentar: text.trim() },
+            timestamp: new Date().toISOString(),
+          },
+        },
+      );
+      return reply.send(data);
+    } catch (err) {
+      console.error(`[Implenia] comment for ${elementName} error:`, (err as Error).message);
+      return reply.status(502).send({ error: (err as Error).message });
+    }
+  });
+
   // Herstellen (production) sensors = all element sensors − vorgaben sensors
   // GET /api/elements/:elementName/sensors
   app.get('/api/elements/:elementName/sensors', async (request, reply) => {

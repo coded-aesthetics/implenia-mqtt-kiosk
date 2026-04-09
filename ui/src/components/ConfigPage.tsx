@@ -18,6 +18,18 @@ export function ConfigPage({ config, expandSection }: Props) {
   const [urlSaving, setUrlSaving] = useState(false);
   const [urlMessage, setUrlMessage] = useState<{ text: string; error: boolean } | null>(null);
 
+  // Magic word setting
+  const [magicWord, setMagicWord] = useState(
+    () => localStorage.getItem('magicWordEnabled') === 'true',
+  );
+
+  function toggleMagicWord() {
+    const next = !magicWord;
+    setMagicWord(next);
+    localStorage.setItem('magicWordEnabled', String(next));
+    window.dispatchEvent(new Event('magicWordChanged'));
+  }
+
   async function handleSave() {
     if (!apiKey.trim()) return;
     setSaving(true);
@@ -226,6 +238,31 @@ export function ConfigPage({ config, expandSection }: Props) {
           </div>
         )}
       </div>
+
+      {/* Magic word card */}
+      <div style={styles.card}>
+        <div style={styles.statusRow}>
+          <span style={styles.label}>Sprachaktivierung (experimentell)</span>
+        </div>
+        <button
+          onClick={toggleMagicWord}
+          style={{
+            ...styles.toggleButton,
+            backgroundColor: magicWord ? '#1b5e20' : '#2a2a4a',
+          }}
+        >
+          <span style={{
+            ...styles.toggleKnob,
+            transform: magicWord ? 'translateX(32px)' : 'translateX(0)',
+          }} />
+        </button>
+        <div style={styles.toggleLabel}>
+          {magicWord ? 'Aktiviert' : 'Deaktiviert'}
+        </div>
+        <div style={styles.envHint}>
+          Sagen Sie &quot;Computer&quot; gefolgt von einem Befehl. Das Mikrofon bleibt dauerhaft aktiv.
+        </div>
+      </div>
     </div>
   );
 }
@@ -346,5 +383,31 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: '#0f0f23',
     borderRadius: '8px',
     borderLeft: '3px solid #1976d2',
+  },
+  toggleButton: {
+    position: 'relative' as const,
+    width: '72px',
+    height: '40px',
+    borderRadius: '20px',
+    border: 'none',
+    cursor: 'pointer',
+    transition: 'background-color 0.2s ease',
+    padding: 0,
+    minHeight: '40px',
+  },
+  toggleKnob: {
+    display: 'block',
+    width: '32px',
+    height: '32px',
+    borderRadius: '50%',
+    backgroundColor: '#ffffff',
+    transition: 'transform 0.2s ease',
+    margin: '4px',
+  },
+  toggleLabel: {
+    fontSize: '1rem',
+    color: '#cccccc',
+    marginTop: '0.5rem',
+    marginBottom: '0.75rem',
   },
 };
