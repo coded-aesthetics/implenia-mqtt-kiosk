@@ -134,6 +134,8 @@ export function useCommentQueue() {
 
   // Process a single queue item: whisper transcription → API post
   const processItem = useCallback(async (item: QueuedComment) => {
+    let finalText = item.text;
+
     // Step 1: Transcribe if we have audio
     if (item.audioBase64) {
       updateItem(item.id, { status: 'transcribing' });
@@ -142,6 +144,7 @@ export function useCommentQueue() {
 
       if (whisperText) {
         console.log(`[CommentQueue] Whisper: "${whisperText}" (Vosk: "${item.voskText}")`);
+        finalText = whisperText;
         updateItem(item.id, {
           whisperText,
           text: whisperText,
@@ -155,11 +158,13 @@ export function useCommentQueue() {
     }
 
     // Step 2: Post comment
-    // Re-read current state (text may have been edited while transcribing)
+    // Check if item was deleted while transcribing
     const current = queueRef.current.find((i) => i.id === item.id);
-    if (!current || current.status === 'sent') return; // deleted or already sent
+    if (!current || current.status === 'sent') return;
 
-    const text = current.text.trim();
+    // Use locally tracked text (React state may not have flushed yet)
+    // But prefer current.text if user edited it during transcription
+    const text = (current.text !== item.voskText ? current.text : finalText).trim();
     if (!text) {
       updateItem(item.id, { status: 'error', errorMessage: 'Kein Text vorhanden' });
       return;
