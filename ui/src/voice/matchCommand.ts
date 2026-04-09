@@ -165,20 +165,22 @@ export function matchCommand(
   const normalized = normalize(transcript);
   const rawTokens = tokenize(normalized);
   const tokens = stripFillers(rawTokens);
-
-  let best: { entry: ExpandedPhrase; score: number } | null = null;
+  const stripped = tokens.join(' ');
 
   // Try exact match first (Vosk grammar returns known phrases)
+  // Check both raw normalized and filler-stripped versions
   for (const entry of expanded) {
-    if (normalized === entry.phrase) {
+    if (normalized === entry.phrase || stripped === entry.phrase) {
       if (!entry.command.precondition(ctx)) return null;
       return { command: entry.command, params: entry.params, score: 1.0, matchedPhrase: entry.phrase };
     }
   }
 
+  let best: { entry: ExpandedPhrase; score: number } | null = null;
+
   for (const entry of expanded) {
     const score = scoreMatch(tokens, entry.tokens);
-    if (score >= 0.4 && (!best || score > best.score)) {
+    if (score >= 0.5 && (!best || score > best.score)) {
       best = { entry, score };
     }
   }
@@ -208,8 +210,10 @@ export function matchCommandWithReason(
   const tokens = stripFillers(rawTokens);
 
   // Try exact match first (Vosk grammar returns known phrases)
+  // Check both raw normalized and filler-stripped versions
+  const stripped = tokens.join(' ');
   for (const entry of expanded) {
-    if (normalized === entry.phrase) {
+    if (normalized === entry.phrase || stripped === entry.phrase) {
       if (!entry.command.precondition(ctx)) {
         return { blocked: entry.command.preconditionHint ?? 'Befehl nicht verfügbar' };
       }
@@ -223,7 +227,7 @@ export function matchCommandWithReason(
 
   for (const entry of expanded) {
     const score = scoreMatch(tokens, entry.tokens);
-    if (score >= 0.4 && (!best || score > best.score)) {
+    if (score >= 0.5 && (!best || score > best.score)) {
       best = { entry, score };
     }
   }
