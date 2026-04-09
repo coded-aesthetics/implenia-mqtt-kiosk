@@ -31,6 +31,9 @@ jobs:
           rm -f package-lock.json
           npm install
 
+      - name: Run UI tests
+        run: npm test -w ui
+
       - name: Build server
         run: npm run build -w server
 

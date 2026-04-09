@@ -26,6 +26,7 @@ interface GitHubRelease {
   tag_name: string;
   assets: Array<{
     name: string;
+    url: string;
     browser_download_url: string;
   }>;
 }
@@ -304,10 +305,10 @@ class UpdateManager extends EventEmitter {
       const tmpDir = '/tmp';
       const tarPath = path.join(tmpDir, `app-update-${version}.tar.gz`);
 
-      log.info('Downloading %s...', tarAsset.browser_download_url);
-      const downloadRes = await fetch(tarAsset.browser_download_url, {
+      log.info('Downloading %s...', tarAsset.name);
+      const downloadRes = await fetch(tarAsset.url, {
         redirect: 'follow',
-        headers: { 'User-Agent': 'implenia-kiosk-updater' },
+        headers: this.downloadHeaders,
       });
 
       if (!downloadRes.ok || !downloadRes.body) {
@@ -323,9 +324,9 @@ class UpdateManager extends EventEmitter {
 
       if (checksumAsset) {
         log.info('Verifying checksum...');
-        const checksumRes = await fetch(checksumAsset.browser_download_url, {
+        const checksumRes = await fetch(checksumAsset.url, {
           redirect: 'follow',
-          headers: { 'User-Agent': 'implenia-kiosk-updater' },
+          headers: this.downloadHeaders,
         });
         const expectedChecksum = (await checksumRes.text()).trim().split(/\s+/)[0];
 

@@ -19,6 +19,12 @@ export function VoiceFeedbackOverlay({ feedback }: Props) {
       primaryText = 'Ich höre zu\u2026';
       secondaryText = feedback.interim || null;
       break;
+    case 'dictating':
+      icon = '\u{1F4AC}';
+      color = '#e6a700';
+      primaryText = feedback.interim ? 'Kommentar\u2026' : 'Kommentar diktieren\u2026';
+      secondaryText = feedback.interim || 'Sagen Sie "fertig" zum Beenden';
+      break;
     case 'success':
       icon = '\u2713';
       color = '#4caf50';

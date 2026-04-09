@@ -10,7 +10,7 @@ export interface VoiceCommand {
 }
 
 export interface VoiceContext {
-  route: { page: 'home' | 'config' | 'element'; params: Record<string, string> };
+  route: { page: 'home' | 'config' | 'element' | 'comments'; params: Record<string, string> };
   recordingState: {
     active: boolean;
     sessionId: number | null;
@@ -20,6 +20,7 @@ export interface VoiceContext {
   elementNames: string[];
   setActiveTab: (tab: 'messwerte' | 'vorgabe') => void;
   navigate: (path: string) => void;
+  enqueueComment: (elementName: string, voskText: string, audioBlob: Blob) => void;
 }
 
 export interface MatchResult {

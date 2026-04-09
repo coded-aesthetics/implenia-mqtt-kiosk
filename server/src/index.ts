@@ -19,6 +19,8 @@ import { ensureLogSensor } from './recording.js';
 import { registerLogRoutes } from './routes/logs.js';
 import { registerVerfahrenRoutes } from './routes/verfahren.js';
 import { deviceManager } from './device-manager.js';
+import { registerTranscribeRoutes } from './routes/transcribe.js';
+import { isWhisperAvailable } from './whisper.js';
 import { close as closeDb } from './db.js';
 
 const log = createLogger('server');
@@ -47,6 +49,7 @@ async function start(): Promise<void> {
   registerDeviceRoutes(app);
   registerLogRoutes(app);
   registerVerfahrenRoutes(app);
+  registerTranscribeRoutes(app);
   setupWebSocket(app);
 
   // SPA fallback: serve index.html for unmatched routes
@@ -60,6 +63,7 @@ async function start(): Promise<void> {
   deviceManager.start();
   updater.start();
   ensureLogSensor().catch(() => {});
+  isWhisperAvailable();
 
   // Start HTTP server
   await app.listen({ port: config.PORT, host: '0.0.0.0' });

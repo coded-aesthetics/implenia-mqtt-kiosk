@@ -10,6 +10,8 @@ import { ConfigPage } from './components/ConfigPage';
 import { ShiftAssignment } from './components/ShiftAssignment';
 import { ElementDetail } from './components/ElementDetail';
 import { VoiceFeedbackOverlay } from './components/VoiceFeedbackOverlay';
+import { CommentQueuePage } from './components/CommentQueuePage';
+import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
 
 export function App() {
@@ -39,6 +41,9 @@ export function App() {
     [shift.data],
   );
 
+  // Comment queue (background whisper transcription + API posting)
+  const commentQueue = useCommentQueue();
+
   // Voice commands
   const voice = useVoiceCommands({
     route,
@@ -46,6 +51,7 @@ export function App() {
     elementNames,
     setActiveTab,
     navigate,
+    enqueueComment: commentQueue.enqueue,
   });
 
   let content: React.ReactNode;
@@ -61,6 +67,18 @@ export function App() {
         />
       );
       pageTitle = 'Einstellungen';
+      break;
+    }
+    case 'comments': {
+      content = (
+        <CommentQueuePage
+          queue={commentQueue.queue}
+          onEdit={commentQueue.editText}
+          onDelete={commentQueue.deleteComment}
+          onRetry={commentQueue.retry}
+        />
+      );
+      pageTitle = 'Kommentare';
       break;
     }
     case 'element': {
@@ -96,8 +114,10 @@ export function App() {
         pageTitle={pageTitle}
         voiceSupported={voice.isSupported}
         isListening={voice.isListening}
+        wakeWordPhase={voice.wakeWordPhase}
         onMicPress={voice.startListening}
         onMicRelease={voice.stopListening}
+        commentQueueCount={commentQueue.pendingCount}
       />
       <VoiceFeedbackOverlay feedback={voice.feedback} />
       <UpdateBanner
