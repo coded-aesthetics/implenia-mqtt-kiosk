@@ -81,7 +81,6 @@ export function buildCommands(): VoiceCommand[] {
         'element {element}',
         'gehe zu {element}',
         'öffne {element}',
-        '{element}',
       ],
       precondition: () => true,
       execute: (_ctx, params) => {

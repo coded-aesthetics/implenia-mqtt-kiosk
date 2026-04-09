@@ -93,10 +93,7 @@ function buildElementPhrases(name: string): string[] {
   const phrases: string[] = [];
 
   for (const v of variants) {
-    // Direct name
-    phrases.push(v);
-
-    // Navigation patterns
+    // Navigation patterns — always require a prefix keyword
     const navPatterns = [
       `säule ${v}`, `element ${v}`,
       `gehe zu ${v}`, `geh zu ${v}`, `öffne ${v}`,
