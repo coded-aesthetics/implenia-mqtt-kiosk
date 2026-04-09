@@ -110,9 +110,18 @@ function scoreMatch(transcriptTokens: string[], phraseTokens: string[]): number 
     }
   }
 
-  // Jaccard-style: matched / total unique tokens
+  // Require that most phrase tokens are covered (phrase defines the intent)
+  const phraseCoverage = matchedScore / phraseTokens.length;
+  if (phraseCoverage < 0.75) return 0;
+
+  // Penalise length mismatch: if transcript is much shorter than phrase,
+  // key tokens are missing even if the matched ones line up
+  const lengthRatio = Math.min(transcriptTokens.length, phraseTokens.length)
+    / Math.max(transcriptTokens.length, phraseTokens.length);
+
+  // Jaccard-style: matched / total unique tokens, dampened by length ratio
   const totalUnique = new Set([...transcriptTokens, ...phraseTokens]).size;
-  const score = (matchedScore / totalUnique) * 0.85;
+  const score = (matchedScore / totalUnique) * lengthRatio * 0.85;
 
   return Math.min(score, 0.95);
 }
