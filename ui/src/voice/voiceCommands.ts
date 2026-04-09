@@ -11,6 +11,7 @@ export function buildCommands(): VoiceCommand[] {
         'aufzeichnung beginnen',
         'aufnahme starten',
         'aufnahme beginnen',
+        'aufnahme',
         'recording starten',
         'start aufnahme',
         'starten',

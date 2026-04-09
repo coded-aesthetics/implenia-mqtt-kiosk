@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { createModel, type Model, type KaldiRecognizer } from 'vosk-browser';
+import { elementNameVariants } from '../voice/elementNameVariants';
 
 export type SpeechStatus = 'idle' | 'listening' | 'result' | 'error';
 
@@ -20,7 +21,7 @@ const BASE_PHRASES: string[][] = [
   // recording.start
   [
     'aufzeichnung starten', 'aufnahme starten', 'aufnahme beginnen',
-    'aufzeichnung beginnen', 'recording starten', 'start aufnahme', 'starten',
+    'aufzeichnung beginnen', 'aufnahme', 'recording starten', 'start aufnahme', 'starten',
   ],
   // recording.stop
   [
@@ -88,32 +89,34 @@ function addVariations(phrase: string): string[] {
 }
 
 function buildElementPhrases(name: string): string[] {
-  const lower = name.toLowerCase();
+  const variants = elementNameVariants(name);
   const phrases: string[] = [];
 
-  // Direct name
-  phrases.push(lower);
+  for (const v of variants) {
+    // Direct name
+    phrases.push(v);
 
-  // Navigation patterns
-  const navPatterns = [
-    `säule ${lower}`, `element ${lower}`,
-    `gehe zu ${lower}`, `geh zu ${lower}`, `öffne ${lower}`,
-  ];
+    // Navigation patterns
+    const navPatterns = [
+      `säule ${v}`, `element ${v}`,
+      `gehe zu ${v}`, `geh zu ${v}`, `öffne ${v}`,
+    ];
 
-  // Composite patterns (herstellen)
-  const compositePatterns = [
-    `säule ${lower} herstellen`, `${lower} herstellen`, `${lower} aufnehmen`,
-  ];
+    // Composite patterns (herstellen)
+    const compositePatterns = [
+      `säule ${v} herstellen`, `${v} herstellen`, `${v} aufnehmen`,
+    ];
 
-  for (const p of [...navPatterns, ...compositePatterns]) {
-    phrases.push(p);
-    phrases.push(`bitte ${p}`);
-    phrases.push(`jetzt ${p}`);
+    for (const p of [...navPatterns, ...compositePatterns]) {
+      phrases.push(p);
+      phrases.push(`bitte ${p}`);
+      phrases.push(`jetzt ${p}`);
+    }
+
+    // Display patterns
+    phrases.push(`zeig mir ${v}`);
+    phrases.push(`bitte öffne ${v}`);
   }
-
-  // Display patterns
-  phrases.push(`zeig mir ${lower}`);
-  phrases.push(`bitte öffne ${lower}`);
 
   return phrases;
 }

@@ -1,3 +1,5 @@
+import { elementNameVariants } from './elementNameVariants';
+
 export interface VoiceCommand {
   id: string;
   phrases: string[];
@@ -120,13 +122,20 @@ export function expandCommands(
   elementNames: string[],
 ): ExpandedPhrase[] {
   const expanded: ExpandedPhrase[] = [];
-  const lowerElements = elementNames.map((n) => ({ original: n, lower: n.toLowerCase() }));
+
+  // Build variant-to-original mapping for element names
+  const elementVariants: { variant: string; original: string }[] = [];
+  for (const name of elementNames) {
+    for (const variant of elementNameVariants(name)) {
+      elementVariants.push({ variant, original: name });
+    }
+  }
 
   for (const cmd of commands) {
     for (const phrase of cmd.phrases) {
       if (phrase.includes('{element}')) {
-        for (const el of lowerElements) {
-          const concrete = phrase.replace('{element}', el.lower);
+        for (const el of elementVariants) {
+          const concrete = phrase.replace('{element}', el.variant);
           expanded.push({
             command: cmd,
             phrase: concrete,
