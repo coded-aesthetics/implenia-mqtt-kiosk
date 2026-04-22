@@ -1,12 +1,18 @@
+import { useState, useMemo, useEffect } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
-import { useHashRouter } from './hooks/useHashRouter';
+import { useHashRouter, navigate } from './hooks/useHashRouter';
 import { useConfig, useShiftAssignment } from './hooks/useImplenia';
+import { useVoiceCommands } from './hooks/useVoiceCommands';
 import { Header } from './components/Header';
 import { UpdateBanner } from './components/UpdateBanner';
 import { RecordingBar } from './components/RecordingBar';
 import { ConfigPage } from './components/ConfigPage';
 import { ShiftAssignment } from './components/ShiftAssignment';
 import { ElementDetail } from './components/ElementDetail';
+import { VoiceFeedbackOverlay } from './components/VoiceFeedbackOverlay';
+import { CommentQueuePage } from './components/CommentQueuePage';
+import { useCommentQueue } from './hooks/useCommentQueue';
+import type { ViewTab } from './components/ElementDetail';
 
 export function App() {
   const { readings, connectivity, recordingState, uploadProgress, updateAvailable, updateApplying } =
@@ -14,6 +20,33 @@ export function App() {
   const route = useHashRouter();
   const config = useConfig();
   const shift = useShiftAssignment(config.hasApiKey);
+
+  // Lifted tab state for ElementDetail (so voice commands can control it)
+  const [activeTab, setActiveTab] = useState<ViewTab>('messwerte');
+
+  // Reset tab when navigating to a different element
+  useEffect(() => {
+    setActiveTab('messwerte');
+  }, [route.params.name]);
+
+  // Element names for voice command vocabulary
+  const elementNames = useMemo(
+    () => shift.data?.measuring_devices.map((d) => d.name) ?? [],
+    [shift.data],
+  );
+
+  // Comment queue (background whisper transcription + API posting)
+  const commentQueue = useCommentQueue();
+
+  // Voice commands
+  const voice = useVoiceCommands({
+    route,
+    recordingState,
+    elementNames,
+    setActiveTab,
+    navigate,
+    enqueueComment: commentQueue.enqueue,
+  });
 
   let content: React.ReactNode;
   let pageTitle: string | undefined;
@@ -23,11 +56,24 @@ export function App() {
       content = <ConfigPage config={config} expandSection={route.query.section} />;
       pageTitle = 'Einstellungen';
       break;
+    case 'comments':
+      content = (
+        <CommentQueuePage
+          queue={commentQueue.queue}
+          onEdit={commentQueue.editText}
+          onDelete={commentQueue.deleteComment}
+          onRetry={commentQueue.retry}
+        />
+      );
+      pageTitle = 'Kommentare';
+      break;
     case 'element':
       content = (
         <ElementDetail
           elementName={route.params.name}
           readings={readings}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
         />
       );
       pageTitle = route.params.name;
@@ -48,7 +94,14 @@ export function App() {
         hasApiKey={config.hasApiKey}
         currentPage={route.page}
         pageTitle={pageTitle}
+        voiceSupported={voice.isSupported}
+        isListening={voice.isListening}
+        wakeWordPhase={voice.wakeWordPhase}
+        onMicPress={voice.startListening}
+        onMicRelease={voice.stopListening}
+        commentQueueCount={commentQueue.pendingCount}
       />
+      <VoiceFeedbackOverlay feedback={voice.feedback} />
       <UpdateBanner
         version={updateAvailable}
         applying={updateApplying}

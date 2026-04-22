@@ -14,6 +14,7 @@ interface GitHubRelease {
   tag_name: string;
   assets: Array<{
     name: string;
+    url: string;
     browser_download_url: string;
   }>;
 }
@@ -108,11 +109,11 @@ class UpdateManager extends EventEmitter {
       const tmpDir = '/tmp';
       const tarPath = path.join(tmpDir, `app-update-${version}.tar.gz`);
 
-      // Download tar.gz using browser_download_url (public) — no auth header needed
-      console.log(`[Updater] Downloading ${tarAsset.browser_download_url}...`);
-      const downloadRes = await fetch(tarAsset.browser_download_url, {
+      // Download tar.gz via API URL (works for both public and private repos)
+      console.log(`[Updater] Downloading ${tarAsset.name}...`);
+      const downloadRes = await fetch(tarAsset.url, {
         redirect: 'follow',
-        headers: { 'User-Agent': 'implenia-kiosk-updater' },
+        headers: this.downloadHeaders,
       });
 
       if (!downloadRes.ok || !downloadRes.body) {
@@ -129,9 +130,9 @@ class UpdateManager extends EventEmitter {
       // Verify checksum if available
       if (checksumAsset) {
         console.log('[Updater] Verifying checksum...');
-        const checksumRes = await fetch(checksumAsset.browser_download_url, {
+        const checksumRes = await fetch(checksumAsset.url, {
           redirect: 'follow',
-          headers: { 'User-Agent': 'implenia-kiosk-updater' },
+          headers: this.downloadHeaders,
         });
         const expectedChecksum = (await checksumRes.text()).trim().split(/\s+/)[0];
 

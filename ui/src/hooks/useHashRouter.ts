@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 export interface Route {
-  page: 'home' | 'config' | 'element';
+  page: 'home' | 'config' | 'element' | 'comments';
   params: Record<string, string>;
   query: Record<string, string>;
 }
@@ -19,6 +19,10 @@ function parseHash(): Route {
 
   if (path === 'config') {
     return { page: 'config', params: {}, query };
+  }
+
+  if (path === 'comments') {
+    return { page: 'comments', params: {}, query };
   }
 
   const elementMatch = path.match(/^element\/(.+)$/);

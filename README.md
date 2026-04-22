@@ -120,6 +120,49 @@ git push origin v1.1.0
 
 GitHub Actions will build, package, and publish the release automatically.
 
+## Roadmap
+
+### Packaged Installers (Windows + Linux)
+
+Currently the app is deployed by cloning the repo, building from source, and running under PM2. The next step is proper platform installers so the app can be handed off to service personnel without a development setup.
+
+**Chosen approach: [Tauri 2.0](https://tauri.app/) wrapper**
+
+Tauri wraps the existing React UI in a native shell using the OS's built-in WebView (Edge WebView2 on Windows, WebKitGTK on Linux). The Fastify server continues to run as-is; Tauri manages the window and lifecycle. This produces:
+
+- Windows: `Implenia Kiosk_x.x.x_x64-setup.exe` + `.msi` (~5–15 MB)
+- Linux: `.deb` + `.AppImage`
+
+Electron was considered but ruled out: it doesn't support Android (see below), and installers are ~150 MB due to the bundled Chromium.
+
+### Tablet Support
+
+**Linux tablets** (e.g. running Ubuntu/Debian) require no architectural changes — the same Tauri Linux build runs on them. The server either runs on the tablet itself or on a nearby PC, depending on the deployment scenario.
+
+**Android tablets** introduce a split in deployment models:
+
+#### Option A: Tablet as display (recommended for near-term)
+
+The Fastify server runs on a Windows or Linux PC (or Raspberry Pi) on-site. The Android tablet connects over the local network and displays the React UI. The Tauri Android shell simply points at `http://<server-ip>:3000`.
+
+This requires no server changes and is the simplest path. The server's WebSocket-based live updates and offline buffering continue to work as designed.
+
+#### Option B: Fully self-contained Android tablet
+
+Running the server on the device itself requires running Node.js on Android, which is non-trivial. Two paths exist:
+
+**nodejs-mobile** — embeds a Node.js runtime into the Android app. The server code runs with minimal changes. The main effort is cross-compiling native dependencies for Android ARM64:
+- `better-sqlite3`: requires Android NDK toolchain setup
+- `whisper-cli`: pre-built Android ARM64 binaries exist from the whisper.cpp project
+
+Works, but `nodejs-mobile` is a niche community project and fragile to maintain.
+
+**Rewrite server in Rust** — Replace the Fastify server with an [Axum](https://github.com/tokio-rs/axum) server exposed as Tauri commands. Dependencies map cleanly (`rusqlite` for SQLite, `rumqttc` for MQTT). Compiles natively to Android ARM64 via Tauri's existing build chain — no extra cross-compilation setup.
+
+This is a significant rewrite (weeks) but the correct long-term path if standalone Android deployment becomes a real requirement.
+
+**Recommendation**: defer the server-on-Android question until there is a confirmed field requirement for it. The display-only model covers most tablet deployment scenarios at a fraction of the cost.
+
 ## Project Structure
 
 ```

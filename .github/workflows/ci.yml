@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Authenticate GitHub Packages
+        run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
+
+      # The lockfile is generated on macOS and lacks linux-specific optional
+      # deps (e.g. @rollup/rollup-linux-x64-gnu). Deleting it forces npm to
+      # resolve platform-appropriate binaries fresh on the CI runner.
+      - name: Install dependencies
+        run: |
+          rm -f package-lock.json
+          npm install
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Test
+        run: npm test -w ui

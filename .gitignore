@@ -1,8 +1,11 @@
 node_modules/
 dist/
+electron/dist/
 *.db
 *.db-wal
 *.db-shm
 .env
 /app-next/
 *.tar.gz
+# Vosk speech model (downloaded via scripts/download-vosk-model.sh)
+ui/public/vosk-model-de.tar.gz

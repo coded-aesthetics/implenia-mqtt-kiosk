@@ -1,16 +1,18 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useVorgaben, useVorgabenUnits, useHerstellenUnits, useHerstellenSensors, useVorgabenSensors } from '../hooks/useImplenia';
 import type { SensorDef } from '../hooks/useImplenia';
 import type { SensorReading } from '../hooks/useWebSocket';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import type { Schicht } from '@coded-aesthetics/din4023/profile';
 
+export type ViewTab = 'messwerte' | 'vorgabe';
+
 interface Props {
   elementName: string;
   readings: Map<string, SensorReading>;
+  activeTab: ViewTab;
+  setActiveTab: (tab: ViewTab) => void;
 }
-
-type ViewTab = 'messwerte' | 'vorgabe';
 
 function formatValue(v: unknown): string {
   if (v === null || v === undefined) return '–';
@@ -116,8 +118,7 @@ function buildSensorLookup(sensors: SensorDef[]): Map<string, SensorDef> {
 // Component
 // ---------------------------------------------------------------------------
 
-export function ElementDetail({ elementName, readings }: Props) {
-  const [activeTab, setActiveTab] = useState<ViewTab>('messwerte');
+export function ElementDetail({ elementName, readings, activeTab, setActiveTab }: Props) {
 
   const vorgaben = useVorgaben(elementName);
   const vorgabenUnits = useVorgabenUnits(elementName);
