@@ -35,7 +35,7 @@ export interface BufferRow {
 
 // --- Init ---
 
-const DB_PATH = path.join(process.cwd(), 'kiosk.db');
+const DB_PATH = process.env.DB_PATH ?? path.join(process.cwd(), 'kiosk.db');
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
