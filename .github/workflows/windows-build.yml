@@ -1,0 +1,46 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Authenticate GitHub Packages
+        shell: pwsh
+        run: |
+          "@coded-aesthetics:registry=https://npm.pkg.github.com" | Add-Content .npmrc
+          "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" | Add-Content .npmrc
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build server and UI
+        run: npm run build
+
+      - name: Compile Electron main process
+        run: npm run electron:compile
+
+      - name: Rebuild native modules for Electron
+        run: npx @electron/rebuild -f -w better-sqlite3
+
+      - name: Package installer
+        run: npx electron-builder --win --publish never
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: electron/dist/*.exe
+          retention-days: 14

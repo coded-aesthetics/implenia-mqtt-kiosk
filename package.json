@@ -2,6 +2,7 @@
   "name": "implenia-kiosk",
   "version": "0.0.5",
   "private": true,
+  "main": "electron/dist/main.js",
   "workspaces": [
     "server",
     "ui"
@@ -10,12 +11,45 @@
     "dev": "concurrently -n server,ui -c blue,green \"npm run dev -w server\" \"npm run dev -w ui\"",
     "build": "npm run build -w server && npm run build -w ui",
     "start": "node server/dist/index.js",
-    "lint": "npm run lint -w server && npm run lint -w ui"
+    "lint": "npm run lint -w server && npm run lint -w ui",
+    "electron:compile": "tsc -p electron/tsconfig.json",
+    "electron:dev": "npm run build && npm run electron:compile && electron .",
+    "electron:build": "npm run build && npm run electron:compile && npx @electron/rebuild -f -w better-sqlite3 && electron-builder",
+    "electron:build:win": "npm run build && npm run electron:compile && npx @electron/rebuild -f -w better-sqlite3 && electron-builder --win"
   },
   "overrides": {
     "lodash": "4.17.21"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "@electron/rebuild": "^3.7.0",
+    "concurrently": "^9.1.2",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.implenia.kiosk",
+    "productName": "Implenia Kiosk",
+    "directories": {
+      "output": "electron/dist"
+    },
+    "files": [
+      "electron/dist/main.js"
+    ],
+    "extraResources": [
+      { "from": "server/dist", "to": "server/dist" },
+      { "from": "ui/dist", "to": "ui/dist" },
+      { "from": "node_modules", "to": "node_modules" },
+      ".env.example"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Implenia Kiosk"
+    }
   }
 }
