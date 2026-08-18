@@ -76,6 +76,28 @@ Data intake is abstracted behind a `DataSource` interface (`server/src/data-sour
 
 **Serial protocol**: The Elvis controller (ESP32) sends hex-encoded IEEE 754 floats over USB serial, one frame per line (`\r`-terminated). The parser lives in `server/src/elvis-parser.ts`. Frame format: `# <addr> <15 hex floats> <checksum>\r`. See the parser module for field positions and the test suite for encoding details.
 
+## Framework vs. Use-Case Code
+
+This software is a generic kiosk platform for construction machines. The first use case is DSV (Düsenstrahlverfahren), but it must support other machine types (Ankerbohren, Grosspfahlbohren, Injektionsbohren, etc.) without architectural changes.
+
+**Framework (reusable across machine types):**
+- Data source abstraction (MQTT, serial), Elvis parser, ingestion pipeline
+- SQLite buffering, WebSocket broadcast, recording sessions, batch upload
+- Sensor mapping UI (user assigns serial value indices → sensor names per port)
+- Shift assignment import (file upload), session data export
+- Auto-update, connectivity watchdog, kiosk shell
+- UI shell: header, navigation, recording bar, config page
+
+**Use-case specific (varies per machine type):**
+- Which sensors exist, their names, units, and roles (defined in CSV)
+- Display logic: which values are "hero", how to lay out the element detail view
+- Derived calculations (e.g. DSV volume computations)
+- Export format specifics (column names, formulas)
+
+When evaluating a new feature, ask: "Would a different machine type need this?" If yes, it belongs in the framework. If it's specific to how DSV works, it's use-case code and should be structured so it can be swapped or extended.
+
+## Stack
+
 - **Server**: Fastify, mqtt.js, better-sqlite3, TypeScript
 - **UI**: React, Vite, vite-plugin-pwa
 - **Process manager**: PM2
