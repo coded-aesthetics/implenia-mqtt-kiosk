@@ -1,6 +1,6 @@
 import { fetchImplenia } from './implenia-api.js';
 import { fetchHerstellenSensors, type SensorDefs } from './herstellen-sensors.js';
-import { mqttClient, type SensorMapEntry } from './mqtt.js';
+import { ingestion, type SensorMapEntry } from './ingestion.js';
 import {
   createSession,
   endSession,
@@ -69,7 +69,7 @@ export async function beginRecording(elementName: string): Promise<{ sessionId: 
   }
 
   const sessionId = createSession(elementName, JSON.stringify(sensorMapJson));
-  mqttClient.startRecording(sessionId, sensorMap);
+  ingestion.startRecording(sessionId, sensorMap);
 
   console.log(`[Recording] Started session ${sessionId} for "${elementName}" with ${sensorMap.size} sensors`);
   return { sessionId };
@@ -81,7 +81,7 @@ export function endRecording(): { sessionId: number } {
     throw new Error('No active recording session');
   }
 
-  mqttClient.stopRecording();
+  ingestion.stopRecording();
   endSession(session.id);
 
   console.log(`[Recording] Ended session ${session.id}`);

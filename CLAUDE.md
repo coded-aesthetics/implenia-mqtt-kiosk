@@ -1,12 +1,22 @@
 # Implenia Kiosk
 
-Local-first kiosk app for construction sites. Collects sensor data via MQTT, displays live readings in a touch-optimised browser UI, buffers offline, uploads to Implenia REST API when online, self-updates from GitHub Releases.
+Local-first kiosk app for construction sites. Collects sensor data (MQTT or serial), displays live readings in a touch-optimised browser UI, buffers offline, uploads to Implenia REST API when online, self-updates from GitHub Releases.
 
 ## Stakeholders
 
 **Construction site workers** — The primary users. They interact with the touchscreen while wearing gloves, often in bright or harsh conditions. The software must get out of the way. No learning curve, no unnecessary interactions, no surprises.
 
 **Service personnel** — Set up industry PCs on site. They need minimal maintenance effort. The app should self-update, auto-recover from crashes (PM2), and require as little manual configuration as possible.
+
+## Resilience
+
+This software must never block construction progress. That is the single most important requirement. A confused worker or a frozen screen directly costs time and money on the ground.
+
+- **Degrade gracefully** — No data source → show last known state. No internet → buffer everything locally. No shift assignment from API → allow manual file upload. Every feature must work offline or fail silently
+- **Error states must be recoverable** — Workers must be able to recover from any error without calling service personnel. No dead ends
+- **No blocking operations** — Never show a spinner that prevents interaction. Background tasks (uploads, updates, syncs) must not freeze the UI
+- **Data integrity over features** — Losing recorded measurements is unacceptable. Buffer locally, retry uploads, never discard data. If an upload fails, keep the data and let the user retry or export it
+- **Target resolution: 1024x768** — The stock industry monitor. All layouts must be tested at this resolution. No scrolling, no overflow, no content hidden below the fold
 
 ## UI Design Principles
 
@@ -55,10 +65,16 @@ The self-updater on the kiosk polls GitHub Releases hourly, compares semver agai
 ## Architecture
 
 ```
-MQTT broker → server/src/mqtt.ts → SQLite (mqtt_buffer + session_readings)
-                                  ↘ WebSocket → Browser UI (React)
-              server/src/recording.ts → per-sensor batch upload → Implenia API
+DataSource (mqtt.ts | serial)  →  ingestion.ts  →  SQLite (mqtt_buffer + session_readings)
+                                                 ↘  WebSocket → Browser UI (React)
+                                  recording.ts   →  per-sensor batch upload → Implenia API
 ```
+
+Data intake is abstracted behind a `DataSource` interface (`server/src/data-source.ts`). Each source (MQTT, serial, etc.) emits `SensorReading` events. The `DataIngestion` layer (`server/src/ingestion.ts`) routes readings to the SQLite buffer, WebSocket broadcast, and session recording — source-agnostic. To add a new data source, implement `DataSource` and wire it into `ingestion.ts`.
+
+**Sensor schema**: The sensor definitions live as CSV files in `../implenia-web/app/assets/`. Each machine type (DSV, Ankerbohren, etc.) has a `*-sensors.csv` (vorgaben/specifications) and a `*-sensors-herstellen.csv` (production/live readings). The herstellen CSV defines sensor name, type, unit, source (`mqtt`/`kiosk`/`server`/`user`), role, priority, and MQTT alias. These files are the shared contract between `implenia-web` and this kiosk — any sensor name or format change must be reflected in both projects.
+
+**Serial protocol**: The Elvis controller (ESP32) sends hex-encoded IEEE 754 floats over USB serial, one frame per line (`\r`-terminated). The parser lives in `server/src/elvis-parser.ts`. Frame format: `# <addr> <15 hex floats> <checksum>\r`. See the parser module for field positions and the test suite for encoding details.
 
 - **Server**: Fastify, mqtt.js, better-sqlite3, TypeScript
 - **UI**: React, Vite, vite-plugin-pwa

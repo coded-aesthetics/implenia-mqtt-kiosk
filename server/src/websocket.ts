@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
-import { mqttClient, type SensorMessage } from './mqtt.js';
+import { ingestion } from './ingestion.js';
+import type { SensorReading } from './data-source.js';
 import { connectivity, type ConnectivityState } from './connectivity.js';
 import { updater } from './updater.js';
 import { getRecordingState } from './recording.js';
@@ -83,7 +84,7 @@ export function setupWebSocket(app: FastifyInstance): void {
 
   // Wire up event sources to broadcast
 
-  mqttClient.on('reading', (msg: SensorMessage) => {
+  ingestion.on('reading', (msg: SensorReading) => {
     broadcast({
       type: 'reading',
       topic: msg.topic,
