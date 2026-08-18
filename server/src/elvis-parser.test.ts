@@ -89,42 +89,26 @@ describe('parseElvisFrame', () => {
     const frame = parseElvisFrame(line);
     expect(frame).not.toBeNull();
     expect(frame!.address).toBe('#00');
-    expect(frame!.analogInputs).toEqual(new Array(8).fill(0));
-    expect(frame!.elvisDepth).toBe(0);
-    expect(frame!.elvisPullSpeed).toBe(0);
-    expect(frame!.elvisRpm).toBe(0);
-    expect(frame!.canDepth).toBe(0);
-    expect(frame!.canPullSpeed).toBe(0);
-    expect(frame!.canAngle).toBe(0);
-    expect(frame!.canRpm).toBe(0);
+    expect(frame!.values).toEqual(new Array(15).fill(0));
   });
 
   it('parses a frame with realistic values', () => {
     const values = [
-      12.5, 3.2, 0, 0, 8.1, 0, 0, 0,   // analog inputs
-      15.3,                               // elvis depth
-      2.5,                                // elvis pull speed
-      45.0,                               // elvis rpm
-      15.1,                               // can depth
-      2.4,                                // can pull speed
-      3.7,                                // can angle
-      44.0,                               // can rpm
+      12.5, 3.2, 0, 0, 8.1, 0, 0, 0,
+      15.3, 2.5, 45.0, 15.1, 2.4, 3.7, 44.0,
     ];
     const line = buildElvisLine('#10', values);
     const frame = parseElvisFrame(line);
 
     expect(frame).not.toBeNull();
     expect(frame!.address).toBe('#10');
-    expect(frame!.analogInputs[0]).toBeCloseTo(12.5, 5);
-    expect(frame!.analogInputs[1]).toBeCloseTo(3.2, 5);
-    expect(frame!.analogInputs[4]).toBeCloseTo(8.1, 5);
-    expect(frame!.elvisDepth).toBeCloseTo(15.3, 5);
-    expect(frame!.elvisPullSpeed).toBeCloseTo(2.5, 5);
-    expect(frame!.elvisRpm).toBeCloseTo(45.0, 5);
-    expect(frame!.canDepth).toBeCloseTo(15.1, 5);
-    expect(frame!.canPullSpeed).toBeCloseTo(2.4, 5);
-    expect(frame!.canAngle).toBeCloseTo(3.7, 5);
-    expect(frame!.canRpm).toBeCloseTo(44.0, 5);
+    expect(frame!.values).toHaveLength(15);
+    expect(frame!.values[0]).toBeCloseTo(12.5, 5);
+    expect(frame!.values[1]).toBeCloseTo(3.2, 5);
+    expect(frame!.values[4]).toBeCloseTo(8.1, 5);
+    expect(frame!.values[8]).toBeCloseTo(15.3, 5);
+    expect(frame!.values[10]).toBeCloseTo(45.0, 5);
+    expect(frame!.values[14]).toBeCloseTo(44.0, 5);
   });
 
   it('parses pump address (#10) and machine address (#00)', () => {
@@ -136,11 +120,11 @@ describe('parseElvisFrame', () => {
 
   it('handles negative values', () => {
     const values = allZeroValues();
-    values[8] = -5.0;  // negative depth
+    values[8] = -5.0;
     const line = buildElvisLine('#00', values);
     const frame = parseElvisFrame(line);
     expect(frame).not.toBeNull();
-    expect(frame!.elvisDepth).toBeCloseTo(-5.0, 5);
+    expect(frame!.values[8]).toBeCloseTo(-5.0, 5);
   });
 
   it('handles large values', () => {
@@ -149,8 +133,8 @@ describe('parseElvisFrame', () => {
     values[10] = 3000.0;
     const line = buildElvisLine('#00', values);
     const frame = parseElvisFrame(line);
-    expect(frame!.analogInputs[0]).toBeCloseTo(9999.99, 1);
-    expect(frame!.elvisRpm).toBeCloseTo(3000.0, 5);
+    expect(frame!.values[0]).toBeCloseTo(9999.99, 1);
+    expect(frame!.values[10]).toBeCloseTo(3000.0, 5);
   });
 
   it('handles very small values', () => {
@@ -158,7 +142,7 @@ describe('parseElvisFrame', () => {
     values[9] = 0.001;
     const line = buildElvisLine('#00', values);
     const frame = parseElvisFrame(line);
-    expect(frame!.elvisPullSpeed).toBeCloseTo(0.001, 5);
+    expect(frame!.values[9]).toBeCloseTo(0.001, 5);
   });
 });
 
@@ -231,16 +215,9 @@ describe('round-trip fuzz', () => {
 
       expect(frame).not.toBeNull();
       expect(frame!.address).toBe(addr);
-      for (let j = 0; j < 8; j++) {
-        expect(frame!.analogInputs[j]).toBeCloseTo(values[j], 2);
+      for (let j = 0; j < 15; j++) {
+        expect(frame!.values[j]).toBeCloseTo(values[j], 2);
       }
-      expect(frame!.elvisDepth).toBeCloseTo(values[8], 2);
-      expect(frame!.elvisPullSpeed).toBeCloseTo(values[9], 2);
-      expect(frame!.elvisRpm).toBeCloseTo(values[10], 2);
-      expect(frame!.canDepth).toBeCloseTo(values[11], 2);
-      expect(frame!.canPullSpeed).toBeCloseTo(values[12], 2);
-      expect(frame!.canAngle).toBeCloseTo(values[13], 2);
-      expect(frame!.canRpm).toBeCloseTo(values[14], 2);
     }
   });
 });

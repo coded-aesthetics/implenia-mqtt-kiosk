@@ -1,13 +1,6 @@
 export interface ElvisFrame {
   address: string;
-  analogInputs: number[];
-  elvisDepth: number;
-  elvisPullSpeed: number;
-  elvisRpm: number;
-  canDepth: number;
-  canPullSpeed: number;
-  canAngle: number;
-  canRpm: number;
+  values: number[];
 }
 
 const EXPECTED_FIELD_COUNT = 15;
@@ -55,15 +48,5 @@ export function parseElvisFrame(line: string): ElvisFrame | null {
 
   const floats = hexValues.map(hexToFloat);
 
-  return {
-    address,
-    analogInputs: floats.slice(0, 8),
-    elvisDepth: floats[8],
-    elvisPullSpeed: floats[9],
-    elvisRpm: floats[10],
-    canDepth: floats[11],
-    canPullSpeed: floats[12],
-    canAngle: floats[13],
-    canRpm: floats[14],
-  };
+  return { address, values: floats };
 }
