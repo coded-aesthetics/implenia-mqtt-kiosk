@@ -1,0 +1,62 @@
+:root {
+  /* ── Surfaces (dark → light) ──────────────────────────────────── */
+  --surface-0: #0f0f23;     /* bars, inputs, deepest layer */
+  --surface-1: #1a1a2e;     /* app background */
+  --surface-2: #16213e;     /* cards, tiles */
+  --surface-3: #1a2744;     /* elevated cards, active states */
+  --surface-4: #324272;     /* interactive tiles, hover */
+
+  /* ── Borders ──────────────────────────────────────────────────── */
+  --border: #2a2a4a;
+  --border-accent: #1976d2;
+
+  /* ── Text ─────────────────────────────────────────────────────── */
+  --text-primary: #ffffff;
+  --text-secondary: #cccccc;
+  --text-muted: #8899aa;
+  --text-dim: #556677;
+
+  /* ── Semantic ─────────────────────────────────────────────────── */
+  --color-accent: #1976d2;
+  --color-success: #4caf50;
+  --color-success-strong: #388e3c;
+  --color-success-muted: #1b5e20;
+  --color-danger: #f44336;
+  --color-danger-strong: #d32f2f;
+  --color-danger-muted: #b71c1c;
+  --color-warning: #e65100;
+  --color-neutral: #9e9e9e;
+
+  /* ── Typography ───────────────────────────────────────────────── */
+  --font-body: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  --font-hero: 3.5rem;      /* hero sensor values */
+  --font-xl: 2.5rem;        /* element tile names */
+  --font-lg: 2rem;          /* page title, large values */
+  --font-md: 1.4rem;        /* secondary values */
+  --font-base: 1.1rem;      /* body, buttons, inputs */
+  --font-sm: 0.85rem;       /* labels */
+  --font-xs: 0.75rem;       /* small labels, units */
+
+  /* ── Spacing ──────────────────────────────────────────────────── */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+
+  /* ── Radii ────────────────────────────────────────────────────── */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* ── Tap targets (construction gloves) ────────────────────────── */
+  --tap-min: 64px;
+  --tap-sm: 48px;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}

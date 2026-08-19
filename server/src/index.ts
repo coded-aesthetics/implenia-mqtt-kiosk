@@ -4,7 +4,7 @@ import fastifyStatic from '@fastify/static';
 import path from 'node:path';
 import { config } from './config.js';
 import { connectivity } from './connectivity.js';
-import { mqttClient } from './mqtt.js';
+import { ingestion } from './ingestion.js';
 import { setupWebSocket, stopWebSocket } from './websocket.js';
 import { updater } from './updater.js';
 import { registerDataRoutes } from './routes/data.js';
@@ -45,7 +45,7 @@ async function start(): Promise<void> {
 
   // Start services
   connectivity.start();
-  mqttClient.start();
+  ingestion.start();
   updater.start();
 
   // Start HTTP server
@@ -58,7 +58,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`\n[Server] Received ${signal}, shutting down...`);
   updater.stop();
   stopWebSocket();
-  mqttClient.stop();
+  ingestion.stop();
   connectivity.stop();
   await app.close();
   closeDb();

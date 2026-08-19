@@ -72,9 +72,9 @@ export function App() {
 const styles: Record<string, React.CSSProperties> = {
   container: {
     height: '100vh',
-    backgroundColor: '#1a1a2e',
-    color: '#e0e0e0',
-    fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+    backgroundColor: 'var(--surface-1)',
+    color: 'var(--text-secondary)',
+    fontFamily: 'var(--font-body)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
