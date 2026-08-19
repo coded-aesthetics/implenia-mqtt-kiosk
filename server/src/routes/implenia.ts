@@ -12,7 +12,7 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
     const today = date || new Date().toISOString().split('T')[0];
 
     try {
-      const data = await fetchImplenia(`/shift-assignment?date=${today}`);
+      const data = await fetchImplenia(`/shift-assignment?date=${today}&include_vorgaben=true`);
       return reply.send(data);
     } catch (err) {
       const status = (err as ApiError).statusCode;
@@ -20,25 +20,6 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
         return reply.status(404).send({ error: 'not_found', date: today });
       }
       console.error('[Implenia] shift-assignment error:', (err as Error).message);
-      return reply.status(502).send({ error: (err as Error).message });
-    }
-  });
-
-  // Proxy: vorgabe (specification) parameters for an element
-  // GET /api/elements/:elementName/vorgaben
-  app.get('/api/elements/:elementName/vorgaben', async (request, reply) => {
-    if (!getApiConfig()) {
-      return reply.status(503).send({ error: 'Implenia API not configured' });
-    }
-    const { elementName } = request.params as { elementName: string };
-
-    try {
-      const data = await fetchImplenia(
-        `/api/v1/measuring-device/self/child/name:${encodeURIComponent(elementName)}/child/name:vorgaben/sensors/latest`,
-      );
-      return reply.send(data);
-    } catch (err) {
-      console.error(`[Implenia] vorgaben for ${elementName} error:`, (err as Error).message);
       return reply.status(502).send({ error: (err as Error).message });
     }
   });

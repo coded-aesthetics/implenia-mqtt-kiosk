@@ -53,6 +53,7 @@ export interface MeasuringDevice {
   id: string;
   name: string;
   description: string;
+  vorgaben?: VorgabenData;
 }
 
 export interface ShiftAssignment {
@@ -106,35 +107,6 @@ export interface VorgabenData {
   string_sensors?: Record<string, string | null>;
   geo_sensors?: Record<string, unknown>;
   int_float_sensors?: Record<string, unknown>;
-}
-
-export interface VorgabenState {
-  data: VorgabenData | null;
-  loading: boolean;
-  error: string | null;
-}
-
-export function useVorgaben(elementName: string | null): VorgabenState {
-  const [state, setState] = useState<VorgabenState>({
-    data: null,
-    loading: false,
-    error: null,
-  });
-
-  useEffect(() => {
-    if (!elementName) return;
-
-    setState({ data: null, loading: true, error: null });
-    fetch(`/api/elements/${encodeURIComponent(elementName)}/vorgaben`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error(friendlyApiError(r.status, await r.text()));
-        return r.json();
-      })
-      .then((data) => setState({ data, loading: false, error: null }))
-      .catch((err) => setState({ data: null, loading: false, error: (err as Error).message }));
-  }, [elementName]);
-
-  return state;
 }
 
 // --- Element sensor definitions ---
