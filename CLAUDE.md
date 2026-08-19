@@ -96,6 +96,22 @@ This software is a generic kiosk platform for construction machines. The first u
 
 When evaluating a new feature, ask: "Would a different machine type need this?" If yes, it belongs in the framework. If it's specific to how DSV works, it's use-case code and should be structured so it can be swapped or extended.
 
+## Testing
+
+This software auto-updates on machines where a broken deploy costs real time and money. Tests are a safety net, not a checkbox.
+
+**Unit tests** (vitest, `server/src/*.test.ts`): Every pure-logic module gets unit tests — parsers, state machines, calculations, data transformations. If it has no side effects and takes input → output, it gets a test. Run with `cd server && npm test`.
+
+**Integration tests**: Test the server-side pipeline with real SQLite (in-memory), real ingestion, real recording. Verify data flows end-to-end: source emits reading → ingestion routes → SQLite stores → recording captures → export produces correct format. Use the Elvis simulator to generate realistic frames.
+
+**What to test**: Anything that could silently corrupt data or break offline operation. Sensor mapping resolution, recording start/stop lifecycle, upload retry logic, config persistence, file import parsing. Prefer testing behavior ("a recorded session exports with correct column names") over implementation ("function X is called with Y").
+
+**What not to test**: React component rendering, CSS layout, trivial getters, framework glue code. Don't mock the database — use in-memory SQLite so tests verify real SQL.
+
+**Smoke tests** (Playwright, minimal): Not a full E2E suite — just 2-3 tests that boot the app at 1024x768 and verify the shell renders, key elements are visible, and there are no JS console errors. These catch catastrophic failures (broken build, missing assets, layout completely off-screen) that unit/integration tests can't. Keep the count low and the assertions broad. If a smoke test breaks on every CSS change, it's too specific.
+
+**Pre-update health check** (server-side): Before the auto-updater commits to a new version, the new server must boot and respond to `/health` with a passing status (DB accessible, config loadable, static assets present). If the health check fails, the updater keeps the previous version. No browser involved — this runs on the kiosk itself.
+
 ## Stack
 
 - **Server**: Fastify, mqtt.js, better-sqlite3, TypeScript
