@@ -31,7 +31,7 @@ describe('validateShiftImport', () => {
   it('rejects null', () => {
     const result = validateShiftImport(null);
     expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.error).toContain('not a JSON object');
+    if (!result.valid) expect(result.error).toContain('kein gültiges JSON-Objekt');
   });
 
   it('rejects undefined', () => {
@@ -42,19 +42,19 @@ describe('validateShiftImport', () => {
   it('rejects a string', () => {
     const result = validateShiftImport('not an object');
     expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.error).toContain('not a JSON object');
+    if (!result.valid) expect(result.error).toContain('kein gültiges JSON-Objekt');
   });
 
   it('rejects an object without measuring_devices', () => {
     const result = validateShiftImport({ personnel_id: 'p1' });
     expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.error).toContain('missing measuring_devices');
+    if (!result.valid) expect(result.error).toContain('measuring_devices');
   });
 
   it('rejects when measuring_devices is not an array', () => {
     const result = validateShiftImport({ measuring_devices: 'not-an-array' });
     expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.error).toContain('missing measuring_devices');
+    if (!result.valid) expect(result.error).toContain('measuring_devices');
   });
 });
 

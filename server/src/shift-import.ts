@@ -13,11 +13,11 @@ export type ValidationResult = {
 
 export function validateShiftImport(input: unknown): ValidationResult {
   if (input == null || typeof input !== 'object') {
-    return { valid: false, error: 'Invalid shift assignment: not a JSON object' };
+    return { valid: false, error: 'Ungültiger Schichtauftrag: Die Datei enthält kein gültiges JSON-Objekt.' };
   }
   const obj = input as Record<string, unknown>;
   if (!Array.isArray(obj.measuring_devices)) {
-    return { valid: false, error: 'Invalid shift assignment: missing measuring_devices array' };
+    return { valid: false, error: 'Ungültiger Schichtauftrag: Das Feld "measuring_devices" fehlt oder ist kein Array. Bitte eine vom Implenia-Portal exportierte Datei verwenden.' };
   }
   return { valid: true, data: obj as ValidShiftImport };
 }
