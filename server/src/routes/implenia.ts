@@ -2,20 +2,16 @@ import type { FastifyInstance } from 'fastify';
 import { fetchImplenia, getApiConfig, type ApiError } from '../implenia-api.js';
 import { fetchHerstellenSensors } from '../herstellen-sensors.js';
 import { getMeta, setMeta, deleteMeta } from '../db.js';
+import { validateShiftImport, resolveShiftAssignment } from '../shift-import.js';
 
 const IMPORT_KEY = 'imported_shift_assignment';
 
 export function registerImpleniaRoutes(app: FastifyInstance): void {
   // Shift assignment: return import if available, otherwise proxy to API
   app.get('/api/shift-assignment', async (request, reply) => {
-    const imported = getMeta(IMPORT_KEY);
-    if (imported) {
-      try {
-        const data = JSON.parse(imported);
-        return reply.send({ ...data, source: 'import' });
-      } catch {
-        deleteMeta(IMPORT_KEY);
-      }
+    const resolved = resolveShiftAssignment(getMeta(IMPORT_KEY));
+    if (resolved) {
+      return reply.send({ ...resolved.data, source: resolved.source });
     }
 
     if (!getApiConfig()) {
@@ -39,11 +35,11 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
 
   // Import a shift assignment from a JSON file
   app.post('/api/shift-assignment/import', async (request, reply) => {
-    const body = request.body as Record<string, unknown> | null;
-    if (!body || !Array.isArray(body.measuring_devices)) {
-      return reply.status(400).send({ error: 'Invalid shift assignment: missing measuring_devices array' });
+    const result = validateShiftImport(request.body);
+    if (!result.valid) {
+      return reply.status(400).send({ error: result.error });
     }
-    setMeta(IMPORT_KEY, JSON.stringify(body));
+    setMeta(IMPORT_KEY, JSON.stringify(result.data));
     return reply.send({ ok: true });
   });
 
