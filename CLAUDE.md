@@ -31,6 +31,7 @@ This runs on construction sites, not office desks. Every UI decision should refl
 - **Landscape-first** — Industry PCs are typically widescreen. Use CSS Grid for responsive tile layouts
 - **Minimal text** — Use numbers, colors, and icons over paragraphs. Workers glance, they don't read
 - **Language: German** — All UI-facing text must be in German. Code, comments, and documentation stay in English
+- **Error messages: German, actionable, recoverable** — Every error a user can see must be in German, explain what went wrong, and tell them how to fix it. Workers can't call IT — they need to solve problems themselves. Server-side validation errors are shown to users too, so they must also be German and actionable. Example: not "Invalid JSON" but "Ungültiger Schichtauftrag: Die Datei enthält kein gültiges JSON-Objekt. Bitte eine vom Implenia-Portal exportierte Datei verwenden."
 
 ## Development
 

@@ -14,6 +14,7 @@ export function App() {
   const route = useHashRouter();
   const config = useConfig();
   const shift = useShiftAssignment(config.hasApiKey);
+  const { importShift, clearImport } = shift;
 
   let content: React.ReactNode;
   let pageTitle: string | undefined;
@@ -38,7 +39,7 @@ export function App() {
       break;
     }
     default:
-      content = <ShiftAssignment shift={shift} hasApiKey={config.hasApiKey} />;
+      content = <ShiftAssignment shift={shift} hasApiKey={config.hasApiKey} onImport={importShift} onClearImport={clearImport} />;
       if (shift.data) {
         const [y, m, d] = shift.data.day_of_execution.split('-');
         pageTitle = `Schichtauftrag für ${d}.${m}.${y}`;

@@ -1,13 +1,66 @@
+import { useRef, useState } from 'react';
 import { navigate } from '../hooks/useHashRouter';
 import type { ShiftAssignmentState } from '../hooks/useImplenia';
 
 interface Props {
   shift: ShiftAssignmentState;
   hasApiKey: boolean;
+  onImport: (file: File) => Promise<{ ok: boolean; error?: string }>;
+  onClearImport: () => Promise<void>;
 }
 
-export function ShiftAssignment({ shift, hasApiKey }: Props) {
-  if (!hasApiKey) {
+function ImportButton({ onImport }: { onImport: Props['onImport'] }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    setError(null);
+    const result = await onImport(file);
+    if (!result.ok) setError(result.error ?? 'Import fehlgeschlagen');
+    setImporting(false);
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".json"
+        onChange={handleFile}
+        style={{ display: 'none' }}
+      />
+      <button
+        onClick={() => fileRef.current?.click()}
+        disabled={importing}
+        style={styles.importButton}
+      >
+        {importing ? 'Wird importiert...' : 'Schichtauftrag importieren'}
+      </button>
+      {error && <div style={styles.importError}>{error}</div>}
+    </div>
+  );
+}
+
+function ImportBadge({ onClear }: { onClear: () => Promise<void> }) {
+  return (
+    <div style={styles.importBadge}>
+      <span style={styles.importBadgeText}>Importiert aus Datei</span>
+      <button onClick={onClear} style={styles.clearButton}>
+        Zurücksetzen
+      </button>
+    </div>
+  );
+}
+
+export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: Props) {
+  const isImported = shift.source === 'import';
+
+  if (!hasApiKey && !isImported && !shift.loading) {
     return (
       <div style={styles.center}>
         <div style={styles.notice}>
@@ -20,6 +73,8 @@ export function ShiftAssignment({ shift, hasApiKey }: Props) {
           >
             Einstellungen
           </a>
+          <div style={styles.divider}>oder</div>
+          <ImportButton onImport={onImport} />
         </div>
       </div>
     );
@@ -33,7 +88,7 @@ export function ShiftAssignment({ shift, hasApiKey }: Props) {
     );
   }
 
-  if (shift.error) {
+  if (shift.error && !isImported) {
     return (
       <div style={styles.center}>
         <div style={styles.notice}>
@@ -47,12 +102,14 @@ export function ShiftAssignment({ shift, hasApiKey }: Props) {
           >
             Einstellungen
           </a>
+          <div style={styles.divider}>oder</div>
+          <ImportButton onImport={onImport} />
         </div>
       </div>
     );
   }
 
-  if (shift.notFound) {
+  if (shift.notFound && !isImported) {
     const today = new Date().toLocaleDateString('de-DE', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     });
@@ -66,6 +123,8 @@ export function ShiftAssignment({ shift, hasApiKey }: Props) {
           <div style={styles.noticeSubtext}>
             Bitte erstellen Sie einen Schichtauftrag für {today} im Implenia-Portal.
           </div>
+          <div style={styles.divider}>oder</div>
+          <ImportButton onImport={onImport} />
         </div>
       </div>
     );
@@ -74,7 +133,10 @@ export function ShiftAssignment({ shift, hasApiKey }: Props) {
   if (!shift.data || shift.data.measuring_devices.length === 0) {
     return (
       <div style={styles.center}>
-        <div style={styles.emptyText}>Keine Elemente in der Schichtzuordnung</div>
+        <div style={styles.notice}>
+          <div style={styles.emptyText}>Keine Elemente in der Schichtzuordnung</div>
+          <ImportButton onImport={onImport} />
+        </div>
       </div>
     );
   }
@@ -83,16 +145,24 @@ export function ShiftAssignment({ shift, hasApiKey }: Props) {
 
   return (
     <div style={styles.tileContainer}>
-      <div style={styles.grid}>
-        {data.measuring_devices.map((device) => (
-          <button
-            key={device.id}
-            onClick={() => navigate(`element/${encodeURIComponent(device.name)}`)}
-            style={styles.tile}
-          >
-            <div style={styles.tileName}>{device.name}</div>
-          </button>
-        ))}
+      <div style={{ width: '100%', maxWidth: '900px' }}>
+        {isImported && <ImportBadge onClear={onClearImport} />}
+        <div style={styles.grid}>
+          {data.measuring_devices.map((device) => (
+            <button
+              key={device.id}
+              onClick={() => navigate(`element/${encodeURIComponent(device.name)}`)}
+              style={styles.tile}
+            >
+              <div style={styles.tileName}>{device.name}</div>
+            </button>
+          ))}
+        </div>
+        {!isImported && (
+          <div style={styles.importFooter}>
+            <ImportButton onImport={onImport} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -160,12 +230,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '1.2rem',
     color: '#556677',
   },
-  errorText: {
-    fontSize: '1.1rem',
-    color: '#f44336',
-    maxWidth: '400px',
-    textAlign: 'center' as const,
-  },
   emptyText: {
     fontSize: '1.2rem',
     color: '#556677',
@@ -175,7 +239,6 @@ const styles: Record<string, React.CSSProperties> = {
     gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
     gap: '1.5rem',
     width: '100%',
-    maxWidth: '900px',
   },
   tile: {
     backgroundColor: '#324272',
@@ -196,5 +259,62 @@ const styles: Record<string, React.CSSProperties> = {
   tileName: {
     fontSize: '2.5rem',
     fontWeight: 700,
+  },
+  divider: {
+    fontSize: '1rem',
+    color: '#556677',
+    margin: '0.25rem 0',
+  },
+  importButton: {
+    fontSize: '1.1rem',
+    color: '#ffffff',
+    backgroundColor: '#2e7d32',
+    border: 'none',
+    borderRadius: '8px',
+    padding: '0.75rem 2rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    minHeight: '56px',
+    minWidth: '64px',
+    fontFamily: 'inherit',
+  },
+  importError: {
+    fontSize: '0.95rem',
+    color: '#f44336',
+    maxWidth: '360px',
+    textAlign: 'center' as const,
+    lineHeight: 1.4,
+  },
+  importBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '1rem',
+    marginBottom: '1rem',
+    padding: '0.5rem 1rem',
+    backgroundColor: '#1b3a1b',
+    borderRadius: '8px',
+  },
+  importBadgeText: {
+    fontSize: '1rem',
+    color: '#81c784',
+    fontWeight: 600,
+  },
+  clearButton: {
+    fontSize: '0.9rem',
+    color: '#cccccc',
+    backgroundColor: 'transparent',
+    border: '1px solid #555555',
+    borderRadius: '6px',
+    padding: '0.4rem 1rem',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    minHeight: '40px',
+    minWidth: '64px',
+  },
+  importFooter: {
+    display: 'flex',
+    justifyContent: 'center',
+    marginTop: '1.5rem',
   },
 };
