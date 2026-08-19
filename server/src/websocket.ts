@@ -3,7 +3,7 @@ import type { WebSocket } from 'ws';
 import { ingestion } from './ingestion.js';
 import type { SensorReading } from './data-source.js';
 import { connectivity, type ConnectivityState } from './connectivity.js';
-import { updater } from './updater.js';
+import { updater, type UpdateSource } from './updater.js';
 import { getRecordingState } from './recording.js';
 import { getSessionReadingCount } from './db.js';
 
@@ -62,6 +62,7 @@ export function setupWebSocket(app: FastifyInstance): void {
         JSON.stringify({
           type: 'update-available',
           version: updater.updateAvailable,
+          source: updater.updateSource,
         })
       );
     }
@@ -97,8 +98,8 @@ export function setupWebSocket(app: FastifyInstance): void {
     broadcast({ type: 'connectivity', state });
   });
 
-  updater.on('update-available', (version: string) => {
-    broadcast({ type: 'update-available', version });
+  updater.on('update-available', (version: string, source: UpdateSource) => {
+    broadcast({ type: 'update-available', version, source });
   });
 
   updater.on('update-applying', () => {
