@@ -23,15 +23,20 @@ export function App() {
       content = <ConfigPage config={config} expandSection={route.query.section} />;
       pageTitle = 'Einstellungen';
       break;
-    case 'element':
+    case 'element': {
+      const deviceVorgaben = shift.data?.measuring_devices.find(
+        (d) => d.name === route.params.name,
+      )?.vorgaben ?? null;
       content = (
         <ElementDetail
           elementName={route.params.name}
           readings={readings}
+          vorgaben={deviceVorgaben}
         />
       );
       pageTitle = route.params.name;
       break;
+    }
     default:
       content = <ShiftAssignment shift={shift} hasApiKey={config.hasApiKey} />;
       if (shift.data) {

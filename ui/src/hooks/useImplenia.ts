@@ -53,6 +53,7 @@ export interface MeasuringDevice {
   id: string;
   name: string;
   description: string;
+  vorgaben?: VorgabenData;
 }
 
 export interface ShiftAssignment {

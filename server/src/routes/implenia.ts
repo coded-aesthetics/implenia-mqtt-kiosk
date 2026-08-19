@@ -12,7 +12,7 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
     const today = date || new Date().toISOString().split('T')[0];
 
     try {
-      const data = await fetchImplenia(`/shift-assignment?date=${today}`);
+      const data = await fetchImplenia(`/shift-assignment?date=${today}&include_vorgaben=true`);
       return reply.send(data);
     } catch (err) {
       const status = (err as ApiError).statusCode;
