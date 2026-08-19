@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useVorgaben, useVorgabenUnits, useHerstellenUnits, useHerstellenSensors, useVorgabenSensors } from '../hooks/useImplenia';
+import { useVorgabenUnits, useHerstellenUnits, useHerstellenSensors, useVorgabenSensors } from '../hooks/useImplenia';
 import type { SensorDef, VorgabenData } from '../hooks/useImplenia';
 import type { SensorReading } from '../hooks/useWebSocket';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
@@ -8,7 +8,7 @@ import type { Schicht } from '@coded-aesthetics/din4023/profile';
 interface Props {
   elementName: string;
   readings: Map<string, SensorReading>;
-  vorgaben?: VorgabenData | null;
+  vorgaben: VorgabenData | null;
 }
 
 type ViewTab = 'messwerte' | 'vorgabe';
@@ -117,13 +117,9 @@ function buildSensorLookup(sensors: SensorDef[]): Map<string, SensorDef> {
 // Component
 // ---------------------------------------------------------------------------
 
-export function ElementDetail({ elementName, readings, vorgaben: preloaded }: Props) {
+export function ElementDetail({ elementName, readings, vorgaben }: Props) {
   const [activeTab, setActiveTab] = useState<ViewTab>('messwerte');
 
-  const vorgabenFetched = useVorgaben(preloaded ? null : elementName);
-  const vorgaben = preloaded
-    ? { data: preloaded, loading: false, error: null }
-    : vorgabenFetched;
   const vorgabenUnits = useVorgabenUnits(elementName);
   const herstellenUnits = useHerstellenUnits(elementName);
   const herstellenSensors = useHerstellenSensors(elementName);
@@ -134,8 +130,8 @@ export function ElementDetail({ elementName, readings, vorgaben: preloaded }: Pr
 
   // Collect vorgabe entries from all sensor types
   const allEntries: { name: string; value: string }[] = [];
-  if (vorgaben.data) {
-    const d = vorgaben.data;
+  if (vorgaben) {
+    const d = vorgaben;
     for (const [name, val] of Object.entries(d.float_sensors ?? {})) {
       allEntries.push({ name, value: formatValue(val) });
     }
@@ -340,14 +336,6 @@ export function ElementDetail({ elementName, readings, vorgaben: preloaded }: Pr
           {/* ========== VORGABE VIEW ========== */}
           {activeTab === 'vorgabe' && (
             <div style={styles.viewContent}>
-              {vorgaben.loading && (
-                <div style={styles.statusText}>Vorgaben werden geladen...</div>
-              )}
-
-              {vorgaben.error && (
-                <div style={styles.errorText}>Fehler: {vorgaben.error}</div>
-              )}
-
               {coordinates.length > 0 && (
                 <div style={styles.coordBar}>
                   {coordinates.map((c) => (
@@ -415,7 +403,7 @@ export function ElementDetail({ elementName, readings, vorgaben: preloaded }: Pr
                 </div>
               )}
 
-              {!vorgaben.loading && !vorgaben.error && vorgabeEntries.length === 0 && coordinates.length === 0 && !geologyProfile && (
+              {vorgabeEntries.length === 0 && coordinates.length === 0 && !geologyProfile && (
                 <div style={styles.statusText}>Keine Vorgaben vorhanden</div>
               )}
             </div>
