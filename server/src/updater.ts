@@ -209,6 +209,41 @@ class UpdateManager extends EventEmitter {
     }
   }
 
+  async applyUploadedTar(tarBuffer: Buffer, filename: string): Promise<{ ok: boolean; error?: string; version?: string }> {
+    const version = parseVersionFromTarName(filename);
+    if (!version) {
+      return { ok: false, error: 'Ungültiger Dateiname. Erwartet: app-vX.Y.Z.tar.gz' };
+    }
+
+    if (!semver.gt(version, this.currentVersion)) {
+      return { ok: false, error: `Version ${version} ist nicht neuer als aktuelle Version ${this.currentVersion}` };
+    }
+
+    this.emit('update-applying');
+    console.log(`[Updater] Applying uploaded update v${version} from ${filename}...`);
+
+    try {
+      const tmpPath = path.join('/tmp', `upload-update-${version}.tar.gz`);
+      fs.writeFileSync(tmpPath, tarBuffer);
+
+      const appDir = process.cwd();
+      execSync(`tar -xzf "${tmpPath}" -C "${appDir}"`, { stdio: 'pipe' });
+      console.log(`[Updater] Upload update ${version} extracted`);
+
+      fs.unlinkSync(tmpPath);
+
+      console.log('[Updater] Restarting via PM2...');
+      setTimeout(() => {
+        process.exit(0);
+      }, 1000);
+
+      return { ok: true, version };
+    } catch (err) {
+      console.error('[Updater] Upload update failed:', (err as Error).message);
+      return { ok: false, error: 'Update konnte nicht entpackt werden. Datei möglicherweise beschädigt.' };
+    }
+  }
+
   private async applyFromUsb(version: string, tarPath: string, checksumPath?: string): Promise<void> {
     this.emit('update-applying');
     console.log(`[Updater] Applying USB update v${version} from ${tarPath}...`);

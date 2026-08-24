@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import type { ConfigState } from '../hooks/useImplenia';
+import { UpdateUpload } from './UpdateUpload';
 
 interface Props {
   config: ConfigState;
@@ -150,6 +151,9 @@ export function ConfigPage({ config, expandSection }: Props) {
           </div>
         )}
       </div>
+
+      {/* Software Update card */}
+      <UpdateUpload />
 
       {/* API URL expandable card */}
       <div style={styles.card}>
