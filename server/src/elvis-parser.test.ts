@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hexToFloat, computeChecksum, parseElvisFrame, type ElvisFrame } from './elvis-parser';
+import { hexToFloat, computeChecksum, parseElvisFrame, type ElvisFrame } from './elvis-parser.js';
 
 // ── Encoder (mirrors the ESP32 C code) ──────────────────────────────────────
 

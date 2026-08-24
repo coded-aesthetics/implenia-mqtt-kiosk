@@ -1,9 +1,12 @@
+import type { UpdateSource } from '../hooks/useWebSocket';
+
 interface Props {
   version: string | null;
+  source: UpdateSource | null;
   applying: boolean;
 }
 
-export function UpdateBanner({ version, applying }: Props) {
+export function UpdateBanner({ version, source, applying }: Props) {
   if (!version && !applying) return null;
 
   if (applying) {
@@ -16,10 +19,12 @@ export function UpdateBanner({ version, applying }: Props) {
     );
   }
 
+  const sourceLabel = source === 'usb' ? ' (USB)' : '';
+
   return (
     <div style={styles.banner}>
       <span style={styles.text}>
-        Version {version} verfügbar.
+        Version {version} verfügbar{sourceLabel}.
       </span>
       <button
         style={styles.button}

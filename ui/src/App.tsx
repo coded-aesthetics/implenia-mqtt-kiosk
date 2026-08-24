@@ -9,7 +9,7 @@ import { ShiftAssignment } from './components/ShiftAssignment';
 import { ElementDetail } from './components/ElementDetail';
 
 export function App() {
-  const { readings, connectivity, recordingState, uploadProgress, updateAvailable, updateApplying } =
+  const { readings, connectivity, recordingState, uploadProgress, updateAvailable, updateSource, updateApplying } =
     useWebSocket();
   const route = useHashRouter();
   const config = useConfig();
@@ -57,6 +57,7 @@ export function App() {
       />
       <UpdateBanner
         version={updateAvailable}
+        source={updateSource}
         applying={updateApplying}
       />
       <main style={{

@@ -27,6 +27,7 @@ export function registerStatusRoutes(app: FastifyInstance): void {
         return s ? { sessionId: s.id, elementName: s.element_name, readings: getSessionReadingCount(s.id) } : null;
       })(),
       updateAvailable: updater.updateAvailable !== null,
+      updateSource: updater.updateSource,
     });
   });
 }

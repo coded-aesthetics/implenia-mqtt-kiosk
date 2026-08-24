@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
+import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import path from 'node:path';
 import { config } from './config.js';
@@ -21,6 +22,7 @@ const app = Fastify({
 async function start(): Promise<void> {
   // Register plugins
   await app.register(fastifyWebsocket);
+  await app.register(fastifyMultipart, { limits: { fileSize: 200 * 1024 * 1024 } });
 
   // Serve the built UI in production
   const uiDistPath = path.join(process.cwd(), 'ui', 'dist');

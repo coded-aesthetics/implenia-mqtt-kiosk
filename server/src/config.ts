@@ -29,6 +29,9 @@ const envSchema = z.object({
   CONNECTIVITY_PROBE_HOST: z.string().default('8.8.8.8'),
   CONNECTIVITY_POLL_INTERVAL_MS: z.coerce.number().positive().default(30_000),
 
+  // USB update: comma-separated directories to scan for update bundles
+  USB_UPDATE_PATHS: z.string().default('/media'),
+
   // Optional GitHub token for private repos
   GITHUB_TOKEN: z.string().optional(),
 });

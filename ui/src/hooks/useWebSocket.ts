@@ -22,12 +22,15 @@ export interface UploadProgress {
   currentSensor: string | null;
 }
 
+export type UpdateSource = 'github' | 'usb';
+
 interface WebSocketState {
   readings: Map<string, SensorReading>;
   connectivity: 'online' | 'offline' | 'unknown';
   recordingState: RecordingState;
   uploadProgress: UploadProgress | null;
   updateAvailable: string | null;
+  updateSource: UpdateSource | null;
   updateApplying: boolean;
 }
 
@@ -46,6 +49,7 @@ export function useWebSocket() {
     recordingState: INITIAL_RECORDING,
     uploadProgress: null,
     updateAvailable: null,
+    updateSource: null,
     updateApplying: false,
   });
 
@@ -129,6 +133,7 @@ export function useWebSocket() {
             setState((prev) => ({
               ...prev,
               updateAvailable: msg.version,
+              updateSource: msg.source ?? null,
             }));
             break;
 
