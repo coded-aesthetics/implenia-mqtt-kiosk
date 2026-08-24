@@ -26,6 +26,11 @@ export function registerDataRoutes(app: FastifyInstance): void {
     for await (const chunk of file.file) {
       chunks.push(chunk);
     }
+
+    if (file.file.truncated) {
+      return reply.status(413).send({ error: 'Datei zu groß (max. 200 MB)' });
+    }
+
     const buffer = Buffer.concat(chunks);
 
     const result = await updater.applyUploadedTar(buffer, file.filename);

@@ -104,7 +104,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: 'none',
     borderRadius: 'var(--radius-md)',
     cursor: 'pointer',
-    minHeight: '56px',
+    minHeight: 'var(--tap-min)',
     minWidth: 'var(--tap-min)',
     backgroundColor: 'var(--color-accent)',
     color: 'var(--text-primary)',
