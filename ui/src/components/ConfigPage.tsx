@@ -133,7 +133,11 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
           config.refetch();
           setKeyOverlay({ type: 'success', title: 'API-Schlüssel gespeichert' });
         } else {
-          await fetch('/api/config/api-key', { method: 'DELETE' });
+          try {
+            await fetch('/api/config/api-key', { method: 'DELETE' });
+          } catch {
+            // If delete fails, key stays stored — refetch will show it, user can retry
+          }
           setValidation({ status: 'idle' });
           config.refetch();
           const detail = deriveKeyErrorDetail(result.error);

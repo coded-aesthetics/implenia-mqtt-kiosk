@@ -207,7 +207,9 @@ export function ElementDetail({ elementName, readings, vorgaben }: Props) {
     const depthReading = liveEntries.find((r) => {
       const sensorName = r.topic.split('/').pop() || '';
       const def = herstellenLookup.get(sensorName);
-      return def?.meta?.role === 'depth';
+      if (def?.meta?.role === 'depth') return true;
+      const lower = sensorName.toLowerCase();
+      return lower === 'bohrtiefe' || lower === 'tiefe';
     });
     if (!depthReading) return null;
     const n = parseFloat(depthReading.payload);
