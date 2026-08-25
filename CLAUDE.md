@@ -23,14 +23,17 @@ This software must never block construction progress. That is the single most im
 This runs on construction sites, not office desks. Every UI decision should reflect that.
 
 - **Tap targets: minimum 64px x 64px** — Users wear work gloves
-- **Font sizes: 2rem+ for values, 1rem+ for labels** — Readable at arm's length
-- **High contrast** — Light text on dark backgrounds, bold color-coded status (green/red)
+- **Font sizes: 2rem+ for values, 1rem+ for everything else** — No text in the UI below 1rem. This includes labels, meta info, badges, timestamps — everything a user might read. `var(--font-sm)` is for non-essential decorative text only, never for information the user needs
+- **High contrast** — Light text on dark backgrounds, bold color-coded status (green/red). Avoid `--text-dim` for any text the user needs to read. `--text-muted` is the lowest acceptable contrast for secondary information
 - **No fine controls** — No small icons, sliders, or toggles. Everything oversized and obvious
 - **No modals or multi-step flows** — Information is always visible, never hidden behind clicks
+- **Destructive actions: tap-to-confirm** — No confirmation dialogs. First tap puts the element into a visually distinct "pending" state (solid danger-red background, white text, label changes to "Wirklich {verb}?"), second tap executes. Tapping anything else cancels. The entire element is the tap target — no small confirm/cancel buttons
+- **Danger button style** — Default state: `var(--surface-3)` background, `var(--color-danger)` text. Confirmation state: `var(--color-danger)` background, white text. Consistent across all destructive buttons
 - **No scrolling** — All content must fit within the viewport. Scrollbars mean the layout is wrong. Workers glance at a screen, they don't scroll. Design layouts to fill available space (e.g. use flex with `min-height: 0`, `modus="vollbild"` for visualizations) rather than overflowing
 - **Landscape-first** — Industry PCs are typically widescreen. Use CSS Grid for responsive tile layouts
 - **Minimal text** — Use numbers, colors, and icons over paragraphs. Workers glance, they don't read
 - **Language: German** — All UI-facing text must be in German. Code, comments, and documentation stay in English
+- **Locale: `de-DE`** — All date/time formatting must use the `'de-DE'` locale. Use `date-fns` with `{ locale: de }` from `date-fns/locale` for formatting and relative times (e.g. `formatDistanceToNow`, `format`). For simple one-off timestamps, `toLocaleTimeString('de-DE')` is acceptable. Never rely on browser defaults
 - **Error messages: German, actionable, recoverable** — Every error a user can see must be in German, explain what went wrong, and tell them how to fix it. Workers can't call IT — they need to solve problems themselves. Server-side validation errors are shown to users too, so they must also be German and actionable. Example: not "Invalid JSON" but "Ungültiger Schichtauftrag: Die Datei enthält kein gültiges JSON-Objekt. Bitte eine vom Implenia-Portal exportierte Datei verwenden."
 
 ## Development
@@ -40,6 +43,13 @@ npm run dev      # Server (tsx watch) + UI (Vite) concurrently
 npm run build    # Build both server and UI
 npm start        # Production: serves UI from server on PORT
 ```
+
+## Keeping Docs Current
+
+When making changes, keep these files in sync:
+
+- **`README.md`** — Update when adding features, routes, env vars, or changing architecture. This is the entry point for anyone new to the project
+- **`.env.example`** (project root) — Update whenever an environment variable is added, removed, or its default changes. Every env var in `config.ts` must have a corresponding entry
 
 ## Versioning & Releases
 
@@ -73,7 +83,9 @@ DataSource (mqtt.ts | serial)  →  ingestion.ts  →  SQLite (mqtt_buffer + ses
 
 Data intake is abstracted behind a `DataSource` interface (`server/src/data-source.ts`). Each source (MQTT, serial, etc.) emits `SensorReading` events. The `DataIngestion` layer (`server/src/ingestion.ts`) routes readings to the SQLite buffer, WebSocket broadcast, and session recording — source-agnostic. To add a new data source, implement `DataSource` and wire it into `ingestion.ts`.
 
-**Sensor schema**: The sensor definitions live as CSV files in `../implenia-web/app/assets/`. Each machine type (DSV, Ankerbohren, etc.) has a `*-sensors.csv` (vorgaben/specifications) and a `*-sensors-herstellen.csv` (production/live readings). The herstellen CSV defines sensor name, type, unit, source (`mqtt`/`kiosk`/`server`/`user`), role, priority, and MQTT alias. These files are the shared contract between `implenia-web` and this kiosk — any sensor name or format change must be reflected in both projects.
+**Sensor schema**: The sensor definitions originate as CSV files in `../implenia-web/app/assets/`. Each machine type (DSV, Ankerbohren, etc.) has a `*-sensors.csv` (vorgaben/specifications) and a `*-sensors-herstellen.csv` (production/live readings). The herstellen CSV defines sensor name, type, unit, source (`mqtt`/`kiosk`/`server`/`user`), role, priority, and MQTT alias. These files are the shared contract between `implenia-web` and this kiosk.
+
+The herstellen CSVs are **copied into this repo** at `server/assets/sensors/` so the kiosk can serve them locally (offline, no Schichtauftrag needed). The server exposes them via `GET /api/verfahren/:type/sensors` (with optional `?source=mqtt` filter). To sync after changes in `implenia-web`, run `./scripts/sync-sensors.sh`. Use `--check` to verify without copying (suitable for CI). The source of truth is always `implenia-web` — never edit the CSVs in this repo directly.
 
 **Serial protocol**: The Elvis controller (ESP32) sends hex-encoded IEEE 754 floats over USB serial, one frame per line (`\r`-terminated). The parser lives in `server/src/elvis-parser.ts`. Frame format: `# <addr> <15 hex floats> <checksum>\r`. See the parser module for field positions and the test suite for encoding details.
 

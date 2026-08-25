@@ -10,7 +10,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@coded-aesthetics/din4023": "0.0.5",
+    "@coded-aesthetics/din4023": "^0.0.9",
+    "date-fns": "^4.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

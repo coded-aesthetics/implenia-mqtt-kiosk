@@ -33,6 +33,20 @@ export interface BufferRow {
   received_at: number;
 }
 
+export interface DeviceRow {
+  id: number;
+  label: string;
+  port: string | null;
+  baud: number;
+  type: 'elvis' | 'simulator';
+}
+
+export interface MappingRow {
+  device_id: number;
+  value_index: number;
+  sensor_name: string;
+}
+
 // --- Init ---
 
 const DB_PATH = path.join(process.cwd(), 'kiosk.db');
@@ -80,6 +94,21 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS devices (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT    NOT NULL,
+    port  TEXT,
+    baud  INTEGER NOT NULL DEFAULT 9600,
+    type  TEXT    NOT NULL DEFAULT 'elvis'
+  );
+
+  CREATE TABLE IF NOT EXISTS sensor_mappings (
+    device_id   INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    value_index INTEGER NOT NULL CHECK(value_index >= 0 AND value_index < 15),
+    sensor_name TEXT    NOT NULL,
+    PRIMARY KEY (device_id, value_index)
   );
 `);
 
@@ -280,6 +309,75 @@ export function setMeta(key: string, value: string): void {
 
 export function deleteMeta(key: string): void {
   deleteMetaStmt.run(key);
+}
+
+// --- Device functions ---
+
+const getDevicesStmt = db.prepare('SELECT * FROM devices ORDER BY id');
+const getDeviceByIdStmt = db.prepare('SELECT * FROM devices WHERE id = ?');
+const createDeviceStmt = db.prepare(
+  'INSERT INTO devices (label, port, baud, type) VALUES (?, ?, ?, ?)'
+);
+const updateDeviceStmt = db.prepare(
+  'UPDATE devices SET label = ?, port = ?, baud = ? WHERE id = ?'
+);
+const deleteDeviceStmt = db.prepare('DELETE FROM devices WHERE id = ?');
+
+export function getDevices(): DeviceRow[] {
+  return getDevicesStmt.all() as DeviceRow[];
+}
+
+export function getDeviceById(id: number): DeviceRow | null {
+  return (getDeviceByIdStmt.get(id) as DeviceRow) ?? null;
+}
+
+export function createDevice(label: string, port: string | null, baud: number, type: string): number {
+  const result = createDeviceStmt.run(label, port, baud, type);
+  return result.lastInsertRowid as number;
+}
+
+export function updateDevice(id: number, label: string, port: string | null, baud: number): void {
+  updateDeviceStmt.run(label, port, baud, id);
+}
+
+export function deleteDevice(id: number): void {
+  deleteDeviceStmt.run(id);
+}
+
+// --- Sensor mapping functions ---
+
+const getDeviceMappingsStmt = db.prepare(
+  'SELECT * FROM sensor_mappings WHERE device_id = ? ORDER BY value_index'
+);
+const getAllMappingsStmt = db.prepare(
+  'SELECT * FROM sensor_mappings ORDER BY device_id, value_index'
+);
+const deleteDeviceMappingsStmt = db.prepare(
+  'DELETE FROM sensor_mappings WHERE device_id = ?'
+);
+const insertMappingStmt = db.prepare(
+  'INSERT INTO sensor_mappings (device_id, value_index, sensor_name) VALUES (?, ?, ?)'
+);
+
+export function getDeviceMappings(deviceId: number): MappingRow[] {
+  return getDeviceMappingsStmt.all(deviceId) as MappingRow[];
+}
+
+export function getAllMappings(): MappingRow[] {
+  return getAllMappingsStmt.all() as MappingRow[];
+}
+
+export function setDeviceMappings(
+  deviceId: number,
+  mappings: { valueIndex: number; sensorName: string }[],
+): void {
+  const tx = db.transaction(() => {
+    deleteDeviceMappingsStmt.run(deviceId);
+    for (const m of mappings) {
+      insertMappingStmt.run(deviceId, m.valueIndex, m.sensorName);
+    }
+  });
+  tx();
 }
 
 export function close(): void {

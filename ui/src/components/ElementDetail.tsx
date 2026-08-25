@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useVorgabenUnits, useHerstellenUnits, useHerstellenSensors, useVorgabenSensors } from '../hooks/useImplenia';
 import type { SensorDef, VorgabenData } from '../hooks/useImplenia';
 import type { SensorReading } from '../hooks/useWebSocket';
@@ -85,7 +85,12 @@ function buildSchichten(
     if (endDepth !== undefined) prevDepth = endDepth;
   }
 
-  const endTiefe = prevDepth > 0 ? prevDepth : 10;
+  // Prefer Säulenhöhe (pillar height) from vorgaben over last geology depth
+  const pillarEntry = entries.find((e) => e.name === 'Säulenhöhe');
+  const pillarHeight = pillarEntry ? parseFloat(pillarEntry.value) : NaN;
+  const endTiefe = Number.isFinite(pillarHeight) && pillarHeight > 0
+    ? pillarHeight
+    : prevDepth > 0 ? prevDepth : 10;
   return { schichten, endTiefe };
 }
 
@@ -119,6 +124,17 @@ function buildSensorLookup(sensors: SensorDef[]): Map<string, SensorDef> {
 
 export function ElementDetail({ elementName, readings, vorgaben }: Props) {
   const [activeTab, setActiveTab] = useState<ViewTab>('messwerte');
+  const geoRef = useRef<HTMLDivElement>(null);
+  const [geoHeight, setGeoHeight] = useState(0);
+
+  useEffect(() => {
+    if (!geoRef.current) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setGeoHeight(Math.floor(entry.contentRect.height));
+    });
+    ro.observe(geoRef.current);
+    return () => ro.disconnect();
+  }, []);
 
   const vorgabenUnits = useVorgabenUnits(elementName);
   const herstellenUnits = useHerstellenUnits(elementName);
@@ -189,8 +205,11 @@ export function ElementDetail({ elementName, readings, vorgaben }: Props) {
   // Extract current depth from live sensor for the geology indicator
   const currentDepth = (() => {
     const depthReading = liveEntries.find((r) => {
-      const name = r.topic.split('/').pop()?.toLowerCase();
-      return name === 'bohrtiefe' || name === 'tiefe';
+      const sensorName = r.topic.split('/').pop() || '';
+      const def = herstellenLookup.get(sensorName);
+      if (def?.meta?.role === 'depth') return true;
+      const lower = sensorName.toLowerCase();
+      return lower === 'bohrtiefe' || lower === 'tiefe';
     });
     if (!depthReading) return null;
     const n = parseFloat(depthReading.payload);
@@ -206,14 +225,14 @@ export function ElementDetail({ elementName, readings, vorgaben }: Props) {
         {/* Geology profile on the left — shared between both views */}
         {geologyProfile && (
           <div style={styles.geologyColumn}>
-            <h3 style={styles.sectionTitle}>Geologie</h3>
-            <div style={styles.geologyContainer}>
+            <div ref={geoRef} style={styles.geologyContainer}>
               <BohrprofilLog
                 schichten={geologyProfile.schichten}
                 endTiefe={geologyProfile.endTiefe}
+                breite={150}
+                hoehe={geoHeight > 0 ? geoHeight - 8 : 400}
                 modus="vollbild"
                 tiefenIndikator={currentDepth}
-                style={{ marginTop: 8 }}
                 styleOverrides={geologyStyles}
               />
             </div>
@@ -275,9 +294,6 @@ export function ElementDetail({ elementName, readings, vorgaben }: Props) {
                               {displayValue}
                               {unit && <span style={styles.heroUnit}>{unit}</span>}
                             </div>
-                            <div style={styles.timestamp}>
-                              {new Date(reading.receivedAt).toLocaleTimeString()}
-                            </div>
                           </div>
                         );
                       })}
@@ -297,9 +313,6 @@ export function ElementDetail({ elementName, readings, vorgaben }: Props) {
                             <div style={styles.primaryValue}>
                               {displayValue}
                               {unit && <span style={styles.unit}>{unit}</span>}
-                            </div>
-                            <div style={styles.timestamp}>
-                              {new Date(reading.receivedAt).toLocaleTimeString()}
                             </div>
                           </div>
                         );
@@ -440,8 +453,9 @@ const geologyStyles = {
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
-    padding: '1rem 1.5rem',
-    height: '100%',
+    padding: '0.5rem 1.5rem 0',
+    flex: 1,
+    minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
     boxSizing: 'border-box',
@@ -452,21 +466,26 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '1.5rem',
     flex: 1,
     minHeight: 0,
+    overflow: 'hidden',
   },
   geologyColumn: {
     display: 'flex',
     flexDirection: 'column',
-    width: '280px',
     flexShrink: 0,
+    alignSelf: 'stretch',
     minHeight: 0,
+    overflow: 'hidden',
   },
   geologyContainer: {
     flex: 1,
     minHeight: 0,
+    overflow: 'hidden',
+    paddingTop: 8,
   },
   tilesColumn: {
     flex: 1,
     minWidth: 0,
+    minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
@@ -553,14 +572,14 @@ const styles: Record<string, React.CSSProperties> = {
   heroGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-    gap: '0.75rem',
-    marginBottom: '1rem',
+    gap: '0.5rem',
+    marginBottom: '0.5rem',
   },
   heroTile: {
     backgroundColor: '#16213e',
     borderRadius: '12px',
-    padding: '1.25rem 1.5rem',
-    minHeight: '100px',
+    padding: '0.75rem 1.5rem',
+    minHeight: '64px',
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
@@ -609,14 +628,14 @@ const styles: Record<string, React.CSSProperties> = {
   primaryGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-    gap: '0.75rem',
-    marginBottom: '1rem',
+    gap: '0.5rem',
+    marginBottom: '0.5rem',
   },
   primaryTile: {
     backgroundColor: '#16213e',
     borderRadius: '10px',
-    padding: '1rem 1.25rem',
-    minHeight: '80px',
+    padding: '0.6rem 1.25rem',
+    minHeight: '64px',
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
@@ -702,7 +721,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#8899aa',
     textTransform: 'uppercase' as const,
     letterSpacing: '0.05em',
-    marginBottom: '1rem',
+    margin: '0.25rem 0 0.5rem',
   },
   tileLabel: {
     fontSize: '0.85rem',
@@ -727,11 +746,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 400,
     color: '#8899aa',
     marginLeft: '0.25rem',
-  },
-  timestamp: {
-    fontSize: '0.7rem',
-    color: '#556677',
-    marginTop: '0.3rem',
   },
   coordBar: {
     display: 'flex',

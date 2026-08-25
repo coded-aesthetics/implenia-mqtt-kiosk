@@ -77,8 +77,6 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: 'var(--surface-2)',
     borderRadius: 'var(--radius-lg)',
     padding: 'var(--space-lg)',
-    width: '100%',
-    maxWidth: '500px',
   },
   statusRow: {
     display: 'flex',

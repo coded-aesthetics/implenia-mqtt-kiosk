@@ -1,17 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
 function friendlyApiError(status: number, _body: string): string {
+  if (status === 401 || status === 403) {
+    return 'Zugriff verweigert. Bitte API-Schlüssel in den Einstellungen prüfen.';
+  }
   if (status === 502) {
-    return 'Implenia-Server nicht erreichbar. Bitte Netzwerkverbindung prüfen und IMPLENIA_API_URL in der .env-Datei kontrollieren (im Projektverzeichnis).';
+    return 'Implenia-Server nicht erreichbar. Bitte Netzwerkverbindung prüfen und API-URL in den Einstellungen kontrollieren.';
   }
   if (status === 503) {
-    return 'Implenia-API ist nicht konfiguriert. Bitte IMPLENIA_API_URL und IMPLENIA_API_KEY in der .env-Datei im Projektverzeichnis hinterlegen und den Server neu starten.';
+    return 'Implenia-API ist nicht konfiguriert. Bitte API-URL und API-Schlüssel in den Einstellungen hinterlegen.';
+  }
+  if (status >= 400 && status < 500) {
+    return `Anfrage wurde vom Implenia-Server abgelehnt (${status}). Bitte API-Schlüssel und API-URL in den Einstellungen prüfen.`;
   }
   if (status >= 500) {
     return 'Serverfehler bei der Implenia-Schnittstelle. Bitte später erneut versuchen.';
-  }
-  if (status === 401 || status === 403) {
-    return 'Zugriff verweigert. Bitte API-Schlüssel in den Einstellungen prüfen.';
   }
   return `Unerwarteter Fehler (${status})`;
 }

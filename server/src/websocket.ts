@@ -4,10 +4,25 @@ import { ingestion } from './ingestion.js';
 import type { SensorReading } from './data-source.js';
 import { connectivity, type ConnectivityState } from './connectivity.js';
 import { updater, type UpdateSource } from './updater.js';
+import { deviceManager } from './device-manager.js';
+import type { DeviceFrame } from './simulator-source.js';
 import { getRecordingState } from './recording.js';
-import { getSessionReadingCount } from './db.js';
+import { getSessionReadingCount, getDeviceMappings } from './db.js';
 
 const clients = new Set<WebSocket>();
+
+// Cache sensor mappings per device to avoid hitting SQLite on every frame
+type MappingRow = { device_id: number; value_index: number; sensor_name: string };
+const mappingCache = new Map<number, { rows: MappingRow[]; fetchedAt: number }>();
+const MAPPING_CACHE_TTL = 10_000;
+
+function getCachedMappings(deviceId: number): MappingRow[] {
+  const cached = mappingCache.get(deviceId);
+  if (cached && Date.now() - cached.fetchedAt < MAPPING_CACHE_TTL) return cached.rows;
+  const rows = getDeviceMappings(deviceId);
+  mappingCache.set(deviceId, { rows, fetchedAt: Date.now() });
+  return rows;
+}
 
 function broadcast(data: Record<string, unknown>): void {
   const message = JSON.stringify(data);
@@ -104,6 +119,37 @@ export function setupWebSocket(app: FastifyInstance): void {
 
   updater.on('update-applying', () => {
     broadcast({ type: 'update-applying' });
+  });
+
+  deviceManager.on('frame', (frame: DeviceFrame) => {
+    broadcast({
+      type: 'device-frame',
+      deviceId: frame.deviceId,
+      values: frame.values,
+      receivedAt: frame.receivedAt,
+    });
+
+    // Resolve sensor mappings and emit as readings
+    const mappings = getCachedMappings(frame.deviceId);
+    for (const m of mappings) {
+      if (m.value_index < frame.values.length) {
+        const reading: SensorReading = {
+          topic: `device/${frame.deviceId}/${m.sensor_name}`,
+          payload: String(frame.values[m.value_index]),
+          receivedAt: frame.receivedAt,
+        };
+        broadcast({
+          type: 'reading',
+          topic: reading.topic,
+          payload: reading.payload,
+          receivedAt: reading.receivedAt,
+        });
+      }
+    }
+  });
+
+  deviceManager.on('device-status', (status: { deviceId: number; connected: boolean }) => {
+    broadcast({ type: 'device-status', ...status });
   });
 
   // Broadcast recording count every 10 seconds (replaces old queue-stats)

@@ -27,12 +27,13 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
       const data = await fetchImplenia(`/shift-assignment?date=${today}&include_vorgaben=true`);
       return reply.send({ ...(data as Record<string, unknown>), source: 'api' });
     } catch (err) {
-      const status = (err as ApiError).statusCode;
-      if (status === 404) {
+      const upstream = (err as ApiError).statusCode;
+      if (upstream === 404) {
         return reply.status(404).send({ error: 'not_found', date: today });
       }
       log.error('shift-assignment error: %s', (err as Error).message);
-      return reply.status(502).send({ error: (err as Error).message });
+      const forwarded = upstream && upstream >= 400 && upstream < 600 ? upstream : 502;
+      return reply.status(forwarded).send({ error: (err as Error).message });
     }
   });
 

@@ -1,0 +1,60 @@
+Name,Typ,Einheit,Quelle,Rolle,Priorität,Alias,Stream
+Freigabe,Integer,,user,,,,
+Ausführungsdatum,Text,,user,is_completed,,,
+X Säule oben (Ist),Double,,server,,,,
+Y Säule oben (Ist),Double,,server,,,,
+Z Säule oben (Ist),Double,,server,,,,
+X Säule unten (Ist),Double,,server,,,,
+Y Säule unten (Ist),Double,,server,,,,
+Z Säule unten (Ist),Double,,server,,,,
+Azimut,Double,,server,,,,
+Suspensionsmenge Schneiden,Double,l,kiosk,volume_suspension,primary,,result
+Suspensionsmenge Bohren,Double,l,kiosk,volume_suspension,primary,,result
+Suspensionsmenge Vorschneiden,Double,l,kiosk,volume_suspension,primary,,result
+Volumen Vorschnitt,Double,l,kiosk,volume_suspension,primary,,
+Volumen Bohren (Ist),Double,l,kiosk,volume_suspension,primary,,
+Volumen Düsen (Ist),Double,l,kiosk,volume_suspension,primary,,
+Volumen Vorschneiden (Ist),Double,l,kiosk,volume_suspension,primary,,
+Mitteldruck,Double,bar,kiosk,pressure_suspension,primary,,result
+Alpha,Double,°,mqtt,inclination_x,secondary,,ivl
+Beta,Double,°,mqtt,inclination_y,secondary,,ivl
+Tiefe,Double,m,mqtt,depth,hero,,ivl
+Anpressdruck,Double,bar,mqtt,pressure_feed,primary,p_Anpress [bar],hdi
+Drehzahl,Double,1/min,mqtt,rpm,primary,Drehzahl [1/min],hdi
+Bohrtiefe,Double,m,mqtt,,primary,Bohrtiefe [m],hdi
+Ziehgeschwindigkeit,Double,cm/min,mqtt,rate,primary,Ziehgeschw. [cm/min],hdi
+Wasserdruck,Double,bar,mqtt,pressure_water,primary,p_Wasser [bar],hdi
+Wassermenge,Double,l/min,mqtt,flow_water,primary,q_Wasser [l/min],hdi
+Suspensiondruck,Double,bar,mqtt,pressure_suspension,primary,p_Sus [bar],hdi
+Suspensionsmenge,Double,l/min,mqtt,flow_suspension,primary,q_Sus [l/min],hdi
+Bohren/Düsen,Integer,,mqtt,mode,secondary,Bohren/Düsen? [1],hdi
+Düsstrecke (Ist),Double,m,kiosk,,primary,Düsstrecke_ist [m],hdi
+Luftdruck,Double,bar,mqtt,pressure_air,primary,Luftdruck [bar],hdi
+Q-Suspension Bohren,Double,l,kiosk,volume_suspension,primary,Q_Suspension_B [l],hdi
+Q-Suspension Verpressen,Double,l,kiosk,volume_suspension,primary,Q_Suspension_V [1],hdi
+Q-Suspension Düsen,Double,l,kiosk,volume_suspension,primary,Q_Suspension_D [m],hdi
+W/Z-Wert,Double,,mqtt,,secondary,W/Z-Wert [m],hdi
+Luftmenge,Double,Nm³/h,kiosk,flow_air,primary,Luftmenge [Nm³/h],hdi
+Kommentar,Text,,user,,,,
+Düsstrecke (Soll),Double,m,server,,,,
+Mittlere Suspensionsmenge,Double,l/min,server,,,,result
+Mittlerer Luftdruck,Double,bar,server,,,,result
+Mittlere Luftmenge,Double,Nm³/h,server,,,,result
+Mittlere Drehzahl,Double,1/min,server,,,,result
+Mittlere Ziehgeschwindigkeit,Double,cm/min,server,,,,result
+Mittlerer Suspensionsdruck,Double,bar,server,,,,result
+Düsbeginn,Double,,server,,,,result
+Düsende,Double,,server,,,,result
+Bohrbeginn,Double,,server,,,,result
+Bohrende,Double,,server,,,,result
+Bohrtiefe Düsbeginn,Double,m,server,,,,result
+Bohrtiefe Düsende,Double,m,server,,,,result
+Bohrtiefe Bohrbeginn,Double,m,server,,,,result
+Bohrtiefe Bohrende,Double,m,server,,,,result
+Bohrdauer,Text,,server,,,,result
+Düsdauer,Text,,server,,,,result
+Precut-Dauer,Text,,server,,,,result
+Düsstrecke,Double,m,server,,,,result
+Precut-Strecke,Double,m,server,,,,result
+Geologie,Text,,user,geology_text,,,
+GeoDIN,Integer,,server,geology_nr,,,

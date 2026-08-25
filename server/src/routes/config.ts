@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { getMeta, setMeta, deleteMeta } from '../db.js';
-import { getApiConfig } from '../implenia-api.js';
+import { getApiConfig, fetchImplenia } from '../implenia-api.js';
 import { config as envConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 
@@ -54,9 +54,46 @@ export function registerConfigRoutes(app: FastifyInstance): void {
     return reply.send({ ok: true });
   });
 
-  app.delete('/api/config', async (_request, reply) => {
+  app.get('/api/config/validate', async (_request, reply) => {
+    const cfg = getApiConfig();
+    if (!cfg) {
+      return reply.send({ ok: false, error: 'API-Schlüssel oder Server-Adresse nicht konfiguriert' });
+    }
+
+    try {
+      const data = await fetchImplenia<{ name?: string }>('/api/v1/measuring-device/self');
+      log.info('API validation: device check ok: %s', data.name ?? 'unnamed');
+
+      // Verify this device can receive shift assignments (200 or 404 are acceptable)
+      const today = new Date().toISOString().split('T')[0];
+      try {
+        await fetchImplenia(`/shift-assignment?date=${today}`);
+      } catch (shiftErr) {
+        const status = (shiftErr as import('../implenia-api.js').ApiError).statusCode;
+        if (status !== 404) {
+          log.warn('API validation: shift-assignment probe failed for %s: %s', data.name, (shiftErr as Error).message);
+          return reply.send({
+            ok: false,
+            error: 'wrong_device_type',
+            deviceName: data.name ?? null,
+          });
+        }
+      }
+
+      log.info('API validation successful: %s', data.name ?? 'unnamed');
+      return reply.send({ ok: true, deviceName: data.name ?? null });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn('API validation failed: %s', message);
+      if (message.includes('401') || message.includes('403')) {
+        return reply.send({ ok: false, error: 'Ungültiger API-Schlüssel' });
+      }
+      return reply.send({ ok: false, error: `Verbindung fehlgeschlagen: ${message}` });
+    }
+  });
+
+  app.delete('/api/config/api-key', async (_request, reply) => {
     deleteMeta('implenia_api_key');
-    deleteMeta('implenia_api_url');
     log.info('API key removed via config page');
     return reply.send({ ok: true });
   });

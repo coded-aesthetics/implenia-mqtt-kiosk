@@ -47,11 +47,19 @@ function ImportButton({ onImport }: { onImport: Props['onImport'] }) {
 }
 
 function ImportBadge({ onClear }: { onClear: () => Promise<void> }) {
+  const [pending, setPending] = useState(false);
+
   return (
-    <div style={styles.importBadge}>
+    <div style={styles.importBadge} onClick={() => setPending(false)}>
       <span style={styles.importBadgeText}>Importiert aus Datei</span>
-      <button onClick={onClear} style={styles.clearButton}>
-        Zurücksetzen
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          if (pending) { onClear(); setPending(false); } else { setPending(true); }
+        }}
+        style={pending ? styles.clearButtonConfirm : styles.clearButton}
+      >
+        {pending ? 'Wirklich zurücksetzen?' : 'Zurücksetzen'}
       </button>
     </div>
   );
@@ -255,10 +263,12 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: '64px',
     fontSize: 'inherit',
     fontFamily: 'inherit',
+    overflow: 'hidden',
   },
   tileName: {
-    fontSize: '2.5rem',
+    fontSize: '1.8rem',
     fontWeight: 700,
+    wordBreak: 'break-word' as const,
   },
   divider: {
     fontSize: '1rem',
@@ -279,7 +289,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: 'inherit',
   },
   importError: {
-    fontSize: '0.95rem',
+    fontSize: 'var(--font-sm)',
     color: '#f44336',
     maxWidth: '360px',
     textAlign: 'center' as const,
@@ -301,16 +311,30 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
   },
   clearButton: {
-    fontSize: '0.9rem',
-    color: '#cccccc',
-    backgroundColor: 'transparent',
-    border: '1px solid #555555',
+    fontSize: 'var(--font-sm)',
+    color: 'var(--color-danger)',
+    backgroundColor: 'var(--surface-3)',
+    border: 'none',
     borderRadius: '6px',
     padding: '0.4rem 1rem',
     cursor: 'pointer',
     fontFamily: 'inherit',
     minHeight: '40px',
     minWidth: '64px',
+    fontWeight: 600,
+  },
+  clearButtonConfirm: {
+    fontSize: 'var(--font-sm)',
+    color: '#fff',
+    backgroundColor: 'var(--color-danger)',
+    border: '1px solid var(--color-danger)',
+    borderRadius: '6px',
+    padding: '0.4rem 1rem',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    minHeight: '40px',
+    minWidth: '64px',
+    fontWeight: 600,
   },
   importFooter: {
     display: 'flex',

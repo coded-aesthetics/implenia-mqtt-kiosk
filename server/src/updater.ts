@@ -357,6 +357,11 @@ class UpdateManager extends EventEmitter {
   }
 
   start(): void {
+    if (config.NODE_ENV === 'development') {
+      log.info('Update checker disabled in development mode');
+      return;
+    }
+
     setTimeout(() => this.checkForUpdate(), 10_000);
 
     this.timer = setInterval(

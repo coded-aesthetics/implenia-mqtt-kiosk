@@ -1,0 +1,28 @@
+Name,Typ,Einheit,Quelle,Rolle,Priorität,Alias
+Drehzahl,Double,1/min,mqtt,rpm,primary
+Ausführungsdatum,Text,,user,is_completed,
+Bohrtiefe,Double,m,mqtt,depth,hero
+Vorschubgeschw.,Double,cm/min,mqtt,rate,primary
+IDrehmoment,Double,Nm,mqtt,torque,primary
+ADrehmoment,Double,Nm,mqtt,torque,primary
+Druck Hammer, Double,bar,mqtt,pressure_rotation,primary
+Vorschubdruck,Double,bar,mqtt,pressure_feed,primary
+Suspensionsdruck,Double,bar,mqtt,pressure_suspension,hero
+DurchflussB,Double,l/min,mqtt,flow_suspension,primary
+DurchflussV,Double,l/min,mqtt,flow_suspension,primary
+Q_Bohren,Double,l,kiosk,volume_suspension,primary
+Q_verpressen,Double,l,kiosk,volume_suspension,primary
+Status,Integer,,user,mode,hero
+Gear 1,Double,,mqtt,gear,secondary
+Gear 2,Double,,mqtt,gear,secondary
+Geologie,Text,,user,geology_text,
+GeoDIN,Integer,,server,geology_nr,
+Richtung X,Double,°,mqtt,inclination_x,secondary
+Richtung Y,Double,°,mqtt,inclination_y,secondary
+Startpunkt X Ist,Double,,server,,
+Startpunkt Y Ist,Double,,server,,
+Startpunkt Z Ist,Double,,server,,
+Fusspunkt X Ist,Double,,server,,
+Fusspunkt Y Ist,Double,,server,,
+Fusspunkt Z Ist,Double,,server,,
+Kommentar,Text,,user,,

@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import { config } from '../config.js';
 import { connectivity } from '../connectivity.js';
 import { ingestion } from '../ingestion.js';
 import { updater } from '../updater.js';
+import { deviceManager } from '../device-manager.js';
 import { getActiveSession, getSessionReadingCount } from '../db.js';
 
 const startTime = Date.now();
@@ -28,6 +30,8 @@ export function registerStatusRoutes(app: FastifyInstance): void {
       })(),
       updateAvailable: updater.updateAvailable !== null,
       updateSource: updater.updateSource,
+      devMode: config.NODE_ENV === 'development',
+      devices: deviceManager.getStatus(),
     });
   });
 }

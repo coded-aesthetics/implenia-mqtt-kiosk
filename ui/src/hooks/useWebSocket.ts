@@ -24,8 +24,15 @@ export interface UploadProgress {
 
 export type UpdateSource = 'github' | 'usb';
 
+export interface DeviceFrame {
+  deviceId: number;
+  values: number[];
+  receivedAt: number;
+}
+
 interface WebSocketState {
   readings: Map<string, SensorReading>;
+  deviceFrames: Map<number, DeviceFrame>;
   connectivity: 'online' | 'offline' | 'unknown';
   recordingState: RecordingState;
   uploadProgress: UploadProgress | null;
@@ -45,6 +52,7 @@ const INITIAL_RECORDING: RecordingState = {
 export function useWebSocket() {
   const [state, setState] = useState<WebSocketState>({
     readings: new Map(),
+    deviceFrames: new Map(),
     connectivity: 'unknown',
     recordingState: INITIAL_RECORDING,
     uploadProgress: null,
@@ -86,6 +94,18 @@ export function useWebSocket() {
                 receivedAt: msg.receivedAt,
               });
               return { ...prev, readings: next };
+            });
+            break;
+
+          case 'device-frame':
+            setState((prev) => {
+              const next = new Map(prev.deviceFrames);
+              next.set(msg.deviceId, {
+                deviceId: msg.deviceId,
+                values: msg.values,
+                receivedAt: msg.receivedAt,
+              });
+              return { ...prev, deviceFrames: next };
             });
             break;
 

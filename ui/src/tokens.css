@@ -36,8 +36,8 @@
   --font-lg: 2rem;          /* page title, large values */
   --font-md: 1.4rem;        /* secondary values */
   --font-base: 1.1rem;      /* body, buttons, inputs */
-  --font-sm: 0.85rem;       /* labels */
-  --font-xs: 0.75rem;       /* small labels, units */
+  --font-sm: 1rem;           /* labels, meta info — kiosk minimum */
+  --font-xs: 0.75rem;       /* decorative only, never for readable info */
 
   /* ── Spacing ──────────────────────────────────────────────────── */
   --space-xs: 0.25rem;
