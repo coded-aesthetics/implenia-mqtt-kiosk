@@ -21,6 +21,7 @@
     "mqtt": "^5.10.4",
     "pino": "^10.3.1",
     "semver": "^7.7.1",
+    "serialport": "^13.0.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {

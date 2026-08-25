@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useHashRouter } from './hooks/useHashRouter';
 import { useConfig, useShiftAssignment } from './hooks/useImplenia';
@@ -9,21 +10,33 @@ import { ShiftAssignment } from './components/ShiftAssignment';
 import { ElementDetail } from './components/ElementDetail';
 
 export function App() {
-  const { readings, connectivity, recordingState, uploadProgress, updateAvailable, updateSource, updateApplying } =
+  const { readings, deviceFrames, connectivity, recordingState, uploadProgress, updateAvailable, updateSource, updateApplying } =
     useWebSocket();
   const route = useHashRouter();
   const config = useConfig();
   const shift = useShiftAssignment(config.hasApiKey);
   const { importShift, clearImport } = shift;
 
+  const [devMode, setDevMode] = useState(false);
+  useEffect(() => {
+    fetch('/status').then((r) => r.json()).then((d) => setDevMode(!!d.devMode)).catch(() => {});
+  }, []);
+
   let content: React.ReactNode;
   let pageTitle: string | undefined;
 
   switch (route.page) {
-    case 'config':
-      content = <ConfigPage config={config} expandSection={route.query.section} />;
+    case 'config': {
+      content = (
+        <ConfigPage
+          config={config}
+          devMode={devMode}
+          deviceFrames={deviceFrames}
+        />
+      );
       pageTitle = 'Einstellungen';
       break;
+    }
     case 'element': {
       const deviceVorgaben = shift.data?.measuring_devices.find(
         (d) => d.name === route.params.name,
@@ -62,7 +75,7 @@ export function App() {
       />
       <main style={{
         ...styles.main,
-        ...(route.page === 'element' ? { overflow: 'hidden' } : {}),
+        ...(route.page === 'element' ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const } : {}),
       }}>
         {content}
       </main>

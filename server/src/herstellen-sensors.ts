@@ -1,4 +1,5 @@
 import { fetchImplenia } from './implenia-api.js';
+import { getSensorMetaLookup } from './sensor-meta.js';
 
 export interface SensorMeta {
   source?: string;   // "mqtt" | "kiosk" | "user" | "server"
@@ -64,14 +65,24 @@ export async function fetchHerstellenSensors(elementName: string): Promise<Senso
   }
 
   const LIVE_SOURCES = new Set(['mqtt', 'kiosk']);
+  const csvMeta = getSensorMetaLookup();
 
   const result: SensorDefs = {};
   for (const key of SENSOR_KEYS) {
     const all = allDefs[key] ?? [];
     const filtered = all.filter((s) => {
-      if (s.meta != null) {
-        // Meta-aware path: only live-source sensors belong in the herstellen view.
-        return s.meta.source != null && LIVE_SOURCES.has(s.meta.source);
+      // Enrich with CSV metadata where the API doesn't provide it
+      const csv = csvMeta.get(s.name);
+      if (csv) {
+        if (!s.meta) s.meta = {};
+        if (!s.meta.source && csv.source) s.meta.source = csv.source;
+        if (!s.meta.role && csv.role) s.meta.role = csv.role;
+        if (!s.meta.priority && csv.priority) s.meta.priority = csv.priority;
+        if (!s.unit && csv.unit) s.unit = csv.unit;
+      }
+
+      if (s.meta != null && s.meta.source != null) {
+        return LIVE_SOURCES.has(s.meta.source);
       }
       // Legacy fallback: include if not a vorgaben sensor.
       return !vorgabenIds.has(s.id);

@@ -38,7 +38,7 @@ function parsePayload(payload: string): { value: string; unit: string } {
 }
 
 function formatTimestamp(ts: number): string {
-  return new Date(ts).toLocaleTimeString();
+  return new Date(ts).toLocaleTimeString('de-DE');
 }
 
 function SensorTile({ reading }: { reading: SensorReading }) {

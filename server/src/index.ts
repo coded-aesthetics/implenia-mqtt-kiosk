@@ -14,8 +14,11 @@ import { registerStatusRoutes } from './routes/status.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerImpleniaRoutes } from './routes/implenia.js';
 import { registerRecordingRoutes } from './routes/recording.js';
+import { registerDeviceRoutes } from './routes/devices.js';
 import { ensureLogSensor } from './recording.js';
 import { registerLogRoutes } from './routes/logs.js';
+import { registerVerfahrenRoutes } from './routes/verfahren.js';
+import { deviceManager } from './device-manager.js';
 import { close as closeDb } from './db.js';
 
 const log = createLogger('server');
@@ -41,7 +44,9 @@ async function start(): Promise<void> {
   registerConfigRoutes(app);
   registerImpleniaRoutes(app);
   registerRecordingRoutes(app);
+  registerDeviceRoutes(app);
   registerLogRoutes(app);
+  registerVerfahrenRoutes(app);
   setupWebSocket(app);
 
   // SPA fallback: serve index.html for unmatched routes
@@ -52,6 +57,7 @@ async function start(): Promise<void> {
   // Start services
   connectivity.start();
   ingestion.start();
+  deviceManager.start();
   updater.start();
   ensureLogSensor().catch(() => {});
 
@@ -65,6 +71,7 @@ async function shutdown(signal: string): Promise<void> {
   log.info('Received %s, shutting down...', signal);
   updater.stop();
   stopWebSocket();
+  deviceManager.stop();
   ingestion.stop();
   connectivity.stop();
   await app.close();

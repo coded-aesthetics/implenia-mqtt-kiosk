@@ -1,0 +1,17 @@
+Name,Typ,Einheit,Quelle,Rolle,Priorität,Alias
+Tandemzyl. [KN],Double,kN,mqtt,pressure_rotation,primary
+Drehzahl [1/min],Double,1/min,mqtt,rpm,primary
+Bohrtiefe [m],Double,m,mqtt,depth,hero
+Vorschubgeschw.,Double,kN,mqtt,rate,primary
+Drehmoment [1-100Nm],Double,Nm,mqtt,torque,primary
+Spüldruck [bar],Double,bar,mqtt,pressure_suspension,primary
+Durchfluss [l/min],Double,l/min,mqtt,flow_suspension,primary
+Q_Suspension,Double,l,kiosk,volume_suspension,primary
+Gear 1,Double,,mqtt,gear,secondary
+Gear 2,Double,,mqtt,gear,secondary
+Reserve 1,Double,,mqtt,,secondary
+Reserve 2,Double,,mqtt,,secondary
+Reserve 3,Double,,mqtt,,secondary
+Reserve 4,Double,,mqtt,,secondary
+Reserve 5,Text,,mqtt,mode,hero
+Kommentar,Text,,user,,

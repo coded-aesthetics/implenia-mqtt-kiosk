@@ -1,46 +1,150 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { ConfigState } from '../hooks/useImplenia';
+import type { DeviceFrame } from '../hooks/useWebSocket';
 import { UpdateUpload } from './UpdateUpload';
+import { DeviceConfig } from './DeviceConfig';
 
 interface Props {
   config: ConfigState;
-  expandSection?: string;
+  devMode: boolean;
+  deviceFrames: Map<number, DeviceFrame>;
 }
 
-export function ConfigPage({ config, expandSection }: Props) {
+const API_URLS: Record<string, string> = {
+  production: 'https://api.imp-ice-messtechnik.de',
+  development: 'https://implenia-machines-backend-dev.fly.dev',
+};
+
+function resolveUrlPreset(url: string | null | undefined): string {
+  if (!url) return '';
+  for (const [key, value] of Object.entries(API_URLS)) {
+    if (url.replace(/\/+$/, '') === value.replace(/\/+$/, '')) return key;
+  }
+  return 'custom';
+}
+
+interface OverlayState {
+  type: 'success' | 'error';
+  title: string;
+  detail?: string;
+}
+
+function CardOverlay({ overlay, onDismiss }: { overlay: OverlayState; onDismiss: () => void }) {
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
+
+  useEffect(() => {
+    if (overlay.type === 'success') {
+      const id = setTimeout(() => dismissRef.current(), 2500);
+      return () => clearTimeout(id);
+    }
+  }, [overlay.type]);
+
+  const isError = overlay.type === 'error';
+
+  return (
+    <div
+      style={{
+        ...overlayStyles.backdrop,
+        backgroundColor: isError ? 'rgba(183, 28, 28, 0.95)' : 'rgba(27, 94, 32, 0.95)',
+      }}
+      onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+    >
+      <div style={overlayStyles.icon}>{isError ? '✕' : '✓'}</div>
+      <div style={overlayStyles.title}>{overlay.title}</div>
+      {overlay.detail && <div style={overlayStyles.detail}>{overlay.detail}</div>}
+      {isError && <div style={overlayStyles.dismissHint}>Antippen zum Schließen</div>}
+    </div>
+  );
+}
+
+export function ConfigPage({ config, devMode, deviceFrames }: Props) {
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const [keyOverlay, setKeyOverlay] = useState<OverlayState | null>(null);
+  const [pendingDeleteKey, setPendingDeleteKey] = useState(false);
+  const [pendingDeleteDeviceId, setPendingDeleteDeviceId] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // API URL section
-  const [apiUrlOpen, setApiUrlOpen] = useState(expandSection === 'api-url');
+  const [urlPreset, setUrlPreset] = useState('');
   const [apiUrl, setApiUrl] = useState('');
   const [urlSaving, setUrlSaving] = useState(false);
-  const [urlMessage, setUrlMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const [urlOverlay, setUrlOverlay] = useState<OverlayState | null>(null);
+  const [validation, setValidation] = useState<{ status: 'idle' | 'checking' | 'ok' | 'error'; message?: string }>({ status: 'idle' });
+
+  useEffect(() => {
+    const preset = resolveUrlPreset(config.apiUrl);
+    setUrlPreset(preset);
+    if (preset === 'custom') setApiUrl(config.apiUrl ?? '');
+  }, [config.apiUrl]);
+
+  useEffect(() => {
+    if (config.hasApiKey && config.apiUrl) validateApi();
+  }, [config.hasApiKey, config.apiUrl]);
+
+  async function validateApi() {
+    setValidation({ status: 'checking' });
+    try {
+      const res = await fetch('/api/config/validate');
+      const data = await res.json();
+      if (data.ok) {
+        setValidation({ status: 'ok', message: data.deviceName ? `Verbunden als „${data.deviceName}"` : 'Verbindung erfolgreich' });
+      } else {
+        setValidation({ status: 'error', message: data.error });
+      }
+      return data;
+    } catch {
+      setValidation({ status: 'error', message: 'Netzwerkfehler bei der Überprüfung' });
+      return { ok: false, error: 'Netzwerkfehler' };
+    }
+  }
 
   async function handleSave() {
-    if (!apiKey.trim()) return;
+    const key = apiKey.trim();
+    if (!key) return;
+
+    try {
+      const json = atob(key);
+      JSON.parse(json);
+    } catch {
+      setKeyOverlay({
+        type: 'error',
+        title: 'Ungültiges Format',
+        detail: 'Der Schlüssel scheint ungültig formatiert zu sein. Bitte den vollständigen Schlüssel aus dem Implenia-Portal kopieren.',
+      });
+      return;
+    }
+
     setSaving(true);
-    setMessage(null);
+    setKeyOverlay(null);
 
     try {
       const res = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
+        body: JSON.stringify({ apiKey: key }),
       });
 
       if (res.ok) {
         setApiKey('');
-        setMessage({ text: 'API-Schlüssel gespeichert', error: false });
-        config.refetch();
+        const result = await validateApi();
+        if (result.ok) {
+          config.refetch();
+          setKeyOverlay({ type: 'success', title: 'API-Schlüssel gespeichert' });
+        } else {
+          await fetch('/api/config/api-key', { method: 'DELETE' });
+          setValidation({ status: 'idle' });
+          config.refetch();
+          const detail = deriveKeyErrorDetail(result.error);
+          setKeyOverlay({ type: 'error', title: 'API-Schlüssel abgelehnt', detail });
+        }
       } else {
         const data = await res.json();
-        setMessage({ text: data.error || 'Fehler beim Speichern', error: true });
+        setKeyOverlay({ type: 'error', title: 'Fehler beim Speichern', detail: data.error });
       }
     } catch {
-      setMessage({ text: 'Netzwerkfehler', error: true });
+      setKeyOverlay({ type: 'error', title: 'Netzwerkfehler', detail: 'Server nicht erreichbar' });
     } finally {
       setSaving(false);
     }
@@ -48,207 +152,277 @@ export function ConfigPage({ config, expandSection }: Props) {
 
   async function handleDelete() {
     setSaving(true);
-    setMessage(null);
+    setKeyOverlay(null);
 
     try {
-      await fetch('/api/config', { method: 'DELETE' });
-      setMessage({ text: 'API-Schlüssel entfernt', error: false });
+      await fetch('/api/config/api-key', { method: 'DELETE' });
+      setKeyOverlay({ type: 'success', title: 'API-Schlüssel entfernt' });
+      setValidation({ status: 'idle' });
       config.refetch();
     } catch {
-      setMessage({ text: 'Fehler beim Entfernen', error: true });
+      setKeyOverlay({ type: 'error', title: 'Fehler beim Entfernen' });
     } finally {
       setSaving(false);
     }
   }
 
   async function handleUrlSave() {
-    const trimmed = apiUrl.trim();
-    if (!trimmed) return;
+    const url = urlPreset === 'custom' ? apiUrl.trim() : API_URLS[urlPreset];
+    if (!url) return;
     setUrlSaving(true);
-    setUrlMessage(null);
+    setUrlOverlay(null);
 
     try {
       const res = await fetch('/api/config/api-url', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiUrl: trimmed }),
+        body: JSON.stringify({ apiUrl: url }),
       });
 
       if (res.ok) {
         setApiUrl('');
-        setUrlMessage({ text: 'API-URL gespeichert', error: false });
         config.refetch();
+        if (config.hasApiKey) {
+          const result = await validateApi();
+          if (result.ok) {
+            setUrlOverlay({ type: 'success', title: 'Server-Adresse gespeichert' });
+          } else {
+            setUrlOverlay({ type: 'error', title: 'Server-Adresse gespeichert', detail: `Verbindungstest fehlgeschlagen: ${result.error}` });
+          }
+        } else {
+          setUrlOverlay({ type: 'success', title: 'Server-Adresse gespeichert' });
+        }
       } else {
         const data = await res.json();
-        setUrlMessage({ text: data.error || 'Fehler beim Speichern', error: true });
+        setUrlOverlay({ type: 'error', title: 'Fehler beim Speichern', detail: data.error });
       }
     } catch {
-      setUrlMessage({ text: 'Netzwerkfehler', error: true });
+      setUrlOverlay({ type: 'error', title: 'Netzwerkfehler', detail: 'Server nicht erreichbar' });
     } finally {
       setUrlSaving(false);
     }
   }
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} onClick={() => { setPendingDeleteKey(false); setPendingDeleteDeviceId(null); }}>
       {/* API Key card */}
-      <div style={styles.card}>
-        <div style={styles.statusRow}>
-          <span style={styles.label}>API-Schlüssel</span>
-          <span style={{
-            ...styles.statusBadge,
-            backgroundColor: config.hasApiKey ? '#1b5e20' : '#b71c1c',
-          }}>
-            {config.hasApiKey ? 'Konfiguriert' : 'Nicht konfiguriert'}
-          </span>
-        </div>
+      <div style={styles.cardWrapper}>
+        <div style={styles.card}>
+          <div style={styles.statusRow}>
+            <span style={styles.label}>API-Schlüssel</span>
+            <span style={{
+              ...styles.statusBadge,
+              backgroundColor: validation.status === 'error' ? '#b71c1c'
+                : config.hasApiKey ? '#1b5e20' : '#b71c1c',
+            }}>
+              {validation.status === 'checking' ? 'Wird geprüft...'
+                : validation.status === 'error' ? validation.message
+                : config.hasApiKey ? 'Konfiguriert' : 'Nicht konfiguriert'}
+            </span>
+          </div>
 
-        <input
-          ref={inputRef}
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder="API-Token eingeben"
-          style={styles.input}
-          autoComplete="off"
-          onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
-        />
+          <input
+            ref={inputRef}
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="API-Schlüssel eingeben"
+            style={styles.input}
+            autoComplete="off"
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
+          />
 
-        <div style={styles.buttonRow}>
-          <button
-            onClick={handleSave}
-            disabled={saving || !apiKey.trim()}
-            style={{
-              ...styles.button,
-              ...styles.saveButton,
-              opacity: saving || !apiKey.trim() ? 0.5 : 1,
-            }}
-          >
-            Speichern
-          </button>
-
-          {config.hasApiKey && (
+          <div style={styles.buttonRow}>
             <button
-              onClick={handleDelete}
-              disabled={saving}
+              onClick={handleSave}
+              disabled={saving || !apiKey.trim()}
               style={{
                 ...styles.button,
-                ...styles.deleteButton,
-                opacity: saving ? 0.5 : 1,
+                ...styles.saveButton,
+                opacity: saving || !apiKey.trim() ? 0.5 : 1,
               }}
             >
-              Schlüssel entfernen
+              Speichern
             </button>
-          )}
-        </div>
 
-        {message && (
-          <div style={{
-            ...styles.message,
-            color: message.error ? '#f44336' : '#4caf50',
-          }}>
-            {message.text}
+            {config.hasApiKey && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (pendingDeleteKey) { handleDelete(); setPendingDeleteKey(false); } else { setPendingDeleteKey(true); setPendingDeleteDeviceId(null); }
+                }}
+                disabled={saving}
+                style={{
+                  ...styles.button,
+                  ...(pendingDeleteKey ? styles.deleteButtonConfirm : styles.deleteButton),
+                  opacity: saving ? 0.5 : 1,
+                }}
+              >
+                {pendingDeleteKey ? 'Wirklich entfernen?' : 'Schlüssel entfernen'}
+              </button>
+            )}
           </div>
-        )}
+
+        </div>
+        {keyOverlay && <CardOverlay overlay={keyOverlay} onDismiss={() => setKeyOverlay(null)} />}
       </div>
 
       {/* Software Update card */}
       <UpdateUpload />
 
-      {/* API URL expandable card */}
-      <div style={styles.card}>
-        <button
-          onClick={() => setApiUrlOpen(!apiUrlOpen)}
-          style={styles.expandHeader}
-        >
-          <span style={styles.label}>API-URL (Server-Adresse)</span>
-          <span style={styles.expandArrow}>{apiUrlOpen ? '▲' : '▼'}</span>
-        </button>
+      {/* Device config + sensor mapping */}
+      <DeviceConfig
+        devMode={devMode}
+        deviceFrames={deviceFrames}
+        pendingDeleteId={pendingDeleteDeviceId}
+        onPendingDelete={(id) => { setPendingDeleteDeviceId(id); if (id !== null) setPendingDeleteKey(false); }}
+      />
 
-        {/* Status line — always visible */}
-        {config.apiUrl ? (
-          <div style={styles.urlStatus}>
-            <span style={{ ...styles.statusBadge, backgroundColor: '#1b5e20' }}>
-              {config.apiUrlSource === 'env' ? 'Konfiguriert (.env)' : 'Konfiguriert'}
+      {/* API URL card */}
+      <div style={styles.cardWrapper}>
+        <div style={styles.card}>
+          <div style={styles.statusRow}>
+            <span style={styles.label}>Server-Adresse</span>
+            <span style={{
+              ...styles.statusBadge,
+              backgroundColor: config.apiUrl ? '#1b5e20' : '#b71c1c',
+            }}>
+              {config.apiUrl
+                ? (() => {
+                    const preset = resolveUrlPreset(config.apiUrl);
+                    const label = preset === 'production' ? 'Production' : preset === 'development' ? 'Development' : config.apiUrl;
+                    return config.apiUrlSource === 'env' ? `${label} (.env)` : label;
+                  })()
+                : 'Nicht konfiguriert'}
             </span>
-            <span style={styles.urlValue}>{config.apiUrl}</span>
           </div>
-        ) : (
-          <div style={styles.urlStatus}>
-            <span style={{ ...styles.statusBadge, backgroundColor: '#b71c1c' }}>
-              Nicht konfiguriert
-            </span>
+
+          {config.apiUrlSource === 'env' && (
+            <div style={styles.envHint}>
+              Die URL ist über die .env-Datei gesetzt. Ein hier eingegebener Wert hat Vorrang vor der .env-Konfiguration.
+            </div>
+          )}
+
+          <div style={styles.presetRow}>
+            <button
+              style={urlPreset === 'production' ? styles.presetButtonActive : styles.presetButton}
+              onClick={() => setUrlPreset('production')}
+            >
+              Production
+            </button>
+            <button
+              style={urlPreset === 'development' ? styles.presetButtonActive : styles.presetButton}
+              onClick={() => setUrlPreset('development')}
+            >
+              Development
+            </button>
+            {devMode && (
+              <button
+                style={urlPreset === 'custom' ? styles.presetButtonActive : styles.presetButton}
+                onClick={() => setUrlPreset('custom')}
+              >
+                Lokal
+              </button>
+            )}
           </div>
-        )}
 
-        {apiUrlOpen && (
-          <div style={styles.expandBody}>
-            {config.apiUrlSource === 'env' && (
-              <div style={styles.envHint}>
-                Die URL ist über die .env-Datei gesetzt. Ein hier eingegebener Wert hat Vorrang vor der .env-Konfiguration.
-              </div>
-            )}
-
-            {!config.apiUrl && (
-              <div style={styles.envHint}>
-                Tragen Sie die Implenia-API-URL hier ein, oder setzen Sie IMPLENIA_API_URL in der .env-Datei im Projektverzeichnis und starten Sie den Server neu.
-              </div>
-            )}
-
+          {urlPreset === 'custom' && (
             <input
               type="url"
               value={apiUrl}
               onChange={(e) => setApiUrl(e.target.value)}
-              placeholder="https://api.implenia.example.com"
+              placeholder="http://localhost:3000"
               style={styles.input}
               autoComplete="off"
               onKeyDown={(e) => { if (e.key === 'Enter') handleUrlSave(); }}
             />
+          )}
 
-            <div style={styles.buttonRow}>
-              <button
-                onClick={handleUrlSave}
-                disabled={urlSaving || !apiUrl.trim()}
-                style={{
-                  ...styles.button,
-                  ...styles.saveButton,
-                  opacity: urlSaving || !apiUrl.trim() ? 0.5 : 1,
-                }}
-              >
-                Speichern
-              </button>
-            </div>
-
-            {urlMessage && (
-              <div style={{
-                ...styles.message,
-                color: urlMessage.error ? '#f44336' : '#4caf50',
-              }}>
-                {urlMessage.text}
-              </div>
-            )}
+          <div style={styles.buttonRow}>
+            <button
+              onClick={handleUrlSave}
+              disabled={urlSaving || (!urlPreset || (urlPreset === 'custom' && !apiUrl.trim()))}
+              style={{
+                ...styles.button,
+                ...styles.saveButton,
+                opacity: urlSaving || (!urlPreset || (urlPreset === 'custom' && !apiUrl.trim())) ? 0.5 : 1,
+              }}
+            >
+              Speichern
+            </button>
           </div>
-        )}
+        </div>
+        {urlOverlay && <CardOverlay overlay={urlOverlay} onDismiss={() => setUrlOverlay(null)} />}
       </div>
     </div>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  container: {
+function deriveKeyErrorDetail(apiError: string | undefined): string {
+  if (apiError === 'wrong_device_type') {
+    return 'Dieser API-Schlüssel gehört nicht zu einem Messgerät mit Schichtzuordnung.';
+  }
+  if (apiError?.includes('401') || apiError?.includes('403') || apiError?.includes('Ungültig')) {
+    return 'Dieser API-Schlüssel ist evtl. für einen anderen Server. Bitte Server-Adresse prüfen.';
+  }
+  return apiError ?? 'Verbindungstest fehlgeschlagen';
+}
+
+const overlayStyles: Record<string, React.CSSProperties> = {
+  backdrop: {
+    position: 'absolute',
+    inset: 0,
+    borderRadius: 'var(--radius-lg)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 'var(--space-sm)',
+    padding: 'var(--space-lg)',
+    zIndex: 1,
+  },
+  icon: {
+    fontSize: '4rem',
+    fontWeight: 700,
+    color: '#fff',
+    lineHeight: 1,
+  },
+  title: {
+    fontSize: 'var(--font-md)',
+    fontWeight: 700,
+    color: '#fff',
+    textAlign: 'center',
+  },
+  detail: {
+    fontSize: 'var(--font-base)',
+    color: 'rgba(255, 255, 255, 0.9)',
+    textAlign: 'center',
+    lineHeight: 1.4,
+    maxWidth: '90%',
+  },
+  dismissHint: {
+    fontSize: 'var(--font-sm)',
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginTop: 'var(--space-sm)',
+  },
+};
+
+const styles: Record<string, React.CSSProperties> = {
+  container: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(440px, 1fr))',
+    alignItems: 'start',
     gap: 'var(--space-lg)',
     padding: 'var(--space-xl)',
     boxSizing: 'border-box' as const,
+  },
+  cardWrapper: {
+    position: 'relative',
   },
   card: {
     backgroundColor: 'var(--surface-2)',
     borderRadius: 'var(--radius-lg)',
     padding: 'var(--space-lg)',
-    width: '100%',
-    maxWidth: '500px',
   },
   statusRow: {
     display: 'flex',
@@ -302,47 +476,46 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
   },
   deleteButton: {
-    backgroundColor: 'var(--color-danger-muted)',
-    color: 'var(--text-primary)',
+    backgroundColor: 'var(--surface-3)',
+    color: 'var(--color-danger)',
   },
-  message: {
-    marginTop: 'var(--space-md)',
+  deleteButtonConfirm: {
+    backgroundColor: 'var(--color-danger)',
+    color: '#fff',
+  },
+  presetRow: {
+    display: 'flex',
+    gap: '2px',
+    borderRadius: 'var(--radius-md)',
+    overflow: 'hidden',
+    marginBottom: 'var(--space-md)',
+  },
+  presetButton: {
+    flex: 1,
+    padding: 'var(--space-md)',
     fontSize: 'var(--font-base)',
     fontWeight: 600,
-    textAlign: 'center' as const,
-  },
-  expandHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    width: '100%',
-    background: 'none',
+    backgroundColor: 'var(--surface-0)',
+    color: 'var(--text-muted)',
     border: 'none',
     cursor: 'pointer',
-    padding: 0,
-    marginBottom: '0.75rem',
     minHeight: 'var(--tap-sm)',
+    fontFamily: 'inherit',
   },
-  expandArrow: {
+  presetButtonActive: {
+    flex: 1,
+    padding: 'var(--space-md)',
     fontSize: 'var(--font-base)',
-    color: 'var(--text-muted)',
-  },
-  urlStatus: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.75rem',
-    flexWrap: 'wrap' as const,
-  },
-  urlValue: {
-    fontSize: 'var(--font-sm)',
-    color: 'var(--text-muted)',
-    wordBreak: 'break-all' as const,
-  },
-  expandBody: {
-    marginTop: '1.25rem',
+    fontWeight: 600,
+    backgroundColor: 'var(--color-accent)',
+    color: 'var(--text-primary)',
+    border: 'none',
+    cursor: 'pointer',
+    minHeight: 'var(--tap-sm)',
+    fontFamily: 'inherit',
   },
   envHint: {
-    fontSize: '0.95rem',
+    fontSize: 'var(--font-sm)',
     color: 'var(--text-muted)',
     lineHeight: 1.5,
     marginBottom: 'var(--space-md)',
