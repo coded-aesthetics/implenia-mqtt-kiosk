@@ -4,6 +4,7 @@ import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import path from 'node:path';
 import { config } from './config.js';
+import { createLogger } from './logger.js';
 import { connectivity } from './connectivity.js';
 import { ingestion } from './ingestion.js';
 import { setupWebSocket, stopWebSocket } from './websocket.js';
@@ -13,11 +14,12 @@ import { registerStatusRoutes } from './routes/status.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerImpleniaRoutes } from './routes/implenia.js';
 import { registerRecordingRoutes } from './routes/recording.js';
+import { registerLogRoutes } from './routes/logs.js';
 import { close as closeDb } from './db.js';
 
-const app = Fastify({
-  logger: config.NODE_ENV === 'development',
-});
+const log = createLogger('server');
+
+const app = Fastify();
 
 async function start(): Promise<void> {
   // Register plugins
@@ -38,6 +40,7 @@ async function start(): Promise<void> {
   registerConfigRoutes(app);
   registerImpleniaRoutes(app);
   registerRecordingRoutes(app);
+  registerLogRoutes(app);
   setupWebSocket(app);
 
   // SPA fallback: serve index.html for unmatched routes
@@ -52,12 +55,12 @@ async function start(): Promise<void> {
 
   // Start HTTP server
   await app.listen({ port: config.PORT, host: '0.0.0.0' });
-  console.log(`[Server] Listening on http://0.0.0.0:${config.PORT}`);
+  log.info('Listening on http://0.0.0.0:%d', config.PORT);
 }
 
 // Graceful shutdown
 async function shutdown(signal: string): Promise<void> {
-  console.log(`\n[Server] Received ${signal}, shutting down...`);
+  log.info('Received %s, shutting down...', signal);
   updater.stop();
   stopWebSocket();
   ingestion.stop();
@@ -71,6 +74,6 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 start().catch((err) => {
-  console.error('[Server] Fatal error:', err);
+  log.fatal(err, 'Fatal error');
   process.exit(1);
 });

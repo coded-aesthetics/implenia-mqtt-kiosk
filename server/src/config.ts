@@ -34,6 +34,10 @@ const envSchema = z.object({
 
   // Optional GitHub token for private repos
   GITHUB_TOKEN: z.string().optional(),
+
+  // Upload logs as string sensor readings to the Implenia platform
+  LOG_SENSOR_UPLOAD: z.coerce.boolean().default(false),
+  LOG_SENSOR_LEVEL: z.enum(['debug', 'info', 'warn', 'error', 'fatal']).default('warn'),
 });
 
 export type Config = z.infer<typeof envSchema>;
