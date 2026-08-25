@@ -14,6 +14,7 @@ import { registerStatusRoutes } from './routes/status.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerImpleniaRoutes } from './routes/implenia.js';
 import { registerRecordingRoutes } from './routes/recording.js';
+import { ensureLogSensor } from './recording.js';
 import { registerLogRoutes } from './routes/logs.js';
 import { close as closeDb } from './db.js';
 
@@ -52,6 +53,7 @@ async function start(): Promise<void> {
   connectivity.start();
   ingestion.start();
   updater.start();
+  ensureLogSensor().catch(() => {});
 
   // Start HTTP server
   await app.listen({ port: config.PORT, host: '0.0.0.0' });

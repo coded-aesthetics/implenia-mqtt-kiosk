@@ -24,6 +24,19 @@ const log = createLogger('recording');
 const LOG_SENSOR_NAME = 'logs';
 let unsubscribeLog: (() => void) | null = null;
 
+export async function ensureLogSensor(): Promise<void> {
+  if (!config.LOG_SENSOR_UPLOAD) return;
+  try {
+    await fetchImplenia('/api/v1/measuring-device/sensor-string', {
+      method: 'PUT',
+      body: { name: LOG_SENSOR_NAME },
+    });
+    log.info('Log sensor ensured on platform');
+  } catch (err) {
+    log.warn('Could not ensure log sensor: %s', (err as Error).message);
+  }
+}
+
 // --- Types ---
 
 export interface RecordingState {
