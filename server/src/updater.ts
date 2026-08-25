@@ -9,6 +9,9 @@ import { EventEmitter } from 'node:events';
 import semver from 'semver';
 import { config } from './config.js';
 import { connectivity } from './connectivity.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('updater');
 
 export type UpdateSource = 'github' | 'usb';
 
@@ -107,7 +110,7 @@ class UpdateManager extends EventEmitter {
     super();
     const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
     this.currentVersion = pkg.version;
-    console.log(`[Updater] Current version: ${this.currentVersion}`);
+    log.info('Current version: %s', this.currentVersion);
   }
 
   get updateAvailable(): string | null {
@@ -145,7 +148,7 @@ class UpdateManager extends EventEmitter {
       const res = await fetch(url, { headers: this.apiHeaders });
 
       if (!res.ok) {
-        console.error(`[Updater] GitHub API responded ${res.status}`);
+        log.error('GitHub API responded %d', res.status);
         return null;
       }
 
@@ -153,14 +156,14 @@ class UpdateManager extends EventEmitter {
       const remoteVersion = release.tag_name.replace(/^v/, '');
 
       if (semver.gt(remoteVersion, this.currentVersion)) {
-        console.log(`[Updater] New version available on GitHub: ${remoteVersion}`);
+        log.info('New version available on GitHub: %s', remoteVersion);
         this.setUpdate({ version: remoteVersion, source: 'github' });
         return remoteVersion;
       }
 
       return null;
     } catch (err) {
-      console.error('[Updater] GitHub check failed:', (err as Error).message);
+      log.error('GitHub check failed: %s', (err as Error).message);
       return null;
     }
   }
@@ -179,7 +182,7 @@ class UpdateManager extends EventEmitter {
     }
 
     if (best) {
-      console.log(`[Updater] New version available on USB: ${best.version} (${best.tarPath})`);
+      log.info('New version available on USB: %s (%s)', best.version, best.tarPath);
       this.setUpdate(best);
       return best.version;
     }
@@ -220,7 +223,7 @@ class UpdateManager extends EventEmitter {
     }
 
     this.emit('update-applying');
-    console.log(`[Updater] Applying uploaded update v${version} from ${filename}...`);
+    log.info('Applying uploaded update v%s from %s...', version, filename);
 
     try {
       const tmpPath = path.join('/tmp', `upload-update-${version}.tar.gz`);
@@ -228,54 +231,54 @@ class UpdateManager extends EventEmitter {
 
       const appDir = process.cwd();
       execSync(`tar -xzf "${tmpPath}" -C "${appDir}"`, { stdio: 'pipe' });
-      console.log(`[Updater] Upload update ${version} extracted`);
+      log.info('Upload update %s extracted', version);
 
       fs.unlinkSync(tmpPath);
 
-      console.log('[Updater] Restarting via PM2...');
+      log.info('Restarting via PM2...');
       setTimeout(() => {
         process.exit(0);
       }, 1000);
 
       return { ok: true, version };
     } catch (err) {
-      console.error('[Updater] Upload update failed:', (err as Error).message);
+      log.error('Upload update failed: %s', (err as Error).message);
       return { ok: false, error: 'Update konnte nicht entpackt werden. Datei möglicherweise beschädigt.' };
     }
   }
 
   private async applyFromUsb(version: string, tarPath: string, checksumPath?: string): Promise<void> {
     this.emit('update-applying');
-    console.log(`[Updater] Applying USB update v${version} from ${tarPath}...`);
+    log.info('Applying USB update v%s from %s...', version, tarPath);
 
     try {
       if (!fs.existsSync(tarPath)) {
-        console.error(`[Updater] USB update file not found: ${tarPath} — was the drive removed?`);
+        log.error('USB update file not found: %s — was the drive removed?', tarPath);
         return;
       }
 
       if (checksumPath) {
-        console.log('[Updater] Verifying checksum...');
+        log.info('Verifying checksum...');
         if (!verifyChecksum(tarPath, checksumPath)) {
-          console.error('[Updater] Checksum mismatch — update file may be corrupted');
+          log.error('Checksum mismatch — update file may be corrupted');
           return;
         }
-        console.log('[Updater] Checksum verified');
+        log.info('Checksum verified');
       } else {
-        console.log('[Updater] No checksum file found — skipping verification');
+        log.info('No checksum file found — skipping verification');
       }
 
       const appDir = process.cwd();
-      console.log(`[Updater] Extracting to ${appDir}...`);
+      log.info('Extracting to %s...', appDir);
       execSync(`tar -xzf "${tarPath}" -C "${appDir}"`, { stdio: 'pipe' });
-      console.log(`[Updater] Update ${version} extracted`);
+      log.info('Update %s extracted', version);
 
-      console.log('[Updater] Restarting via PM2...');
+      log.info('Restarting via PM2...');
       setTimeout(() => {
         process.exit(0);
       }, 1000);
     } catch (err) {
-      console.error('[Updater] USB update failed:', (err as Error).message);
+      log.error('USB update failed: %s', (err as Error).message);
     }
   }
 
@@ -283,7 +286,7 @@ class UpdateManager extends EventEmitter {
     if (!connectivity.isOnline()) return;
 
     this.emit('update-applying');
-    console.log(`[Updater] Starting download for v${version}...`);
+    log.info('Starting download for v%s...', version);
 
     try {
       const url = `https://api.github.com/repos/${config.GITHUB_OWNER}/${config.GITHUB_REPO}/releases/latest`;
@@ -294,21 +297,21 @@ class UpdateManager extends EventEmitter {
       const checksumAsset = release.assets.find((a) => a.name === 'checksum.sha256');
 
       if (!tarAsset) {
-        console.error('[Updater] No .tar.gz asset found in release');
+        log.error('No .tar.gz asset found in release');
         return;
       }
 
       const tmpDir = '/tmp';
       const tarPath = path.join(tmpDir, `app-update-${version}.tar.gz`);
 
-      console.log(`[Updater] Downloading ${tarAsset.browser_download_url}...`);
+      log.info('Downloading %s...', tarAsset.browser_download_url);
       const downloadRes = await fetch(tarAsset.browser_download_url, {
         redirect: 'follow',
         headers: { 'User-Agent': 'implenia-kiosk-updater' },
       });
 
       if (!downloadRes.ok || !downloadRes.body) {
-        console.error(`[Updater] Download failed: ${downloadRes.status} ${downloadRes.statusText}`);
+        log.error('Download failed: %d %s', downloadRes.status, downloadRes.statusText);
         return;
       }
 
@@ -316,10 +319,10 @@ class UpdateManager extends EventEmitter {
       await pipeline(nodeStream, createWriteStream(tarPath));
 
       const fileSize = fs.statSync(tarPath).size;
-      console.log(`[Updater] Downloaded ${tarAsset.name} (${fileSize} bytes)`);
+      log.info('Downloaded %s (%d bytes)', tarAsset.name, fileSize);
 
       if (checksumAsset) {
-        console.log('[Updater] Verifying checksum...');
+        log.info('Verifying checksum...');
         const checksumRes = await fetch(checksumAsset.browser_download_url, {
           redirect: 'follow',
           headers: { 'User-Agent': 'implenia-kiosk-updater' },
@@ -330,26 +333,26 @@ class UpdateManager extends EventEmitter {
         const actualChecksum = createHash('sha256').update(fileBuffer).digest('hex');
 
         if (actualChecksum !== expectedChecksum) {
-          console.error(`[Updater] Checksum mismatch! Expected ${expectedChecksum}, got ${actualChecksum}`);
+          log.error('Checksum mismatch! Expected %s, got %s', expectedChecksum, actualChecksum);
           fs.unlinkSync(tarPath);
           return;
         }
-        console.log('[Updater] Checksum verified');
+        log.info('Checksum verified');
       }
 
       const appDir = process.cwd();
-      console.log(`[Updater] Extracting to ${appDir}...`);
+      log.info('Extracting to %s...', appDir);
       execSync(`tar -xzf ${tarPath} -C ${appDir}`, { stdio: 'pipe' });
-      console.log(`[Updater] Update ${version} extracted`);
+      log.info('Update %s extracted', version);
 
       fs.unlinkSync(tarPath);
 
-      console.log('[Updater] Restarting via PM2...');
+      log.info('Restarting via PM2...');
       setTimeout(() => {
         process.exit(0);
       }, 1000);
     } catch (err) {
-      console.error('[Updater] Update failed:', (err as Error).message);
+      log.error('Update failed: %s', (err as Error).message);
     }
   }
 
@@ -360,7 +363,7 @@ class UpdateManager extends EventEmitter {
       () => this.checkForUpdate(),
       config.UPDATE_CHECK_INTERVAL_MS
     );
-    console.log('[Updater] Update checker started');
+    log.info('Update checker started');
   }
 
   stop(): void {

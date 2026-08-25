@@ -3,6 +3,9 @@ import { fetchImplenia, getApiConfig, type ApiError } from '../implenia-api.js';
 import { fetchHerstellenSensors } from '../herstellen-sensors.js';
 import { getMeta, setMeta, deleteMeta } from '../db.js';
 import { validateShiftImport, resolveShiftAssignment } from '../shift-import.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('implenia');
 
 const IMPORT_KEY = 'imported_shift_assignment';
 
@@ -28,7 +31,7 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
       if (status === 404) {
         return reply.status(404).send({ error: 'not_found', date: today });
       }
-      console.error('[Implenia] shift-assignment error:', (err as Error).message);
+      log.error('shift-assignment error: %s', (err as Error).message);
       return reply.status(502).send({ error: (err as Error).message });
     }
   });
@@ -63,7 +66,7 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
       );
       return reply.send(data);
     } catch (err) {
-      console.error(`[Implenia] vorgaben sensors for ${elementName} error:`, (err as Error).message);
+      log.error('vorgaben sensors for %s error: %s', elementName, (err as Error).message);
       return reply.status(502).send({ error: (err as Error).message });
     }
   });
@@ -80,7 +83,7 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
       const data = await fetchHerstellenSensors(elementName);
       return reply.send(data);
     } catch (err) {
-      console.error(`[Implenia] sensors for ${elementName} error:`, (err as Error).message);
+      log.error('sensors for %s error: %s', elementName, (err as Error).message);
       return reply.status(502).send({ error: (err as Error).message });
     }
   });

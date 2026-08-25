@@ -1,6 +1,9 @@
 import mqtt from 'mqtt';
 import { DataSource } from './data-source.js';
 import { config } from './config.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('mqtt');
 
 class MqttSource extends DataSource {
   private client: mqtt.MqttClient | null = null;
@@ -24,14 +27,14 @@ class MqttSource extends DataSource {
 
     this.client.on('connect', () => {
       this._connected = true;
-      console.log(`[MQTT] Connected to ${config.MQTT_BROKER_URL}`);
+      log.info('Connected to %s', config.MQTT_BROKER_URL);
 
       for (const topic of topics) {
         this.client!.subscribe(topic, (err) => {
           if (err) {
-            console.error(`[MQTT] Subscribe error for ${topic}:`, err.message);
+            log.error('Subscribe error for %s: %s', topic, err.message);
           } else {
-            console.log(`[MQTT] Subscribed to ${topic}`);
+            log.info('Subscribed to %s', topic);
           }
         });
       }
@@ -47,15 +50,15 @@ class MqttSource extends DataSource {
 
     this.client.on('close', () => {
       this._connected = false;
-      console.log('[MQTT] Disconnected');
+      log.info('Disconnected');
     });
 
     this.client.on('error', (err) => {
-      console.error('[MQTT] Error:', err.message);
+      log.error('Error: %s', err.message);
     });
 
     this.client.on('reconnect', () => {
-      console.log('[MQTT] Reconnecting...');
+      log.info('Reconnecting...');
     });
   }
 

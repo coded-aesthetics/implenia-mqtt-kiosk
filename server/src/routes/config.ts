@@ -2,6 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { getMeta, setMeta, deleteMeta } from '../db.js';
 import { getApiConfig } from '../implenia-api.js';
 import { config as envConfig } from '../config.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('config');
 
 export function registerConfigRoutes(app: FastifyInstance): void {
   app.get('/api/config', async (_request, reply) => {
@@ -29,7 +32,7 @@ export function registerConfigRoutes(app: FastifyInstance): void {
       setMeta('implenia_api_url', apiUrl.trim());
     }
 
-    console.log('[Config] API key updated via config page');
+    log.info('API key updated via config page');
     return reply.send({ ok: true });
   });
 
@@ -47,14 +50,14 @@ export function registerConfigRoutes(app: FastifyInstance): void {
     }
 
     setMeta('implenia_api_url', apiUrl.trim());
-    console.log('[Config] API URL updated via config page');
+    log.info('API URL updated via config page');
     return reply.send({ ok: true });
   });
 
   app.delete('/api/config', async (_request, reply) => {
     deleteMeta('implenia_api_key');
     deleteMeta('implenia_api_url');
-    console.log('[Config] API key removed via config page');
+    log.info('API key removed via config page');
     return reply.send({ ok: true });
   });
 }

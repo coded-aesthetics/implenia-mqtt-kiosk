@@ -1,6 +1,8 @@
 import { fetchImplenia } from './implenia-api.js';
 import { fetchHerstellenSensors, type SensorDefs } from './herstellen-sensors.js';
 import { ingestion, type SensorMapEntry } from './ingestion.js';
+import { createLogger, onLogEntry, type LogEntry } from './logger.js';
+import { config } from './config.js';
 import {
   createSession,
   endSession,
@@ -9,12 +11,31 @@ import {
   getSessionById,
   getSessionUploadGroups,
   getSessionReadingCount,
+  insertSessionReading,
   markSessionReadingsUploaded,
   markSessionReadingsFailed,
   resetFailedReadings,
   updateSessionStatus,
   type Session,
 } from './db.js';
+
+const log = createLogger('recording');
+
+const LOG_SENSOR_NAME = 'logs';
+let unsubscribeLog: (() => void) | null = null;
+
+export async function ensureLogSensor(): Promise<void> {
+  if (!config.LOG_SENSOR_UPLOAD) return;
+  try {
+    await fetchImplenia('/api/v1/measuring-device/sensor-string', {
+      method: 'PUT',
+      body: { name: LOG_SENSOR_NAME },
+    });
+    log.info('Log sensor ensured on platform');
+  } catch (err) {
+    log.warn('Could not ensure log sensor: %s', (err as Error).message);
+  }
+}
 
 // --- Types ---
 
@@ -71,7 +92,28 @@ export async function beginRecording(elementName: string): Promise<{ sessionId: 
   const sessionId = createSession(elementName, JSON.stringify(sensorMapJson));
   ingestion.startRecording(sessionId, sensorMap);
 
-  console.log(`[Recording] Started session ${sessionId} for "${elementName}" with ${sensorMap.size} sensors`);
+  if (config.LOG_SENSOR_UPLOAD) {
+    const logMapping = sensorMap.get(LOG_SENSOR_NAME);
+    if (logMapping) {
+      unsubscribeLog = onLogEntry(config.LOG_SENSOR_LEVEL, (entry: LogEntry) => {
+        queueMicrotask(() => {
+          try {
+            insertSessionReading(
+              sessionId,
+              LOG_SENSOR_NAME,
+              logMapping.sensorId,
+              logMapping.sensorType,
+              null,
+              JSON.stringify({ l: entry.level, m: entry.module, msg: entry.msg }),
+            );
+          } catch {}
+        });
+      });
+      log.info('Log sensor upload enabled for session %d', sessionId);
+    }
+  }
+
+  log.info('Started session %d for "%s" with %d sensors', sessionId, elementName, sensorMap.size);
   return { sessionId };
 }
 
@@ -82,9 +124,13 @@ export function endRecording(): { sessionId: number } {
   }
 
   ingestion.stopRecording();
+  if (unsubscribeLog) {
+    unsubscribeLog();
+    unsubscribeLog = null;
+  }
   endSession(session.id);
 
-  console.log(`[Recording] Ended session ${session.id}`);
+  log.info('Ended session %d', session.id);
   return { sessionId: session.id };
 }
 
@@ -136,7 +182,7 @@ export async function uploadSession(
     } catch (err) {
       markSessionReadingsFailed(ids);
       sensorsFailed++;
-      console.error(`[Recording] Upload failed for sensor ${group.sensorId}:`, (err as Error).message);
+      log.error('Upload failed for sensor %s: %s', group.sensorId, (err as Error).message);
     }
   }
 
@@ -152,7 +198,7 @@ export async function uploadSession(
     currentSensor: null,
   });
 
-  console.log(`[Recording] Upload complete for session ${sessionId}: ${sensorsCompleted} ok, ${sensorsFailed} failed`);
+  log.info('Upload complete for session %d: %d ok, %d failed', sessionId, sensorsCompleted, sensorsFailed);
   return { status: finalStatus };
 }
 

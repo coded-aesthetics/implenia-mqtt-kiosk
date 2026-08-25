@@ -113,9 +113,29 @@ This software auto-updates on machines where a broken deploy costs real time and
 
 **Pre-update health check** (server-side): Before the auto-updater commits to a new version, the new server must boot and respond to `/health` with a passing status (DB accessible, config loadable, static assets present). If the health check fails, the updater keeps the previous version. No browser involved — this runs on the kiosk itself.
 
+## Logging
+
+All server-side logging uses **pino** via the `logger.ts` module. Never use `console.log`/`console.error` in server code — the only exception is `config.ts` for startup validation failures (which fire before the logger and exit immediately).
+
+**Usage**: Import `createLogger` and create a module-scoped child logger:
+```ts
+import { createLogger } from './logger.js';
+const log = createLogger('mymodule');
+log.info('Something happened: %s', detail);
+log.error('Failed: %s', err.message);
+```
+
+**Format**: JSON in production (captured by PM2 to `~/.pm2/logs/`), pretty-printed in development via `pino-pretty`. Each log entry includes a `module` field for filtering.
+
+**Remote access**: `GET /api/logs` returns the last N log entries from an in-memory ring buffer (1000 entries max). Query params: `limit` (number), `level` (pino level name, e.g. `error`), `module` (e.g. `updater`). This endpoint is for service personnel diagnosing issues without physical access to the kiosk.
+
+**Log levels**: Use `info` for operational milestones (connected, session started, update applied), `error` for failures that need attention, `warn` for degraded states, `debug` for development diagnostics. Don't log at `info` level in tight loops (per-reading, per-frame) — those go to `debug` at most.
+
+**Log sensor upload**: When `LOG_SENSOR_UPLOAD=true` and the platform has a string sensor named `logs` for the device, log entries at or above `LOG_SENSOR_LEVEL` (default `warn`) are automatically recorded as session readings and uploaded with the session data. Format: `{"l":"error","m":"updater","msg":"..."}`. Disabled by default to avoid unnecessary mobile data usage — enable per-kiosk for pilot deployments. This convention is shared with ESP32 devices for a unified log format across the device ecosystem. The `logs` sensor is auto-created at startup via `PUT /api/v1/measuring-device/sensor-string`.
+
 ## Stack
 
-- **Server**: Fastify, mqtt.js, better-sqlite3, TypeScript
+- **Server**: Fastify, pino, mqtt.js, better-sqlite3, TypeScript
 - **UI**: React, Vite, vite-plugin-pwa
 - **Process manager**: PM2
 - **Updates**: GitHub Releases

@@ -1,5 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { updater } from '../updater.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('data-routes');
 
 export function registerDataRoutes(app: FastifyInstance): void {
   app.post('/api/update', async (_request, reply) => {
@@ -7,7 +10,7 @@ export function registerDataRoutes(app: FastifyInstance): void {
       return reply.status(404).send({ error: 'No update available' });
     }
     updater.downloadAndApply().catch((err) => {
-      console.error('[Updater] downloadAndApply error:', err);
+      log.error(err, 'downloadAndApply error');
     });
     return reply.send({ status: 'applying', version: updater.updateAvailable });
   });
