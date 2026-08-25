@@ -131,7 +131,7 @@ log.error('Failed: %s', err.message);
 
 **Log levels**: Use `info` for operational milestones (connected, session started, update applied), `error` for failures that need attention, `warn` for degraded states, `debug` for development diagnostics. Don't log at `info` level in tight loops (per-reading, per-frame) — those go to `debug` at most.
 
-**Log sensor upload**: When `LOG_SENSOR_UPLOAD=true` and the platform has a string sensor named `logs` for the device, log entries at or above `LOG_SENSOR_LEVEL` (default `warn`) are automatically recorded as session readings and uploaded with the session data. Format: `{"l":"error","m":"updater","msg":"..."}`. Disabled by default to avoid unnecessary mobile data usage — enable per-kiosk for pilot deployments. This convention is shared with ESP32 devices for a unified log format across the device ecosystem. The `logs` sensor is auto-created at startup via `PUT /api/v1/measuring-device/sensor-string` (requires coded-aesthetics/implenia-machine-backend#81).
+**Log sensor upload**: When `LOG_SENSOR_UPLOAD=true` and the platform has a string sensor named `logs` for the device, log entries at or above `LOG_SENSOR_LEVEL` (default `warn`) are automatically recorded as session readings and uploaded with the session data. Format: `{"l":"error","m":"updater","msg":"..."}`. Disabled by default to avoid unnecessary mobile data usage — enable per-kiosk for pilot deployments. This convention is shared with ESP32 devices for a unified log format across the device ecosystem.
 
 ## Stack
 

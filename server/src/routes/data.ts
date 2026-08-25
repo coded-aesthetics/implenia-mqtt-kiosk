@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { updater } from '../updater.js';
 import { createLogger } from '../logger.js';
 
-const log = createLogger('updater');
+const log = createLogger('data-routes');
 
 export function registerDataRoutes(app: FastifyInstance): void {
   app.post('/api/update', async (_request, reply) => {

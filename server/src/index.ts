@@ -1,10 +1,10 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyBaseLogger } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import path from 'node:path';
 import { config } from './config.js';
-import { createLogger } from './logger.js';
+import { createLogger, logger } from './logger.js';
 import { connectivity } from './connectivity.js';
 import { ingestion } from './ingestion.js';
 import { setupWebSocket, stopWebSocket } from './websocket.js';
@@ -19,7 +19,7 @@ import { close as closeDb } from './db.js';
 
 const log = createLogger('server');
 
-const app = Fastify();
+const app = Fastify({ loggerInstance: logger as FastifyBaseLogger });
 
 async function start(): Promise<void> {
   // Register plugins

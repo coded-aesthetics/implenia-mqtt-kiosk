@@ -22,7 +22,9 @@ const ringBufferStream = new Writable({
       const entry: LogEntry = JSON.parse(chunk.toString().trim());
       entries.push(entry);
       if (entries.length > MAX_LOG_ENTRIES) entries.shift();
-      for (const fn of subscribers) fn(entry);
+      for (const fn of subscribers) {
+        try { fn(entry); } catch {}
+      }
     } catch {}
     callback();
   },
@@ -32,6 +34,7 @@ const isDev = process.env.NODE_ENV === 'development';
 
 function buildLogger(): pino.Logger {
   const opts: pino.LoggerOptions = {
+    level: isDev ? 'debug' : 'info',
     formatters: {
       level(label) {
         return { level: label };
@@ -39,21 +42,17 @@ function buildLogger(): pino.Logger {
     },
   };
 
+  const streams: pino.StreamEntry[] = [
+    { stream: ringBufferStream },
+  ];
+
   if (isDev) {
-    return pino({
-      ...opts,
-      level: 'debug',
-      transport: { target: 'pino-pretty', options: { colorize: true } },
-    });
+    streams.push({ stream: pino.transport({ target: 'pino-pretty', options: { colorize: true } }) });
+  } else {
+    streams.push({ stream: process.stdout });
   }
 
-  return pino(
-    { ...opts, level: 'info' },
-    pino.multistream([
-      { stream: process.stdout },
-      { stream: ringBufferStream },
-    ]),
-  );
+  return pino(opts, pino.multistream(streams));
 }
 
 export const logger = buildLogger();
@@ -96,6 +95,6 @@ export function getLogEntries(options?: {
     result = result.filter((e) => e.module === options.module);
   }
 
-  const limit = options?.limit ?? 100;
+  const limit = Math.max(1, options?.limit ?? 100);
   return result.slice(-limit);
 }

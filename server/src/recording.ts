@@ -3,11 +3,6 @@ import { fetchHerstellenSensors, type SensorDefs } from './herstellen-sensors.js
 import { ingestion, type SensorMapEntry } from './ingestion.js';
 import { createLogger, onLogEntry, type LogEntry } from './logger.js';
 import { config } from './config.js';
-
-const log = createLogger('recording');
-
-const LOG_SENSOR_NAME = 'logs';
-let unsubscribeLog: (() => void) | null = null;
 import {
   createSession,
   endSession,
@@ -23,6 +18,11 @@ import {
   updateSessionStatus,
   type Session,
 } from './db.js';
+
+const log = createLogger('recording');
+
+const LOG_SENSOR_NAME = 'logs';
+let unsubscribeLog: (() => void) | null = null;
 
 // --- Types ---
 
@@ -83,14 +83,18 @@ export async function beginRecording(elementName: string): Promise<{ sessionId: 
     const logMapping = sensorMap.get(LOG_SENSOR_NAME);
     if (logMapping) {
       unsubscribeLog = onLogEntry(config.LOG_SENSOR_LEVEL, (entry: LogEntry) => {
-        insertSessionReading(
-          sessionId,
-          LOG_SENSOR_NAME,
-          logMapping.sensorId,
-          logMapping.sensorType,
-          null,
-          JSON.stringify({ l: entry.level, m: entry.module, msg: entry.msg }),
-        );
+        queueMicrotask(() => {
+          try {
+            insertSessionReading(
+              sessionId,
+              LOG_SENSOR_NAME,
+              logMapping.sensorId,
+              logMapping.sensorType,
+              null,
+              JSON.stringify({ l: entry.level, m: entry.module, msg: entry.msg }),
+            );
+          } catch {}
+        });
       });
       log.info('Log sensor upload enabled for session %d', sessionId);
     }
