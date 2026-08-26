@@ -97,7 +97,7 @@ export class SerialSource extends EventEmitter {
       log.error('Device %d: port error: %s', this.deviceId, err.message);
       this._connected = false;
       this.emit('disconnected');
-      if (this.port.isOpen) {
+      if (this.port?.isOpen) {
         this.port.close();
       }
       this.scheduleReconnect();
