@@ -7,6 +7,7 @@ interface Props {
 }
 
 export function UpdateBanner({ version, source, applying }: Props) {
+  if (import.meta.env.DEV) return null;
   if (!version && !applying) return null;
 
   if (applying) {

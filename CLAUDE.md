@@ -36,6 +36,10 @@ This runs on construction sites, not office desks. Every UI decision should refl
 - **Locale: `de-DE`** — All date/time formatting must use the `'de-DE'` locale. Use `date-fns` with `{ locale: de }` from `date-fns/locale` for formatting and relative times (e.g. `formatDistanceToNow`, `format`). For simple one-off timestamps, `toLocaleTimeString('de-DE')` is acceptable. Never rely on browser defaults
 - **Error messages: German, actionable, recoverable** — Every error a user can see must be in German, explain what went wrong, and tell them how to fix it. Workers can't call IT — they need to solve problems themselves. Server-side validation errors are shown to users too, so they must also be German and actionable. Example: not "Invalid JSON" but "Ungültiger Schichtauftrag: Die Datei enthält kein gültiges JSON-Objekt. Bitte eine vom Implenia-Portal exportierte Datei verwenden."
 
+## Voice Commands (Experimental)
+
+Voice control is available as an experimental feature. While workers' hands are often occupied or gloved, the voice interface is being refined on-site to assess real-world usability. Major navigation and actions have voice command support (element navigation, recording control, tab switching, comment dictation). When adding new features that would clearly benefit from hands-free operation, consider adding voice commands (phrases in `voiceCommands.ts`, grammar entries in `useVoskRecognition.ts`, test coverage in `matchCommand.test.ts`) — but it's not mandatory for every UI element.
+
 ## Development
 
 ```bash

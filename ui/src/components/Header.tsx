@@ -7,9 +7,15 @@ interface Props {
   hasApiKey: boolean;
   currentPage: string;
   pageTitle?: string;
+  voiceSupported?: boolean;
+  isListening?: boolean;
+  wakeWordPhase?: 'idle' | 'listening' | 'dictating';
+  onMicPress?: () => void;
+  onMicRelease?: () => void;
+  commentQueueCount?: number;
 }
 
-export function Header({ connectivity, hasApiKey, currentPage, pageTitle }: Props) {
+export function Header({ connectivity, hasApiKey, currentPage, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -27,7 +33,7 @@ export function Header({ connectivity, hasApiKey, currentPage, pageTitle }: Prop
     <div style={styles.bar}>
       {/* Left: logo + optional back button */}
       <div style={styles.leftSection}>
-        {currentPage === 'element' && (
+        {(currentPage === 'element' || currentPage === 'comments') && (
           <button
             onClick={() => navigate('/')}
             style={styles.backButton}
@@ -55,6 +61,42 @@ export function Header({ connectivity, hasApiKey, currentPage, pageTitle }: Prop
         <span style={styles.statusText}>{connLabel}</span>
         <span style={styles.divider} />
         <span style={styles.versionText}>v{version}</span>
+        {voiceSupported && (
+          <button
+            onPointerDown={onMicPress}
+            onPointerUp={onMicRelease}
+            onPointerLeave={onMicRelease}
+            style={{
+              ...styles.micButton,
+              ...(isListening ? styles.micListening : {}),
+              ...(wakeWordPhase === 'dictating' ? styles.micDictating : {}),
+              ...(!isListening && !wakeWordPhase?.startsWith('dict') && wakeWordPhase === 'listening' ? styles.micPassive : {}),
+            }}
+            aria-label={isListening ? 'Spracherkennung aktiv' : wakeWordPhase === 'listening' ? 'Sagen Sie "Computer"' : 'Sprachbefehl'}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
+          </button>
+        )}
+        {(commentQueueCount ?? 0) > 0 && (
+          <button
+            onClick={() => navigate('comments')}
+            style={{
+              ...styles.commentQueueButton,
+              ...(currentPage === 'comments' ? styles.commentQueueActive : {}),
+            }}
+            aria-label={`${commentQueueCount} Kommentare`}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            <span style={styles.queueBadge}>{commentQueueCount}</span>
+          </button>
+        )}
         <a
           href="#/config"
           onClick={(e) => { e.preventDefault(); navigate('config'); }}
@@ -172,6 +214,74 @@ const styles: Record<string, React.CSSProperties> = {
   settingsActive: {
     backgroundColor: '#1a1a3e',
     color: '#ffffff',
+  },
+  micButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '48px',
+    height: '48px',
+    borderRadius: '50%',
+    color: '#8899aa',
+    backgroundColor: '#16213e',
+    border: '2px solid transparent',
+    cursor: 'pointer',
+    flexShrink: 0,
+    transition: 'all 0.15s ease',
+    fontFamily: 'inherit',
+  },
+  micListening: {
+    color: '#f44336',
+    borderColor: '#f44336',
+    backgroundColor: '#2a1520',
+    animation: 'pulse 1.5s ease-in-out infinite',
+  },
+  micPassive: {
+    color: '#4a90d9',
+    borderColor: '#4a90d9',
+    backgroundColor: '#162040',
+    animation: 'pulse 3s ease-in-out infinite',
+  },
+  micDictating: {
+    color: '#e6a700',
+    borderColor: '#e6a700',
+    backgroundColor: '#2a2010',
+    animation: 'pulse 1.5s ease-in-out infinite',
+  },
+  commentQueueButton: {
+    position: 'relative' as const,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '48px',
+    height: '48px',
+    borderRadius: '8px',
+    color: '#e6a700',
+    backgroundColor: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  commentQueueActive: {
+    backgroundColor: '#1a1a3e',
+    color: '#ffffff',
+  },
+  queueBadge: {
+    position: 'absolute' as const,
+    top: '4px',
+    right: '4px',
+    minWidth: '18px',
+    height: '18px',
+    borderRadius: '9px',
+    backgroundColor: '#e6a700',
+    color: '#000000',
+    fontSize: '11px',
+    fontWeight: 700,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    lineHeight: 1,
+    padding: '0 4px',
   },
   alertBadge: {
     position: 'absolute' as const,
