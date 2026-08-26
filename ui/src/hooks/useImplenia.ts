@@ -60,11 +60,7 @@ export interface MeasuringDevice {
 }
 
 export interface ShiftAssignment {
-  day_of_execution: string;
-  machine: { id: string; inventory_id: string; serial_no: string; machine_type_id: string };
   measuring_devices: MeasuringDevice[];
-  personnel: { id: string; first_name: string; last_name: string };
-  info: string | null;
 }
 
 export interface ShiftAssignmentState {

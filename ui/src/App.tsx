@@ -54,8 +54,7 @@ export function App() {
     default:
       content = <ShiftAssignment shift={shift} hasApiKey={config.hasApiKey} onImport={importShift} onClearImport={clearImport} />;
       if (shift.data) {
-        const [y, m, d] = shift.data.day_of_execution.split('-');
-        pageTitle = `Schichtauftrag für ${d}.${m}.${y}`;
+        pageTitle = 'Elemente';
       }
       break;
   }
