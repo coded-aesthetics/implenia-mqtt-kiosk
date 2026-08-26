@@ -20,16 +20,13 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
     if (!getApiConfig()) {
       return reply.status(503).send({ error: 'Implenia API not configured' });
     }
-    const { date } = request.query as { date?: string };
-    const today = date || new Date().toISOString().split('T')[0];
-
     try {
-      const data = await fetchImplenia(`/shift-assignment?date=${today}&include_vorgaben=true`);
-      return reply.send({ ...(data as Record<string, unknown>), source: 'api' });
+      const data = await fetchImplenia('/shift-assignment/unfinished-elements?include_vorgaben=true') as { unfinished_elements: Array<Record<string, unknown>> };
+      return reply.send({ measuring_devices: data.unfinished_elements, source: 'api' });
     } catch (err) {
       const upstream = (err as ApiError).statusCode;
       if (upstream === 404) {
-        return reply.status(404).send({ error: 'not_found', date: today });
+        return reply.status(404).send({ error: 'not_found' });
       }
       log.error('shift-assignment error: %s', (err as Error).message);
       const forwarded = upstream && upstream >= 400 && upstream < 600 ? upstream : 502;
