@@ -1,6 +1,5 @@
 node_modules/
 dist/
-electron/dist/
 *.db
 *.db-wal
 *.db-shm

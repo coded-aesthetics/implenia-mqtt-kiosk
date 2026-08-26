@@ -34,7 +34,6 @@ export default defineConfig(({ mode }) => {
         ],
       },
       workbox: {
-        maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         skipWaiting: true,
         clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
@@ -81,14 +80,6 @@ export default defineConfig(({ mode }) => {
   build: {
     outDir: 'dist',
     sourcemap: true,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vosk: ['vosk-browser'],
-          din4023: ['@coded-aesthetics/din4023/profile'],
-        },
-      },
-    },
   },
 };
 });
