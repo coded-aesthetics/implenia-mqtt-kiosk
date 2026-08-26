@@ -14,6 +14,26 @@ export type VoiceFeedback =
   | { type: 'error'; message: string }
   | null;
 
+function useVoiceEnabledSetting(): boolean {
+  const [enabled, setEnabled] = useState(
+    () => localStorage.getItem('voiceEnabled') !== 'false', // default true for backwards compatibility
+  );
+
+  useEffect(() => {
+    const handler = () => {
+      setEnabled(localStorage.getItem('voiceEnabled') !== 'false');
+    };
+    window.addEventListener('storage', handler);
+    window.addEventListener('voiceEnabledChanged', handler);
+    return () => {
+      window.removeEventListener('storage', handler);
+      window.removeEventListener('voiceEnabledChanged', handler);
+    };
+  }, []);
+
+  return enabled;
+}
+
 function useMagicWordSetting(): boolean {
   const [enabled, setEnabled] = useState(
     () => localStorage.getItem('magicWordEnabled') === 'true',
@@ -35,6 +55,7 @@ function useMagicWordSetting(): boolean {
 }
 
 export function useVoiceCommands(ctx: VoiceContext) {
+  const voiceEnabled = useVoiceEnabledSetting();
   const { state: speech, startListening: pttStart, stopListening: pttStop, reset, isSupported } =
     useVoskRecognition(ctx.elementNames);
   const [feedback, setFeedback] = useState<VoiceFeedback>(null);
@@ -101,7 +122,7 @@ export function useVoiceCommands(ctx: VoiceContext) {
   // Wake word mode — disabled during PTT to avoid mic contention
   const wakeWord = useWakeWordMode(
     ctx.elementNames,
-    magicWordEnabled && isSupported && !pttActive,
+    voiceEnabled && magicWordEnabled && isSupported && !pttActive,
     handleTranscript,
     handleDictation,
   );
@@ -162,7 +183,7 @@ export function useVoiceCommands(ctx: VoiceContext) {
   return {
     isListening: speech.status === 'listening',
     feedback,
-    isSupported,
+    isSupported: isSupported && voiceEnabled,
     startListening,
     stopListening,
     dismiss,

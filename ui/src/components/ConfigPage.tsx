@@ -100,6 +100,22 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
     }
   }
 
+  // Voice feature toggle
+  const [voiceEnabled, setVoiceEnabled] = useState(
+    () => localStorage.getItem('voiceEnabled') !== 'false', // default true for backwards compatibility
+  );
+
+  function toggleVoice() {
+    const next = !voiceEnabled;
+    setVoiceEnabled(next);
+    localStorage.setItem('voiceEnabled', String(next));
+    window.dispatchEvent(new Event('voiceEnabledChanged'));
+    // Auto-disable wake word if voice is disabled
+    if (!next && magicWord) {
+      toggleMagicWord();
+    }
+  }
+
   // Magic word setting
   const [magicWord, setMagicWord] = useState(
     () => localStorage.getItem('magicWordEnabled') === 'true',
@@ -371,29 +387,56 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
         {urlOverlay && <CardOverlay overlay={urlOverlay} onDismiss={() => setUrlOverlay(null)} />}
       </div>
 
-      {/* Magic word card */}
+      {/* Voice feature card */}
       <div style={styles.card}>
         <div style={styles.statusRow}>
-          <span style={styles.label}>Sprachaktivierung (experimentell)</span>
+          <span style={styles.label}>Sprachsteuerung (experimentell)</span>
         </div>
         <button
-          onClick={toggleMagicWord}
+          onClick={toggleVoice}
           style={{
             ...styles.toggleButton,
-            backgroundColor: magicWord ? '#1b5e20' : '#2a2a4a',
+            backgroundColor: voiceEnabled ? '#1b5e20' : '#2a2a4a',
           }}
         >
           <span style={{
             ...styles.toggleKnob,
-            transform: magicWord ? 'translateX(32px)' : 'translateX(0)',
+            transform: voiceEnabled ? 'translateX(32px)' : 'translateX(0)',
           }} />
         </button>
         <div style={styles.toggleLabel}>
-          {magicWord ? 'Aktiviert' : 'Deaktiviert'}
+          {voiceEnabled ? 'Aktiviert' : 'Deaktiviert'}
         </div>
         <div style={styles.envHint}>
-          Sagen Sie &quot;Computer&quot; gefolgt von einem Befehl. Das Mikrofon bleibt dauerhaft aktiv.
+          Mikrofon-Taste für Push-to-Talk oder Aktivwort-Modus.
         </div>
+
+        {/* Wake word sub-setting (only shown when voice is enabled) */}
+        {voiceEnabled && (
+          <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #2a3f5f' }}>
+            <div style={styles.statusRow}>
+              <span style={{ ...styles.label, fontSize: '1rem' }}>Aktivwort-Modus</span>
+            </div>
+            <button
+              onClick={toggleMagicWord}
+              style={{
+                ...styles.toggleButton,
+                backgroundColor: magicWord ? '#1b5e20' : '#2a2a4a',
+              }}
+            >
+              <span style={{
+                ...styles.toggleKnob,
+                transform: magicWord ? 'translateX(32px)' : 'translateX(0)',
+              }} />
+            </button>
+            <div style={styles.toggleLabel}>
+              {magicWord ? 'Aktiviert' : 'Deaktiviert'}
+            </div>
+            <div style={styles.envHint}>
+              Sagen Sie &quot;Computer&quot; gefolgt von einem Befehl. Das Mikrofon bleibt dauerhaft aktiv.
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
