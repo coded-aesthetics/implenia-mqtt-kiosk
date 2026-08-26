@@ -14,44 +14,38 @@ export type VoiceFeedback =
   | { type: 'error'; message: string }
   | null;
 
-function useVoiceEnabledSetting(): boolean {
-  const [enabled, setEnabled] = useState(
-    () => localStorage.getItem('voiceEnabled') !== 'false', // default true for backwards compatibility
-  );
+/** Generic hook for localStorage-backed settings with cross-tab sync. */
+function useLocalStorageSetting(
+  eventName: string,
+  defaultValue: () => boolean,
+): boolean {
+  const [value, setValue] = useState(defaultValue);
 
   useEffect(() => {
-    const handler = () => {
-      setEnabled(localStorage.getItem('voiceEnabled') !== 'false');
-    };
+    const handler = () => setValue(defaultValue());
     window.addEventListener('storage', handler);
-    window.addEventListener('voiceEnabledChanged', handler);
+    window.addEventListener(eventName, handler);
     return () => {
       window.removeEventListener('storage', handler);
-      window.removeEventListener('voiceEnabledChanged', handler);
+      window.removeEventListener(eventName, handler);
     };
-  }, []);
+  }, [defaultValue, eventName]);
 
-  return enabled;
+  return value;
+}
+
+function useVoiceEnabledSetting(): boolean {
+  return useLocalStorageSetting(
+    'voiceEnabledChanged',
+    () => localStorage.getItem('voiceEnabled') !== 'false', // default true for backwards compatibility
+  );
 }
 
 function useMagicWordSetting(): boolean {
-  const [enabled, setEnabled] = useState(
+  return useLocalStorageSetting(
+    'magicWordChanged',
     () => localStorage.getItem('magicWordEnabled') === 'true',
   );
-
-  useEffect(() => {
-    const handler = () => {
-      setEnabled(localStorage.getItem('magicWordEnabled') === 'true');
-    };
-    window.addEventListener('storage', handler);
-    window.addEventListener('magicWordChanged', handler);
-    return () => {
-      window.removeEventListener('storage', handler);
-      window.removeEventListener('magicWordChanged', handler);
-    };
-  }, []);
-
-  return enabled;
 }
 
 export function useVoiceCommands(ctx: VoiceContext) {

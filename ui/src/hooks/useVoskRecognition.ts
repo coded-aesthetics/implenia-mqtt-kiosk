@@ -283,7 +283,8 @@ export function useVoskRecognition(elementNames: string[]) {
       const source = audioContext.createMediaStreamSource(stream);
       // ScriptProcessorNode is deprecated but widely supported and simpler than AudioWorklet.
       // vosk-browser's acceptWaveform expects AudioBuffer from ScriptProcessorNode.
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      // Buffer size 2048 = 128ms latency at 16kHz (balance between responsiveness and CPU)
+      const processor = audioContext.createScriptProcessor(2048, 1, 1);
       processorRef.current = processor;
 
       processor.onaudioprocess = (event) => {

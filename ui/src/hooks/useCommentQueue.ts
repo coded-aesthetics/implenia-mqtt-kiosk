@@ -38,32 +38,29 @@ function loadQueue(): QueuedComment[] {
 
 function saveQueue(queue: QueuedComment[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(queue));
-  } catch {
-    // localStorage full — drop audio from oldest items and retry
-    const trimmed = queue.map((item) => ({ ...item, audioBase64: null }));
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
-    } catch { /* give up */ }
-  }
+    // Don't persist audio to localStorage — it's only needed in-memory during transcription.
+    // After page reload, items reset to 'ready' status and use voskText as fallback.
+    const withoutAudio = queue.map((item) => ({ ...item, audioBase64: null }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(withoutAudio));
+  } catch { /* give up */ }
 }
 
 async function blobToBase64(blob: Blob): Promise<string> {
-  const buffer = await blob.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const dataUrl = reader.result as string;
+      const base64 = dataUrl.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 function base64ToBlob(base64: string): Blob {
   const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
+  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
   return new Blob([bytes.buffer], { type: 'application/octet-stream' });
 }
 

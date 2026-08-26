@@ -186,27 +186,25 @@ export function expandCommands(
   return expanded;
 }
 
-export function matchCommand(
+/** Internal helper: performs the core matching logic (exact + fuzzy + scoring). */
+function matchInternal(
   transcript: string,
   expanded: ExpandedPhrase[],
-  ctx: VoiceContext,
-): MatchResult | null {
+): { entry: ExpandedPhrase; score: number } | null {
   const normalized = normalize(transcript);
   const rawTokens = tokenize(normalized);
   const tokens = stripFillers(rawTokens);
   const stripped = tokens.join(' ');
 
   // Try exact match first (Vosk grammar returns known phrases)
-  // Check both raw normalized and filler-stripped versions
   for (const entry of expanded) {
     if (normalized === entry.phrase || stripped === entry.phrase) {
-      if (!entry.command.precondition(ctx)) return null;
-      return { command: entry.command, params: entry.params, score: 1.0, matchedPhrase: entry.phrase };
+      return { entry, score: 1.0 };
     }
   }
 
+  // Fuzzy match with scoring
   let best: { entry: ExpandedPhrase; score: number } | null = null;
-
   for (const entry of expanded) {
     const score = scoreMatch(tokens, entry.tokens);
     if (score >= 0.5 && (!best || score > best.score)) {
@@ -214,18 +212,24 @@ export function matchCommand(
     }
   }
 
-  if (!best) return null;
+  return best;
+}
 
-  // Check precondition
-  if (!best.entry.command.precondition(ctx)) {
-    return null;
-  }
+export function matchCommand(
+  transcript: string,
+  expanded: ExpandedPhrase[],
+  ctx: VoiceContext,
+): MatchResult | null {
+  const match = matchInternal(transcript, expanded);
+  if (!match) return null;
+
+  if (!match.entry.command.precondition(ctx)) return null;
 
   return {
-    command: best.entry.command,
-    params: best.entry.params,
-    score: best.score,
-    matchedPhrase: best.entry.phrase,
+    command: match.entry.command,
+    params: match.entry.params,
+    score: match.score,
+    matchedPhrase: match.entry.phrase,
   };
 }
 
@@ -234,45 +238,19 @@ export function matchCommandWithReason(
   expanded: ExpandedPhrase[],
   ctx: VoiceContext,
 ): { result: MatchResult } | { blocked: string } | { noMatch: true } {
-  const normalized = normalize(transcript);
-  const rawTokens = tokenize(normalized);
-  const tokens = stripFillers(rawTokens);
+  const match = matchInternal(transcript, expanded);
+  if (!match) return { noMatch: true };
 
-  // Try exact match first (Vosk grammar returns known phrases)
-  // Check both raw normalized and filler-stripped versions
-  const stripped = tokens.join(' ');
-  for (const entry of expanded) {
-    if (normalized === entry.phrase || stripped === entry.phrase) {
-      if (!entry.command.precondition(ctx)) {
-        return { blocked: entry.command.preconditionHint ?? 'Befehl nicht verfügbar' };
-      }
-      return {
-        result: { command: entry.command, params: entry.params, score: 1.0, matchedPhrase: entry.phrase },
-      };
-    }
-  }
-
-  let best: { entry: ExpandedPhrase; score: number } | null = null;
-
-  for (const entry of expanded) {
-    const score = scoreMatch(tokens, entry.tokens);
-    if (score >= 0.5 && (!best || score > best.score)) {
-      best = { entry, score };
-    }
-  }
-
-  if (!best) return { noMatch: true };
-
-  if (!best.entry.command.precondition(ctx)) {
-    return { blocked: best.entry.command.preconditionHint ?? 'Befehl nicht verfügbar' };
+  if (!match.entry.command.precondition(ctx)) {
+    return { blocked: match.entry.command.preconditionHint ?? 'Befehl nicht verfügbar' };
   }
 
   return {
     result: {
-      command: best.entry.command,
-      params: best.entry.params,
-      score: best.score,
-      matchedPhrase: best.entry.phrase,
+      command: match.entry.command,
+      params: match.entry.params,
+      score: match.score,
+      matchedPhrase: match.entry.phrase,
     },
   };
 }

@@ -308,7 +308,7 @@ class UpdateManager extends EventEmitter {
       log.info('Downloading %s...', tarAsset.name);
       const downloadRes = await fetch(tarAsset.url, {
         redirect: 'follow',
-        headers: this.downloadHeaders,
+        headers: this.apiHeaders,
       });
 
       if (!downloadRes.ok || !downloadRes.body) {
@@ -326,7 +326,7 @@ class UpdateManager extends EventEmitter {
         log.info('Verifying checksum...');
         const checksumRes = await fetch(checksumAsset.url, {
           redirect: 'follow',
-          headers: this.downloadHeaders,
+          headers: this.apiHeaders,
         });
         const expectedChecksum = (await checksumRes.text()).trim().split(/\s+/)[0];
 
