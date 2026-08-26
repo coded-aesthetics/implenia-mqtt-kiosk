@@ -301,7 +301,7 @@ export function ChannelPicker({ devices, deviceFrames, mappings, onClose, onMapp
                     >
                       <span style={styles.channelIndex}>Kanal {i}</span>
                       <span style={styles.channelValue}>
-                        {value !== undefined ? value.toFixed(2) : '–'}
+                        {value !== undefined ? value.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '–'}
                       </span>
                       {isCurrentSensor && (
                         <span style={styles.channelCurrent}>● Zugeordnet</span>
