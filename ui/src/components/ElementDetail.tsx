@@ -107,6 +107,13 @@ function parseRawPayload(payload: string): string {
   if (!trimmed || trimmed === 'null' || trimmed === 'NaN' || trimmed === 'Infinity' || trimmed === '-Infinity' || trimmed === '""') {
     return '–';
   }
+
+  // Try to parse as number for German formatting
+  const num = parseFloat(trimmed);
+  if (Number.isFinite(num)) {
+    return num.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
   return trimmed;
 }
 

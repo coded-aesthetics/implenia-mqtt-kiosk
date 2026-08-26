@@ -67,9 +67,14 @@ export class SerialSource extends EventEmitter {
     const parser = this.port.pipe(new ReadlineParser({ delimiter: '\r' }));
 
     parser.on('data', (line: string) => {
+      log.debug('Device %d: raw line: %s', this.deviceId, line);
       const parsed = parseElvisFrame(line + '\r');
-      if (!parsed) return;
+      if (!parsed) {
+        log.warn('Device %d: failed to parse frame: %s', this.deviceId, line);
+        return;
+      }
 
+      log.debug('Device %d: parsed frame addr=%s values=%d', this.deviceId, parsed.address, parsed.values.length);
       const frame: DeviceFrame = {
         deviceId: this.deviceId,
         address: parsed.address,

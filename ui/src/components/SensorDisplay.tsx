@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { SensorReading } from '../hooks/useWebSocket';
+import { formatNumber, isNoValue } from '../utils/format';
 
 interface Props {
   readings: Map<string, SensorReading>;
@@ -10,16 +11,6 @@ function formatTopic(topic: string): string {
   return parts[parts.length - 1] || topic;
 }
 
-function isNoValue(v: unknown): boolean {
-  if (v === null || v === undefined) return true;
-  if (typeof v === 'string') {
-    const s = v.trim();
-    return s === '' || s === 'NaN' || s === '-Infinity' || s === 'Infinity';
-  }
-  if (typeof v === 'number') return !Number.isFinite(v);
-  return false;
-}
-
 function parsePayload(payload: string): { value: string; unit: string } {
   try {
     const parsed = JSON.parse(payload);
@@ -28,10 +19,10 @@ function parsePayload(payload: string): { value: string; unit: string } {
       const raw = parsed.value ?? parsed.v;
       const unit = parsed.unit ?? parsed.u ?? '';
       if (!hasValue || isNoValue(raw)) return { value: '–', unit: String(unit) };
-      return { value: String(raw), unit: String(unit) };
+      return { value: formatNumber(raw), unit: String(unit) };
     }
     if (isNoValue(parsed)) return { value: '–', unit: '' };
-    return { value: String(parsed), unit: '' };
+    return { value: formatNumber(parsed), unit: '' };
   } catch {
     return { value: payload || '–', unit: '' };
   }
