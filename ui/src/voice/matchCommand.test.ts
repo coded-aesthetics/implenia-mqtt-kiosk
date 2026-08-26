@@ -61,7 +61,7 @@ function testCommands(): VoiceCommand[] {
     },
     {
       id: 'nav.home',
-      phrases: ['zurück', 'startseite', 'home', 'übersicht', 'zurück zur übersicht', 'schichtauftrag'],
+      phrases: ['zurück', 'startseite', 'home', 'übersicht', 'zurück zur übersicht', 'schichtauftrag', 'schicht auftrag'],
       precondition: (ctx) => ctx.route.page !== 'home',
       preconditionHint: 'Bereits auf der Startseite',
       execute: noop,
@@ -82,6 +82,22 @@ function testCommands(): VoiceCommand[] {
       preconditionHint: 'Kein Element geöffnet',
       execute: noop,
       description: 'Vorgaben anzeigen',
+    },
+    {
+      id: 'tab.kommentare',
+      phrases: ['kommentare', 'kommentare zeigen', 'zeige kommentare', 'kommentarseite'],
+      precondition: (ctx) => ctx.route.page === 'element',
+      preconditionHint: 'Kein Element geöffnet',
+      execute: noop,
+      description: 'Kommentare anzeigen',
+    },
+    {
+      id: 'nav.queue',
+      phrases: ['warteschlange', 'kommentar warteschlange', 'alle kommentare'],
+      precondition: (ctx) => ctx.route.page !== 'comments',
+      preconditionHint: 'Bereits auf der Warteschlange',
+      execute: noop,
+      description: 'Warteschlange anzeigen',
     },
     {
       id: 'comment.dictate',
@@ -202,6 +218,7 @@ describe('matchCommand — exact matches', () => {
     expectMatch('übersicht', 'nav.home', ctx);
     expectMatch('zurück zur übersicht', 'nav.home', ctx);
     expectMatch('schichtauftrag', 'nav.home', ctx);
+    expectMatch('schicht auftrag', 'nav.home', ctx);
   });
 
   it('matches comment dictation phrases', () => {
@@ -220,6 +237,16 @@ describe('matchCommand — exact matches', () => {
     expectMatch('vorgabe', 'tab.vorgabe', ctx);
     expectMatch('vorgaben', 'tab.vorgabe', ctx);
     expectMatch('sollwerte', 'tab.vorgabe', ctx);
+    expectMatch('kommentare', 'tab.kommentare', ctx);
+    expectMatch('kommentare zeigen', 'tab.kommentare', ctx);
+    expectMatch('zeige kommentare', 'tab.kommentare', ctx);
+  });
+
+  it('matches comment queue navigation phrases', () => {
+    const ctx = makeCtx({ page: 'home' });
+    expectMatch('warteschlange', 'nav.queue', ctx);
+    expectMatch('kommentar warteschlange', 'nav.queue', ctx);
+    expectMatch('alle kommentare', 'nav.queue', ctx);
   });
 });
 

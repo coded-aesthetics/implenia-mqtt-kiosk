@@ -99,6 +99,7 @@ export function buildCommands(): VoiceCommand[] {
         'übersicht',
         'zurück zur übersicht',
         'schichtauftrag',
+        'schicht auftrag',
       ],
       precondition: (ctx) => ctx.route.page !== 'home',
       preconditionHint: 'Bereits auf der Startseite',
@@ -142,22 +143,37 @@ export function buildCommands(): VoiceCommand[] {
       description: 'Vorgaben anzeigen',
     },
 
-    // --- Comment queue navigation ---
+    // --- Comment tab (element page) ---
     {
-      id: 'nav.comments',
+      id: 'tab.kommentare',
       phrases: [
         'kommentare',
+        'kommentare zeigen',
+        'zeige kommentare',
         'kommentarseite',
+      ],
+      precondition: (ctx) => ctx.route.page === 'element',
+      preconditionHint: 'Kein Element geöffnet',
+      execute: (ctx) => {
+        ctx.setActiveTab('kommentare');
+      },
+      description: 'Kommentare anzeigen',
+    },
+
+    // --- Comment queue navigation (global) ---
+    {
+      id: 'nav.queue',
+      phrases: [
         'warteschlange',
         'kommentar warteschlange',
-        'zeige kommentare',
+        'alle kommentare',
       ],
       precondition: (ctx) => ctx.route.page !== 'comments',
-      preconditionHint: 'Bereits auf der Kommentarseite',
+      preconditionHint: 'Bereits auf der Warteschlange',
       execute: () => {
         navigate('comments');
       },
-      description: 'Kommentare anzeigen',
+      description: 'Warteschlange anzeigen',
     },
 
     // --- Comment dictation ---

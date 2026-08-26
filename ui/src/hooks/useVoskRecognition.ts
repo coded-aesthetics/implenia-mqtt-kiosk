@@ -35,7 +35,7 @@ const BASE_PHRASES: string[][] = [
   // nav.home
   [
     'zurück', 'startseite', 'home', 'übersicht',
-    'zurück zur übersicht', 'schichtauftrag',
+    'zurück zur übersicht', 'schichtauftrag', 'schicht auftrag',
   ],
   // tab.messwerte
   [
@@ -45,10 +45,13 @@ const BASE_PHRASES: string[][] = [
   [
     'vorgabe', 'vorgaben', 'vorgaben zeigen', 'sollwerte', 'spezifikation',
   ],
-  // nav.comments
+  // tab.kommentare
   [
-    'kommentare', 'kommentarseite', 'warteschlange',
-    'kommentar warteschlange', 'zeige kommentare',
+    'kommentare', 'kommentare zeigen', 'zeige kommentare', 'kommentarseite',
+  ],
+  // nav.queue
+  [
+    'warteschlange', 'kommentar warteschlange', 'alle kommentare',
   ],
   // comment.dictate
   [

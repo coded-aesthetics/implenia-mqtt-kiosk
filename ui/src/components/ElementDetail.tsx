@@ -4,8 +4,9 @@ import type { SensorDef, VorgabenData } from '../hooks/useImplenia';
 import type { SensorReading } from '../hooks/useWebSocket';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import type { Schicht } from '@coded-aesthetics/din4023/profile';
+import type { QueuedComment } from '../hooks/useCommentQueue';
 
-export type ViewTab = 'messwerte' | 'vorgabe';
+export type ViewTab = 'messwerte' | 'vorgabe' | 'kommentare';
 
 interface Props {
   elementName: string;
@@ -13,6 +14,10 @@ interface Props {
   vorgaben: VorgabenData | null;
   activeTab: ViewTab;
   setActiveTab: (tab: ViewTab) => void;
+  commentQueue: QueuedComment[];
+  onCommentEdit: (id: string, text: string) => void;
+  onCommentDelete: (id: string) => void;
+  onCommentRetry: (id: string) => void;
 }
 
 function formatValue(v: unknown): string {
@@ -121,10 +126,117 @@ function buildSensorLookup(sensors: SensorDef[]): Map<string, SensorDef> {
 }
 
 // ---------------------------------------------------------------------------
+// Comment helpers & component
+// ---------------------------------------------------------------------------
+
+const COMMENT_STATUS: Record<QueuedComment['status'], { label: string; color: string }> = {
+  transcribing: { label: 'Transkribiert...', color: '#e6a700' },
+  ready: { label: 'Bereit', color: '#4a90d9' },
+  sending: { label: 'Sendet...', color: '#4a90d9' },
+  sent: { label: 'Gesendet', color: '#4caf50' },
+  error: { label: 'Fehler', color: '#f44336' },
+};
+
+function commentTimeAgo(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return 'gerade eben';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `vor ${minutes} Min.`;
+  const hours = Math.floor(minutes / 60);
+  return `vor ${hours} Std.`;
+}
+
+function CommentCard({
+  item, onEdit, onDelete, onRetry,
+}: {
+  item: QueuedComment;
+  onEdit: (id: string, text: string) => void;
+  onDelete: (id: string) => void;
+  onRetry: (id: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const status = COMMENT_STATUS[item.status];
+
+  return (
+    <div style={commentStyles.card}>
+      <div style={commentStyles.cardHeader}>
+        <span style={commentStyles.timeAgo}>{commentTimeAgo(item.createdAt)}</span>
+        <div style={{ ...commentStyles.statusBadge, backgroundColor: status.color + '22', color: status.color }}>
+          <span style={{ ...commentStyles.statusDot, backgroundColor: status.color }} />
+          {status.label}
+        </div>
+      </div>
+
+      {editing ? (
+        <div>
+          <textarea
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            style={commentStyles.textarea}
+            autoFocus
+          />
+          <div style={commentStyles.actionRow}>
+            <button
+              onClick={() => { onEdit(item.id, editValue); setEditing(false); }}
+              style={{ ...commentStyles.actionButton, ...commentStyles.saveButton }}
+            >
+              Speichern
+            </button>
+            <button
+              onClick={() => setEditing(false)}
+              style={{ ...commentStyles.actionButton, ...commentStyles.cancelButton }}
+            >
+              Abbrechen
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{
+            ...commentStyles.textContent,
+            ...(item.status === 'transcribing' ? commentStyles.textTranscribing : {}),
+          }}>
+            {item.text || '...'}
+          </div>
+          {item.errorMessage && (
+            <div style={commentStyles.errorMessage}>{item.errorMessage}</div>
+          )}
+          <div style={commentStyles.actionRow}>
+            {item.status !== 'transcribing' && item.status !== 'sending' && (
+              <button
+                onClick={() => { setEditValue(item.text); setEditing(true); }}
+                style={{ ...commentStyles.actionButton, ...commentStyles.editButton }}
+              >
+                Bearbeiten
+              </button>
+            )}
+            {item.status === 'error' && (
+              <button
+                onClick={() => onRetry(item.id)}
+                style={{ ...commentStyles.actionButton, ...commentStyles.retryButton }}
+              >
+                Erneut senden
+              </button>
+            )}
+            <button
+              onClick={() => onDelete(item.id)}
+              style={{ ...commentStyles.actionButton, ...commentStyles.deleteButton }}
+            >
+              Löschen
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function ElementDetail({ elementName, readings, vorgaben, activeTab, setActiveTab }: Props) {
+export function ElementDetail({ elementName, readings, vorgaben, activeTab, setActiveTab, commentQueue, onCommentEdit, onCommentDelete, onCommentRetry }: Props) {
   const geoRef = useRef<HTMLDivElement>(null);
   const [geoHeight, setGeoHeight] = useState(0);
 
@@ -220,6 +332,12 @@ export function ElementDetail({ elementName, readings, vorgaben, activeTab, setA
   // Hero vorgaben for the pinned reminder bar in messwerte view
   const heroVorgaben = vorgabesByPriority.hero;
 
+  // Filter comment queue to current element
+  const elementComments = useMemo(
+    () => commentQueue.filter((c) => c.elementName === elementName),
+    [commentQueue, elementName],
+  );
+
   return (
     <div style={styles.container}>
       <div style={styles.mainLayout}>
@@ -255,6 +373,15 @@ export function ElementDetail({ elementName, readings, vorgaben, activeTab, setA
               onClick={() => setActiveTab('vorgabe')}
             >
               Vorgabe
+            </button>
+            <button
+              style={activeTab === 'kommentare' ? styles.tabActive : styles.tab}
+              onClick={() => setActiveTab('kommentare')}
+            >
+              Kommentare
+              {elementComments.length > 0 && (
+                <span style={styles.tabBadge}>{elementComments.length}</span>
+              )}
             </button>
           </div>
 
@@ -419,6 +546,30 @@ export function ElementDetail({ elementName, readings, vorgaben, activeTab, setA
 
               {vorgabeEntries.length === 0 && coordinates.length === 0 && !geologyProfile && (
                 <div style={styles.statusText}>Keine Vorgaben vorhanden</div>
+              )}
+            </div>
+          )}
+
+          {/* ========== KOMMENTARE VIEW ========== */}
+          {activeTab === 'kommentare' && (
+            <div style={styles.viewContent}>
+              {elementComments.length === 0 ? (
+                <div style={styles.statusText}>
+                  Keine Kommentare für dieses Element
+                  <div style={styles.hintText}>Sage „Kommentar" um einen Kommentar zu diktieren</div>
+                </div>
+              ) : (
+                <div style={commentStyles.list}>
+                  {elementComments.map((item) => (
+                    <CommentCard
+                      key={item.id}
+                      item={item}
+                      onEdit={onCommentEdit}
+                      onDelete={onCommentDelete}
+                      onRetry={onCommentRetry}
+                    />
+                  ))}
+                </div>
               )}
             </div>
           )}
@@ -785,5 +936,124 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '1rem',
     color: '#f44336',
     padding: '1rem 0',
+  },
+  hintText: {
+    fontSize: '0.9rem',
+    color: '#445566',
+    marginTop: '0.5rem',
+    fontStyle: 'italic' as const,
+  },
+  tabBadge: {
+    marginLeft: '0.5rem',
+    backgroundColor: '#1976d2',
+    color: '#ffffff',
+    borderRadius: '12px',
+    padding: '0.1rem 0.5rem',
+    fontSize: '0.85rem',
+    fontWeight: 600,
+  },
+};
+
+const commentStyles = {
+  list: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '1rem',
+    padding: '1rem 0',
+  },
+  card: {
+    backgroundColor: '#1a2744',
+    borderRadius: '10px',
+    padding: '1rem 1.25rem',
+    borderLeft: '4px solid #1976d2',
+  },
+  cardHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '0.75rem',
+  },
+  timeAgo: {
+    fontSize: '0.9rem',
+    color: '#8899aa',
+  },
+  statusBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.4rem',
+    padding: '0.25rem 0.75rem',
+    borderRadius: '12px',
+    fontSize: '0.85rem',
+    fontWeight: 600,
+  },
+  statusDot: {
+    width: '8px',
+    height: '8px',
+    borderRadius: '50%',
+  },
+  textContent: {
+    fontSize: '1rem',
+    color: '#ffffff',
+    lineHeight: 1.5,
+    marginBottom: '0.75rem',
+    whiteSpace: 'pre-wrap' as const,
+  },
+  textTranscribing: {
+    fontStyle: 'italic' as const,
+    color: '#aabbcc',
+  },
+  errorMessage: {
+    fontSize: '0.9rem',
+    color: '#f44336',
+    marginBottom: '0.75rem',
+  },
+  textarea: {
+    width: '100%',
+    minHeight: '100px',
+    backgroundColor: '#0f1a2e',
+    color: '#ffffff',
+    border: '1px solid #2a3f5f',
+    borderRadius: '8px',
+    padding: '0.75rem',
+    fontSize: '1rem',
+    fontFamily: 'inherit',
+    resize: 'vertical' as const,
+    marginBottom: '0.75rem',
+  },
+  actionRow: {
+    display: 'flex',
+    gap: '0.75rem',
+    flexWrap: 'wrap' as const,
+  },
+  actionButton: {
+    minHeight: '48px',
+    minWidth: '120px',
+    padding: '0.75rem 1.25rem',
+    fontSize: '1rem',
+    fontWeight: 600,
+    border: 'none',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    transition: 'opacity 0.2s',
+  },
+  editButton: {
+    backgroundColor: '#1976d2',
+    color: '#ffffff',
+  },
+  saveButton: {
+    backgroundColor: '#4caf50',
+    color: '#ffffff',
+  },
+  cancelButton: {
+    backgroundColor: '#556677',
+    color: '#ffffff',
+  },
+  retryButton: {
+    backgroundColor: '#ff9800',
+    color: '#ffffff',
+  },
+  deleteButton: {
+    backgroundColor: '#f44336',
+    color: '#ffffff',
   },
 };

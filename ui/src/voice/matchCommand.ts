@@ -18,7 +18,7 @@ export interface VoiceContext {
     readingCount: number;
   };
   elementNames: string[];
-  setActiveTab: (tab: 'messwerte' | 'vorgabe') => void;
+  setActiveTab: (tab: 'messwerte' | 'vorgabe' | 'kommentare') => void;
   navigate: (path: string) => void;
   enqueueComment: (elementName: string, voskText: string, audioBlob: Blob) => void;
 }

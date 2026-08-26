@@ -92,6 +92,10 @@ export function App() {
           vorgaben={deviceVorgaben}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
+          commentQueue={commentQueue.queue}
+          onCommentEdit={commentQueue.editText}
+          onCommentDelete={commentQueue.deleteComment}
+          onCommentRetry={commentQueue.retry}
         />
       );
       pageTitle = route.params.name;
