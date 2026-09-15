@@ -114,6 +114,21 @@ This software is a generic kiosk platform for construction machines. The first u
 
 When evaluating a new feature, ask: "Would a different machine type need this?" If yes, it belongs in the framework. If it's specific to how DSV works, it's use-case code and should be structured so it can be swapped or extended.
 
+## CSV timestamp format — shared convention across three projects
+
+Session-data export/import shares one timestamp contract with
+`../implenia-web` and `../implenia-machine-backend`. When this kiosk exports
+recorded session data as CSV/XLSX, the timestamp column **must** be a single
+ISO 8601 column named **`Zeitpunkt`** — a local time *with* an explicit offset
+(e.g. `2024-05-31T08:15:03+02:00`) or `Z`. Do **not** pre-convert to UTC and do
+**not** emit the legacy two-column `Datum` + `Uhrzeit` format: it is
+Europe/Berlin wall-clock, ambiguous across DST, and deprecated on the import
+side. The receivers convert the offset to UTC on intake.
+
+Reference implementations to match: machine-backend `csvParseISO`
+(`api/sensors/persistence/sensors.go`) and web `parseIsoTimestamp`
+(`app/models/csv-upload.server.ts`). Keep all three projects in sync.
+
 ## Testing
 
 This software auto-updates on machines where a broken deploy costs real time and money. Tests are a safety net, not a checkbox.
