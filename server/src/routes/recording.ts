@@ -1,6 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { beginRecording, endRecording, uploadSession, getRecordingState } from '../recording.js';
 import { getSessions, getSessionStats } from '../db.js';
+import {
+  buildSessionExport,
+  getSessionExportStreams,
+  isExportableStream,
+} from '../session-export.js';
 import { broadcastMessage } from '../websocket.js';
 
 export function registerRecordingRoutes(app: FastifyInstance): void {
@@ -46,6 +51,42 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       return reply.send(result);
     } catch (err) {
       return reply.status(500).send({ error: (err as Error).message });
+    }
+  });
+
+  // Which streams can be exported for this session (defined for the machine
+  // via the CSV Stream column AND with recorded data). Drives the UI buttons.
+  app.get('/api/recording/:id/export-options', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const sessionId = parseInt(id, 10);
+    if (isNaN(sessionId)) {
+      return reply.status(400).send({ error: 'Ungültige Sitzungs-ID' });
+    }
+    return reply.send({ streams: getSessionExportStreams(sessionId) });
+  });
+
+  app.get('/api/recording/:id/export', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { stream = 'hdi' } = request.query as { stream?: string };
+    const sessionId = parseInt(id, 10);
+    if (isNaN(sessionId)) {
+      return reply.status(400).send({ error: 'Ungültige Sitzungs-ID' });
+    }
+    if (!isExportableStream(stream)) {
+      return reply.status(400).send({ error: `Stream "${stream}" ist nicht exportierbar` });
+    }
+
+    try {
+      const { buffer, filename } = await buildSessionExport(sessionId, stream);
+      return reply
+        .header(
+          'Content-Type',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        .header('Content-Disposition', `attachment; filename="${filename}"`)
+        .send(buffer);
+    } catch (err) {
+      return reply.status(404).send({ error: (err as Error).message });
     }
   });
 

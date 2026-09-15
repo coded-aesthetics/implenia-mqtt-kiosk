@@ -100,6 +100,26 @@ Sensor definitions live as CSV files in `server/assets/sensors/` (copied from `.
 
 The server exposes these via `GET /api/verfahren/:type/sensors` (optional `?source=mqtt` filter).
 
+## Session Data Export
+
+A completed recording can be exported to Excel files for offline import into the implenia-web DSV widget — the offline counterpart to the batch upload (record → export to USB → import in the web app).
+
+```
+GET /api/recording/:id/export-options       → streams available for this session
+GET /api/recording/:id/export?stream=hdi     → .xlsx download (attachment)
+```
+
+**Streams are not hardcoded.** Which sensors belong to which stream is driven by the `Stream` column of the shared `*-sensors-herstellen.csv` (synced from implenia-web, the source of truth). `getAvailableStreams()` returns the streams a machine's verfahren defines; `export-options` narrows that to streams with recorded data. Each stream exports as its **own file** — implenia-web's importer only reads the first worksheet and detects the stream from its header.
+
+Two stream formats are produced, mirroring implenia-web's own export (`stream-csv.server.ts`) so files round-trip through its importer (bulk-insert path):
+
+- **HDI** (machine telemetry, time-series): first column is a single ISO 8601 instant named **`Zeitpunkt`** (e.g. `2024-05-31T06:15:03.000Z`) — the DST-safe convention shared with implenia-web and implenia-machine-backend (see "CSV timestamp format" in `CLAUDE.md`). One column per HDI sensor; one row per distinct reading timestamp; empty cells for gaps.
+- **IVL** (inclination, indexed): first column is a sequential 0-based sample **`Index`**. The kiosk emits plain integers; implenia-web maps each index to its own sentinel timestamp on import, so the kiosk never touches the sentinel scheme.
+
+Column headers match `dsv-sensors-herstellen.csv` sensor names exactly. In the UI, one export button per available stream appears in the recording bar next to **Daten hochladen** once a session ends.
+
+`result`/Ergebnisdaten is not exported — those KPIs are computed server-side in implenia-web.
+
 ## Building for Production
 
 ```bash
@@ -174,6 +194,7 @@ server/src/
   websocket.ts        — WS broadcast
   implenia-api.ts     — Implenia API auth + fetch wrapper
   recording.ts        — Session recording + batch upload
+  session-export.ts   — Stream-driven .xlsx export (HDI/IVL) for implenia-web import
   connectivity.ts     — Online/offline watchdog
   updater.ts          — Self-update from GitHub Releases
   device-manager.ts   — Device lifecycle management
