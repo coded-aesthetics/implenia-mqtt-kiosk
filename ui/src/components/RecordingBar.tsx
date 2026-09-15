@@ -10,11 +10,18 @@ interface Props {
 
 type SessionStatus = 'idle' | 'recording' | 'ended' | 'empty' | 'uploading' | 'uploaded' | 'partial';
 
+interface ExportOption {
+  stream: string;
+  label: string;
+  count: number;
+}
+
 export function RecordingBar({ currentPage, elementName, recordingState, uploadProgress }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUploadResult, setLastUploadResult] = useState<'uploaded' | 'partial' | null>(null);
   const [emptyWarning, setEmptyWarning] = useState(false);
+  const [exportOptions, setExportOptions] = useState<ExportOption[]>([]);
 
   // Determine current display status
   const status: SessionStatus = (() => {
@@ -54,6 +61,29 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     const id = setTimeout(() => setEmptyWarning(false), 10_000);
     return () => clearTimeout(id);
   }, [emptyWarning]);
+
+  // Fetch which streams can be exported once a session has ended. Which streams
+  // exist is driven by the machine's CSV (Stream column); only those with
+  // recorded data are offered — no empty-file dead-ends.
+  useEffect(() => {
+    const sessionId = recordingState.sessionId;
+    if (status !== 'ended' || !sessionId) {
+      setExportOptions([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/recording/${sessionId}/export-options`)
+      .then((r) => (r.ok ? r.json() : { streams: [] }))
+      .then((data) => {
+        if (!cancelled) setExportOptions(data.streams ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setExportOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [status, recordingState.sessionId]);
 
   // Only show on element page, or if recording is active for any element
   if (currentPage !== 'element' && !recordingState.active) return null;
@@ -97,6 +127,17 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     } finally {
       setLoading(false);
     }
+  }
+
+  function exportSession(stream: string) {
+    if (!recordingState.sessionId) return;
+    // Attachment response triggers a download without navigating away.
+    const a = document.createElement('a');
+    a.href = `/api/recording/${recordingState.sessionId}/export?stream=${encodeURIComponent(stream)}`;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   async function upload() {
@@ -165,6 +206,16 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
           >
             {loading ? 'Wird vorbereitet...' : 'Daten hochladen'}
           </button>
+          {exportOptions.map((opt) => (
+            <button
+              key={opt.stream}
+              style={{ ...styles.button, ...styles.exportButton }}
+              onClick={() => exportSession(opt.stream)}
+              disabled={loading}
+            >
+              {opt.label} exportieren
+            </button>
+          ))}
         </div>
       )}
 
@@ -264,6 +315,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   uploadButton: {
     backgroundColor: '#388e3c',
+    color: '#ffffff',
+  },
+  exportButton: {
+    backgroundColor: '#1565c0',
     color: '#ffffff',
   },
   retryButton: {

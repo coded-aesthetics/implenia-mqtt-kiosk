@@ -26,6 +26,13 @@ export interface SessionUploadGroup {
   readings: { id: number; valueNumeric: number | null; valueText: string | null; receivedAt: number }[];
 }
 
+export interface SessionReadingRow {
+  topic: string;
+  valueNumeric: number | null;
+  valueText: string | null;
+  receivedAt: number;
+}
+
 export interface BufferRow {
   id: number;
   topic: string;
@@ -155,6 +162,12 @@ const insertSessionReadingStmt = db.prepare(
 const getSessionReadingCountStmt = db.prepare(
   'SELECT COUNT(*) as count FROM session_readings WHERE session_id = ?'
 );
+const getAllSessionReadingsStmt = db.prepare(`
+  SELECT topic, value_numeric, value_text, received_at
+  FROM session_readings
+  WHERE session_id = ?
+  ORDER BY received_at ASC
+`);
 
 // Upload groups: get distinct sensor groups with pending readings
 const getUploadGroupsStmt = db.prepare(`
@@ -246,6 +259,19 @@ export function insertSessionReading(
 export function getSessionReadingCount(sessionId: number): number {
   const row = getSessionReadingCountStmt.get(sessionId) as { count: number };
   return row.count;
+}
+
+/** All readings for a session, regardless of upload status — used for export. */
+export function getAllSessionReadings(sessionId: number): SessionReadingRow[] {
+  const rows = getAllSessionReadingsStmt.all(sessionId) as {
+    topic: string; value_numeric: number | null; value_text: string | null; received_at: number;
+  }[];
+  return rows.map((r) => ({
+    topic: r.topic,
+    valueNumeric: r.value_numeric,
+    valueText: r.value_text,
+    receivedAt: r.received_at,
+  }));
 }
 
 export function getSessionUploadGroups(sessionId: number): SessionUploadGroup[] {

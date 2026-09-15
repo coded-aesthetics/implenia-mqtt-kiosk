@@ -17,6 +17,7 @@
     "@fastify/websocket": "^11.0.2",
     "better-sqlite3": "^11.8.1",
     "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
     "fastify": "^5.2.1",
     "mqtt": "^5.10.4",
     "pino": "^10.3.1",

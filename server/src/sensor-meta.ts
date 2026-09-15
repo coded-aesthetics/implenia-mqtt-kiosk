@@ -19,6 +19,7 @@ export interface CsvSensorRow {
   role: string;
   priority: string;
   alias: string;
+  stream: string;
 }
 
 export function parseSensorCsv(content: string): CsvSensorRow[] {
@@ -33,6 +34,7 @@ export function parseSensorCsv(content: string): CsvSensorRow[] {
     role: header.indexOf('Rolle'),
     priority: header.indexOf('Priorität'),
     alias: header.indexOf('Alias'),
+    stream: header.indexOf('Stream'),
   };
 
   return lines.slice(1).map((line) => {
@@ -45,6 +47,7 @@ export function parseSensorCsv(content: string): CsvSensorRow[] {
       role: cols[idx.role] ?? '',
       priority: cols[idx.priority] ?? '',
       alias: cols[idx.alias] ?? '',
+      stream: idx.stream >= 0 ? (cols[idx.stream] ?? '').trim() : '',
     };
   });
 }
@@ -94,4 +97,50 @@ export function getSensorMetaLookup(): Map<string, SensorMetaLookup> {
 
 export function getActiveVerfahren(): string {
   return ACTIVE_VERFAHREN;
+}
+
+export interface StreamSensor {
+  name: string;
+  unit: string;
+}
+
+/**
+ * The herstellen data streams, in canonical order. Mirrors implenia-web's
+ * `VALID_STREAMS` (`app/helpers/stream-csv.ts`) — the `Stream` column in the
+ * shared `*-sensors-herstellen.csv` assigns each sensor to one of these.
+ */
+export const STREAM_ORDER = ['hdi', 'ivl', 'result'] as const;
+
+/** German labels for the streams, mirroring implenia-web's `STREAM_LABELS`. */
+export const STREAM_LABELS: Record<string, string> = {
+  hdi: 'HDI-Daten',
+  ivl: 'Inklinometer',
+  result: 'Ergebnisdaten',
+};
+
+/**
+ * Ordered list of sensors belonging to a given stream (`hdi` | `ivl` | `result`)
+ * for the active verfahren, in CSV row order. Column headers for session-data
+ * export are derived from this — the names must match the shared
+ * `*-sensors-herstellen.csv` contract exactly.
+ */
+export function getStreamSensors(stream: string): StreamSensor[] {
+  const rows = loadSensorCsv(ACTIVE_VERFAHREN);
+  if (!rows) return [];
+  return rows
+    .filter((r) => r.stream === stream)
+    .map((r) => ({ name: r.name, unit: r.unit }));
+}
+
+/**
+ * The streams that the active verfahren defines (i.e. have at least one sensor
+ * assigned via the CSV `Stream` column), in canonical order. This is what
+ * "streams configured for the current machine" means — it is derived from the
+ * shared CSV contract, never hardcoded per machine type.
+ */
+export function getAvailableStreams(): string[] {
+  const rows = loadSensorCsv(ACTIVE_VERFAHREN);
+  if (!rows) return [];
+  const present = new Set(rows.map((r) => r.stream).filter(Boolean));
+  return STREAM_ORDER.filter((s) => present.has(s));
 }
