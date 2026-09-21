@@ -99,6 +99,14 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
 
   useEffect(() => { loadResetState(); }, [loadResetState]);
 
+  // The queue lives in another component's state, so nothing tells this card
+  // when the last comment goes out. Without this the block would stay up until
+  // a reload — a dead end in a screen whose whole job is getting unstuck.
+  useEffect(() => {
+    const id = setInterval(() => setPendingComments(pendingCommentCount()), 3000);
+    return () => clearInterval(id);
+  }, []);
+
   async function doReset() {
     setResetError(null);
     // Re-check right before the destructive call: a comment may have been
