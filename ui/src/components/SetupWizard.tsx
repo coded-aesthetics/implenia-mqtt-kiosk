@@ -22,13 +22,14 @@ interface Props {
   hasApiKey: boolean;
 }
 
-type Step = 'verfahren' | 'done';
+type Step = 'verfahren' | 'mqtt' | 'done';
 
 const STEP_TITLES: Record<Step, string> = {
   verfahren: 'Verfahren wählen',
+  mqtt: 'Datenquelle verbinden',
   done: 'Einrichtung abgeschlossen',
 };
-const STEP_ORDER: Step[] = ['verfahren', 'done'];
+const STEP_ORDER: Step[] = ['verfahren', 'mqtt', 'done'];
 
 export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
   const [step, setStep] = useState<Step>('verfahren');
@@ -37,6 +38,14 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // ── MQTT step ──
+  const [brokerUrl, setBrokerUrl] = useState('');
+  const [topics, setTopics] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [topicCount, setTopicCount] = useState<number | null>(null);
+  const [mqttSaved, setMqttSaved] = useState(false);
 
   useEffect(() => {
     fetch('/api/verfahren')
@@ -51,6 +60,87 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
         ),
       );
   }, []);
+
+  // Prefill from whatever is already configured, falling back to the Implenia
+  // MQTT box's default address so the common case is "confirm and continue".
+  useEffect(() => {
+    fetch('/api/config/mqtt')
+      .then(async (r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        const d = (await r.json()) as {
+          brokerUrl: string | null; topics: string | null;
+          defaultBrokerUrl: string; defaultTopics: string;
+        };
+        setBrokerUrl(d.brokerUrl ?? d.defaultBrokerUrl);
+        setTopics(d.topics ?? d.defaultTopics);
+      })
+      .catch(() => {
+        setBrokerUrl('mqtt://192.168.2.1:1883');
+        setTopics('#');
+      });
+  }, []);
+
+  // While on the MQTT step, poll how many topics have actually arrived. A
+  // successful connection with zero topics is its own kind of problem.
+  useEffect(() => {
+    if (step !== 'mqtt' || !mqttSaved) return;
+    let cancelled = false;
+    const poll = () => {
+      fetch('/api/config/mqtt/topics')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (!cancelled && d) setTopicCount(d.count); })
+        .catch(() => {});
+    };
+    poll();
+    const timer = setInterval(poll, 3000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [step, mqttSaved]);
+
+  async function testBroker() {
+    if (testing) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/config/mqtt/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brokerUrl }),
+      });
+      const body = (await res.json()) as { ok?: boolean; error?: string; brokerUrl?: string };
+      setTestResult(
+        body.ok
+          ? { ok: true, message: `Verbunden mit ${body.brokerUrl}` }
+          : { ok: false, message: body.error ?? 'Verbindung fehlgeschlagen.' },
+      );
+    } catch {
+      setTestResult({ ok: false, message: 'Die Anwendung ist nicht erreichbar.' });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function saveMqtt() {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await fetch('/api/config/mqtt', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brokerUrl, topics }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setSaveError(body.error ?? 'Die Einstellungen konnten nicht gespeichert werden.');
+        return;
+      }
+      setMqttSaved(true);
+    } catch {
+      setSaveError('Die Anwendung ist nicht erreichbar. Bitte erneut versuchen.');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function confirmVerfahren() {
     if (!selected || saving) return;
@@ -71,7 +161,7 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
         return;
       }
       onVerfahrenSet();
-      setStep('done');
+      setStep('mqtt');
     } catch {
       setSaveError(
         'Die Anwendung ist nicht erreichbar. Bitte die Verbindung prüfen und erneut versuchen.',
@@ -139,6 +229,72 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
           </>
         )}
 
+        {step === 'mqtt' && (
+          <>
+            <h1 style={styles.question}>Womit ist die Maschine verbunden?</h1>
+
+            <label style={styles.fieldLabel}>
+              Adresse der MQTT-Box
+              <input
+                value={brokerUrl}
+                onChange={(e) => { setBrokerUrl(e.target.value); setTestResult(null); setMqttSaved(false); }}
+                style={styles.input}
+                inputMode="url"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            <div style={styles.fieldHint}>
+              Voreingestellt ist die Standard-Adresse der Implenia MQTT-Box. Nur
+              ändern, wenn die Box anders eingerichtet wurde.
+            </div>
+
+            <label style={styles.fieldLabel}>
+              Topic-Filter
+              <input
+                value={topics}
+                onChange={(e) => { setTopics(e.target.value); setMqttSaved(false); }}
+                style={styles.input}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            <div style={styles.fieldHint}>
+              „#" empfängt alle Topics. Das ist bei der Einrichtung gewollt —
+              so werden auch unbekannte Sensornamen sichtbar.
+            </div>
+
+            {testResult && (
+              <div style={testResult.ok ? styles.success : styles.error}>
+                {testResult.message}
+              </div>
+            )}
+            {saveError && <div style={styles.error}>{saveError}</div>}
+            {mqttSaved && (
+              <div style={styles.success}>
+                Gespeichert.{' '}
+                {topicCount === null
+                  ? 'Empfangene Topics werden geprüft...'
+                  : topicCount > 0
+                    ? `${topicCount} Topics empfangen.`
+                    : 'Noch keine Topics empfangen — läuft die Maschine bereits?'}
+              </div>
+            )}
+
+            <div style={styles.doneActions}>
+              <button onClick={testBroker} disabled={testing} style={styles.secondaryButton}>
+                {testing ? 'Wird geprüft...' : 'Verbindung testen'}
+              </button>
+              <button onClick={saveMqtt} disabled={saving} style={styles.confirmButton}>
+                {saving ? 'Wird gespeichert...' : 'Speichern'}
+              </button>
+              <button onClick={() => setStep('done')} style={styles.secondaryButton}>
+                {mqttSaved ? 'Weiter' : 'Überspringen'}
+              </button>
+            </div>
+          </>
+        )}
+
         {step === 'done' && (
           <>
             <h1 style={styles.question}>Verfahren festgelegt</h1>
@@ -146,6 +302,16 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
               <div style={styles.doneRow}>
                 <span style={styles.doneCheck}>✓</span>
                 <span>Verfahren: <strong>{selectedLabel}</strong></span>
+              </div>
+              <div style={styles.doneRow}>
+                <span style={mqttSaved ? styles.doneCheck : styles.doneOpen}>
+                  {mqttSaved ? '✓' : '!'}
+                </span>
+                <span>
+                  {mqttSaved
+                    ? <>Datenquelle: <strong>{brokerUrl}</strong></>
+                    : 'Datenquelle noch nicht eingerichtet — ohne sie kommen keine Messwerte an'}
+                </span>
               </div>
               <div style={styles.doneRow}>
                 <span style={hasApiKey ? styles.doneCheck : styles.doneOpen}>
@@ -350,6 +516,38 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: 'var(--color-warning)',
     color: '#fff',
     fontWeight: 700,
+  },
+  fieldLabel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'var(--space-sm)',
+    fontSize: 'var(--font-base)',
+    fontWeight: 600,
+    color: 'var(--text-primary)',
+  },
+  input: {
+    minHeight: 'var(--tap-min)',
+    padding: '0 var(--space-md)',
+    fontSize: 'var(--font-md)',
+    fontFamily: 'var(--font-mono)',
+    color: 'var(--text-primary)',
+    backgroundColor: 'var(--surface-0)',
+    border: '2px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+  },
+  fieldHint: {
+    fontSize: 'var(--font-sm)',
+    lineHeight: 1.4,
+    color: 'var(--text-muted)',
+    marginTop: 'calc(-1 * var(--space-sm))',
+  },
+  success: {
+    padding: 'var(--space-md)',
+    fontSize: 'var(--font-base)',
+    lineHeight: 1.4,
+    color: 'var(--text-primary)',
+    backgroundColor: 'var(--color-success-muted)',
+    borderRadius: 'var(--radius-sm)',
   },
   hint: {
     fontSize: 'var(--font-base)',

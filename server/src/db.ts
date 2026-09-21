@@ -208,6 +208,47 @@ export function pruneBuffer(maxAgeMs = 86_400_000): void {
   pruneBufferStmt.run(Date.now() - maxAgeMs);
 }
 
+/**
+ * Distinct topics observed since `since`, with their most recent payload.
+ *
+ * Every message is written to mqtt_buffer before any sensor mapping is
+ * attempted, so this sees topics the kiosk cannot yet match to a sensor —
+ * which is exactly what the setup wizard needs to show.
+ */
+const getObservedTopicsStmt = db.prepare(`
+  SELECT b.topic,
+         b.payload      AS last_payload,
+         b.received_at  AS last_seen,
+         c.n            AS count
+  FROM mqtt_buffer b
+  JOIN (
+    SELECT topic, MAX(id) AS max_id, COUNT(*) AS n
+    FROM mqtt_buffer
+    WHERE received_at >= ?
+    GROUP BY topic
+  ) c ON c.max_id = b.id
+  ORDER BY b.topic
+`);
+
+export interface ObservedTopic {
+  topic: string;
+  lastPayload: string;
+  lastSeen: number;
+  count: number;
+}
+
+export function getObservedTopics(since: number): ObservedTopic[] {
+  const rows = getObservedTopicsStmt.all(since) as {
+    topic: string; last_payload: string; last_seen: number; count: number;
+  }[];
+  return rows.map((r) => ({
+    topic: r.topic,
+    lastPayload: r.last_payload,
+    lastSeen: r.last_seen,
+    count: r.count,
+  }));
+}
+
 export function getBufferRange(from: number, to: number): BufferRow[] {
   return getBufferRangeStmt.all(from, to) as BufferRow[];
 }

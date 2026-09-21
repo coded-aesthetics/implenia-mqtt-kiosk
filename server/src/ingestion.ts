@@ -35,6 +35,17 @@ class DataIngestion extends EventEmitter {
     this.activeSession = null;
   }
 
+  /**
+   * Cycle the data source so it picks up changed settings. The MQTT broker URL
+   * is read in start() rather than frozen at import, so changing it in the
+   * setup wizard only needs this — not a process restart. The 'reading'
+   * listener lives on the source's emitter and survives the cycle.
+   */
+  restartSource(): void {
+    this.source.stop();
+    this.source.start();
+  }
+
   start(): void {
     this.source.on('reading', (reading: SensorReading) => {
       insertBuffer(reading.topic, reading.payload);

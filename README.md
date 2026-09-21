@@ -43,8 +43,8 @@ The UI dev server runs on `http://localhost:5173` and proxies API/WS requests to
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `MQTT_BROKER_URL` | No | — | MQTT broker URL (e.g. `mqtt://192.168.1.50:1883`). Normally set by the setup wizard; without it the MQTT source stays disconnected |
-| `MQTT_TOPICS` | No | — | Comma-separated MQTT topics. Normally set by the setup wizard |
+| `MQTT_BROKER_URL` | No | — | MQTT broker URL. Pre-seed only — a value stored by the setup wizard wins. Without either, the MQTT source stays disconnected |
+| `MQTT_TOPICS` | No | — | Comma-separated subscription filters. Pre-seed only — see `MQTT_BROKER_URL` |
 | `IMPLENIA_API_URL` | No | — | Implenia REST API base URL (also configurable in UI) |
 | `IMPLENIA_API_KEY` | No | — | Bearer token for the API (also configurable in UI) |
 | `GITHUB_OWNER` | No | — | GitHub org/user for update checks. Baked into the release image; without it GitHub polling is skipped and USB updates still work |
@@ -120,6 +120,25 @@ PUT  /api/verfahren/active      → { verfahren } — write-once, 409 if already
 Until a Verfahren is set, `App` renders `SetupWizard` instead of the whole app — not as a modal over it, but in place of it. The gate is checked before any routing, so there is no way into the app around it. If the state cannot be determined (server unreachable), the UI says so and retries rather than assuming "not set up" and showing the wizard by mistake.
 
 The wizard is **service-personnel UI** and is deliberately exempt from the "no modals or multi-step flows" rule in `CLAUDE.md`, which is written for the worker-facing screens. Glove-sized tap targets, contrast, German text and the 1024x768 budget still apply. Each step commits its own setting as it completes, so an interrupted setup resumes instead of starting over.
+
+### MQTT settings
+
+Broker address and subscription filter live in `meta` (`mqtt_broker_url`, `mqtt_topics`), collected by the wizard. The env vars are a pre-seed for a prepared image; the stored value wins, matching how `IMPLENIA_API_URL` already behaves.
+
+```
+GET  /api/config/mqtt          → current settings, defaults, connection state
+POST /api/config/mqtt/test     → { brokerUrl } — try it without saving
+PUT  /api/config/mqtt          → { brokerUrl, topics } — save and reconnect
+GET  /api/config/mqtt/topics   → topics actually observed (default: last 5 min)
+```
+
+`normalizeBrokerUrl()` accepts what a technician would type — `192.168.2.1`, `192.168.2.1:1884`, or a full URL — and fills in the scheme and default port. This matters because a malformed broker URL is still a hard startup failure, so it is validated before anything is written.
+
+The wizard defaults to **`mqtt://192.168.2.1:1883`**, the Implenia MQTT box's default address, and to the **`#`** filter. The wide filter is deliberate: on a new machine the topic naming is unknown, and a narrow filter makes unmatched topics invisible rather than visible-but-unassigned.
+
+Saving calls `ingestion.restartSource()`, which cycles the data source in place. The broker URL is read in `start()` rather than frozen at import, so changing it needs no process restart.
+
+`GET /api/config/mqtt/topics` reads `mqtt_buffer`, which is written before any sensor mapping is attempted — so it shows topics the kiosk cannot match to a sensor. That is the foundation for the sensor assignment screen.
 
 ## Session Data Export
 
