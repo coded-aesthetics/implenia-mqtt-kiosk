@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { DataSource, SensorReading } from './data-source.js';
 import { insertBuffer, pruneBuffer, insertSessionReading } from './db.js';
 import { parsePayload } from './parse-payload.js';
+import { getResolverContext, resolveSensorKey } from './topic-resolver.js';
 import { mqttSource } from './mqtt.js';
 
 export interface SensorMapEntry {
@@ -53,8 +54,11 @@ class DataIngestion extends EventEmitter {
       this.emit('reading', reading);
 
       if (this.activeSession) {
-        const topicSuffix = reading.topic.split('/').pop()?.toLowerCase() ?? '';
-        const mapping = this.activeSession.sensorMap.get(topicSuffix);
+        // Overrides and the shipped topic map resolve boxes whose topic names
+        // differ from the sensor names; an unresolved topic still gets stored,
+        // just without a sensor id — and is therefore never uploaded.
+        const key = resolveSensorKey(reading.topic, getResolverContext());
+        const mapping = key ? this.activeSession.sensorMap.get(key) : undefined;
         const { valueNumeric, valueText } = parsePayload(reading.payload);
 
         insertSessionReading(

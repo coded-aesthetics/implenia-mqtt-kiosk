@@ -140,6 +140,28 @@ Saving calls `ingestion.restartSource()`, which cycles the data source in place.
 
 `GET /api/config/mqtt/topics` reads `mqtt_buffer`, which is written before any sensor mapping is attempted — so it shows topics the kiosk cannot match to a sensor. That is the foundation for the sensor assignment screen.
 
+### Topic assignment
+
+An MQTT reading reaches its sensor by resolving the topic to a sensor name, in this order (`server/src/topic-resolver.ts`):
+
+1. **`topic_overrides`** — wired on site, highest priority
+2. **`server/assets/topic-maps/<verfahren>.json`** — shipped with the release
+3. **The topic's last segment equals the sensor name** — the no-configuration case
+
+```
+GET    /api/config/topic-overrides          → expected sensors, what feeds each, and how it was bound
+PUT    /api/config/topic-overrides          → { topic, sensorName }
+DELETE /api/config/topic-overrides/:topic
+```
+
+Overrides win so a stale shipped map can never override a human decision. `PUT` rejects a sensor name that does not exist for the active Verfahren — a typo there would otherwise drop that sensor's data at upload time with no error anywhere. Binding a sensor releases its previous topic, so two topics can never feed one sensor and interleave.
+
+Overrides are keyed by the **full topic** the technician saw, so an override does not leak to a different prefix; shipped-map keys may be either a full topic or a bare last segment, and prefix-free keys survive a site changing its topic prefix.
+
+**Why an unresolved topic matters.** It is still buffered and broadcast live, but stored with a null `sensor_id` — and `getSessionUploadGroups` filters those out. So the data appears on screen, the upload reports success, and nothing is ever sent. This resolution chain, and the assignment screen on top of it, exist to make that visible.
+
+This is deliberately *not* in the sensor CSV: implenia-web and implenia-machine-backend never see MQTT topics, and it is unrelated to the CSV's `Alias` column, which carries a sensor's legacy name on the platform.
+
 ## Session Data Export
 
 A completed recording can be exported to Excel files for offline import into the implenia-web DSV widget — the offline counterpart to the batch upload (record → export to USB → import in the web app).

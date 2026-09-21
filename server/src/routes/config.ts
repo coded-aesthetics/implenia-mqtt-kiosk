@@ -1,6 +1,9 @@
 import mqtt from 'mqtt';
 import type { FastifyInstance } from 'fastify';
-import { getMeta, setMeta, deleteMeta, getObservedTopics } from '../db.js';
+import {
+  getMeta, setMeta, deleteMeta, getObservedTopics,
+  getTopicOverrides, setTopicOverride, deleteTopicOverride,
+} from '../db.js';
 import { getApiConfig, fetchImplenia } from '../implenia-api.js';
 import { config as envConfig } from '../config.js';
 import { ingestion } from '../ingestion.js';
@@ -12,6 +15,8 @@ import {
   normalizeTopics,
   setMqttSettings,
 } from '../mqtt-config.js';
+import { getActiveVerfahren, loadSensorCsv } from '../sensor-meta.js';
+import { clearResolverCache, loadTopicMap } from '../topic-resolver.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('config');
@@ -160,6 +165,88 @@ export function registerConfigRoutes(app: FastifyInstance): void {
       const windowMs = Number(request.query.since ?? '') || 5 * 60_000;
       const topics = getObservedTopics(Date.now() - windowMs);
       return { windowMs, count: topics.length, topics };
+    },
+  );
+
+  // ── Topic assignment ────────────────────────────────────────────────────
+
+  /**
+   * Everything the assignment screen needs: the sensors this Verfahren
+   * expects, which topic currently feeds each, and where that binding came
+   * from (shipped map vs. wired on site).
+   */
+  app.get('/api/config/topic-overrides', async () => {
+    const verfahren = getActiveVerfahren();
+    const shipped = verfahren ? loadTopicMap(verfahren) : new Map<string, string>();
+    const overrides = getTopicOverrides();
+
+    const boundBySensor = new Map<string, { topic: string; source: 'override' | 'shipped' }>();
+    for (const [topic, sensorName] of shipped) {
+      boundBySensor.set(sensorName.toLowerCase(), { topic, source: 'shipped' });
+    }
+    // Overrides win, mirroring resolveSensorKey().
+    for (const o of overrides) {
+      boundBySensor.set(o.sensorName.toLowerCase(), { topic: o.topic, source: 'override' });
+    }
+
+    const rows = verfahren ? loadSensorCsv(verfahren) ?? [] : [];
+    const sensors = rows
+      .filter((r) => r.source === 'mqtt')
+      .map((r) => {
+        const bound = boundBySensor.get(r.name.toLowerCase());
+        return {
+          name: r.name,
+          unit: r.unit,
+          priority: r.priority,
+          topic: bound?.topic ?? null,
+          // "name" = resolves already because the topic equals the sensor name.
+          boundBy: bound?.source ?? 'name',
+        };
+      });
+
+    return { verfahren, sensors, overrides };
+  });
+
+  app.put<{ Body: { topic?: string; sensorName?: string } }>(
+    '/api/config/topic-overrides',
+    async (request, reply) => {
+      const topic = request.body?.topic?.trim();
+      const sensorName = request.body?.sensorName?.trim();
+      if (!topic || !sensorName) {
+        return reply.status(400).send({ error: 'Topic und Sensorname sind erforderlich.' });
+      }
+
+      const verfahren = getActiveVerfahren();
+      if (!verfahren) {
+        return reply.status(409).send({
+          error: 'Es ist noch kein Verfahren eingerichtet. Bitte zuerst die Einrichtung abschließen.',
+        });
+      }
+
+      // Guard against binding to a sensor that does not exist for this
+      // Verfahren — a typo here would silently drop data at upload time.
+      const known = (loadSensorCsv(verfahren) ?? []).some((r) => r.name === sensorName);
+      if (!known) {
+        return reply.status(400).send({
+          error: `„${sensorName}" ist kein Sensor dieses Verfahrens. Bitte einen Sensor aus der Liste wählen.`,
+        });
+      }
+
+      setTopicOverride(topic, sensorName);
+      clearResolverCache();
+      log.info('Topic %s assigned to sensor %s', topic, sensorName);
+      return reply.send({ topic, sensorName });
+    },
+  );
+
+  app.delete<{ Params: { topic: string } }>(
+    '/api/config/topic-overrides/:topic',
+    async (request, reply) => {
+      const topic = decodeURIComponent(request.params.topic);
+      deleteTopicOverride(topic);
+      clearResolverCache();
+      log.info('Topic assignment removed for %s', topic);
+      return reply.send({ ok: true });
     },
   );
 

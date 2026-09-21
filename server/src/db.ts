@@ -111,6 +111,12 @@ db.exec(`
     type  TEXT    NOT NULL DEFAULT 'elvis'
   );
 
+  CREATE TABLE IF NOT EXISTS topic_overrides (
+    topic       TEXT    PRIMARY KEY,
+    sensor_name TEXT    NOT NULL,
+    created_at  INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS sensor_mappings (
     device_id   INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
     value_index INTEGER NOT NULL CHECK(value_index >= 0 AND value_index < 15),
@@ -412,6 +418,49 @@ export function deleteDevice(id: number): void {
 }
 
 // --- Sensor mapping functions ---
+
+// Topic overrides: technician-assigned MQTT topic → sensor name
+const getTopicOverridesStmt = db.prepare(
+  'SELECT topic, sensor_name, created_at FROM topic_overrides ORDER BY topic'
+);
+const setTopicOverrideStmt = db.prepare(
+  `INSERT INTO topic_overrides (topic, sensor_name, created_at) VALUES (?, ?, ?)
+   ON CONFLICT(topic) DO UPDATE SET sensor_name = excluded.sensor_name`
+);
+const deleteTopicOverrideStmt = db.prepare('DELETE FROM topic_overrides WHERE topic = ?');
+const deleteOverridesForSensorStmt = db.prepare(
+  'DELETE FROM topic_overrides WHERE sensor_name = ?'
+);
+
+export interface TopicOverride {
+  topic: string;
+  sensorName: string;
+  createdAt: number;
+}
+
+export function getTopicOverrides(): TopicOverride[] {
+  const rows = getTopicOverridesStmt.all() as {
+    topic: string; sensor_name: string; created_at: number;
+  }[];
+  return rows.map((r) => ({ topic: r.topic, sensorName: r.sensor_name, createdAt: r.created_at }));
+}
+
+/**
+ * Bind a topic to a sensor. A sensor can only be bound once — binding it to a
+ * new topic releases the old one, so two topics can never feed the same sensor
+ * and silently interleave.
+ */
+export function setTopicOverride(topic: string, sensorName: string): void {
+  const tx = db.transaction(() => {
+    deleteOverridesForSensorStmt.run(sensorName);
+    setTopicOverrideStmt.run(topic, sensorName, Date.now());
+  });
+  tx();
+}
+
+export function deleteTopicOverride(topic: string): void {
+  deleteTopicOverrideStmt.run(topic);
+}
 
 const getDeviceMappingsStmt = db.prepare(
   'SELECT * FROM sensor_mappings WHERE device_id = ? ORDER BY value_index'

@@ -44,12 +44,19 @@ Machine ──MQTT──► kiosk ingestion ──► SQLite session ──► b
                                                                                    + Herstellprotokoll
 ```
 
-There is **no serial path and no channel mapping**. The MQTT topic's last
-segment is the sensor name, matched case-insensitively against the sensor
-definitions fetched from the API (`server/src/ingestion.ts`). The `Alias`
-column is empty for every Injektionsbohren sensor, so topics must end in the
-exact CSV names — including the trailing dot in `Vorschubgeschw.` and the
-capitalisation of `DurchflussB` / `DurchflussV`.
+There is **no serial path and no channel mapping**. The MQTT topic resolves to
+a sensor name through `server/src/topic-resolver.ts`: a technician's override
+first, then the shipped `assets/topic-maps/injektionsbohren.json`, then the
+topic's last segment matched case-insensitively against the sensor definitions
+fetched from the API.
+
+The box publishes consistent names per sensor, but the final names were not
+known when this was built, so the shipped map starts empty. When they arrive it
+is a data change — fill the file, ship a release — and anything still unmatched
+is wired on site. Names need no particular case (matching lowercases both
+sides), but the trailing dot in `Vorschubgeschw.` and the space in
+`Druck Hammer` are real: a topic that misses them resolves to nothing and that
+sensor's readings are silently never uploaded.
 
 ## Sensors
 
