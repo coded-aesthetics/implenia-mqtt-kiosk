@@ -59,6 +59,11 @@ export interface MappingRow {
 
 const DB_PATH = config.DB_PATH ?? path.join(process.cwd(), 'kiosk.db');
 
+/** Which database this process opened. Lets tests refuse to run on a real one. */
+export function databasePath(): string {
+  return DB_PATH;
+}
+
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');

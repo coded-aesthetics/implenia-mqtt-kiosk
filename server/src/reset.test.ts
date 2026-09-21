@@ -12,8 +12,14 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 let db: typeof import('./db.js');
 
 beforeAll(async () => {
-  process.env.DB_PATH = ':memory:';
   db = await import('./db.js');
+  // Interlock, belt and braces with vitest.config.ts: this suite deletes
+  // every row it can reach, so it must never run against a real database.
+  if (db.databasePath() !== ':memory:') {
+    throw new Error(
+      `Refusing to run destructive tests against "${db.databasePath()}" — expected :memory:`,
+    );
+  }
 });
 
 beforeEach(() => {

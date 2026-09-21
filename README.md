@@ -65,7 +65,7 @@ The UI dev server runs on `http://localhost:5173` and proxies API/WS requests to
 | `GITHUB_REPO` | No | — | GitHub repo name for update checks. See `GITHUB_OWNER` |
 | `GITHUB_TOKEN` | No | — | Token for private repo access |
 | `UPDATE_CHECK_INTERVAL_MS` | No | `3500000` | Update check interval (ms) |
-| `DB_PATH` | No | `<cwd>/kiosk.db` | SQLite database path. `:memory:` for an ephemeral DB (used by integration tests) |
+| `DB_PATH` | No | `<cwd>/kiosk.db` | SQLite database path. `:memory:` for an ephemeral DB. `server/vitest.config.ts` forces this for every test — db.ts opens its connection at import, so setting it inside a test file is too late and a destructive test would hit the real kiosk.db |
 | `PORT` | No | `3000` | HTTP server port |
 | `NODE_ENV` | No | `production` | `development` / `production` / `test` |
 | `CONNECTIVITY_PROBE_HOST` | No | `8.8.8.8` | DNS host for connectivity checks |

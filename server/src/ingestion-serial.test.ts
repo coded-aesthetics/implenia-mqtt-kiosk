@@ -17,7 +17,6 @@ let deviceSourceMod: typeof import('./device-source.js');
 let deviceManagerMod: typeof import('./device-manager.js');
 
 beforeAll(async () => {
-  process.env.DB_PATH = ':memory:';
   db = await import('./db.js');
   ingestionMod = await import('./ingestion.js');
   deviceSourceMod = await import('./device-source.js');
