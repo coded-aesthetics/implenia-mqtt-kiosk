@@ -136,6 +136,18 @@ Until a Verfahren is set, `App` renders `SetupWizard` instead of the whole app â
 
 The wizard is **service-personnel UI** and is deliberately exempt from the "no modals or multi-step flows" rule in `CLAUDE.md`, which is written for the worker-facing screens. Glove-sized tap targets, contrast, German text and the 1024x768 budget still apply. Each step commits its own setting as it completes, so an interrupted setup resumes instead of starting over.
 
+### Resetting the setup
+
+```bash
+./scripts/reset-setup.sh          # asks first
+./scripts/reset-setup.sh --yes    # no prompt
+DB_PATH=/path/to/kiosk.db ./scripts/reset-setup.sh
+```
+
+Clears the active Verfahren, the transport choice, the MQTT settings and the topic overrides, so the wizard runs again. **Keeps** recorded sessions and readings, serial devices and channel mappings, and the API key. Restart the server afterwards â€” the Verfahren and transport are cached in memory.
+
+This is a development and service helper, not the kiosk's reset feature. The in-app reset still has to refuse to run while un-uploaded readings exist and confirm by tap; this script does neither, which is why it is not reachable from the UI. Since the Verfahren is write-once, this is currently the only way to choose a different one.
+
 ### MQTT settings
 
 Broker address and subscription filter live in `meta` (`mqtt_broker_url`, `mqtt_topics`), collected by the wizard. The env vars are a pre-seed for a prepared image; the stored value wins, matching how `IMPLENIA_API_URL` already behaves.
