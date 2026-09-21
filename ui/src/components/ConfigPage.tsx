@@ -102,7 +102,7 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
 
   // Voice feature toggle
   const [voiceEnabled, setVoiceEnabled] = useState(
-    () => localStorage.getItem('voiceEnabled') !== 'false', // default true for backwards compatibility
+    () => localStorage.getItem('voiceEnabled') === 'true', // opt-in: off until explicitly enabled
   );
 
   function toggleVoice() {

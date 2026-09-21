@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { createModel, type Model, type KaldiRecognizer } from 'vosk-browser';
+import type { Model, KaldiRecognizer } from 'vosk-browser';
 import { elementNameVariants } from '../voice/elementNameVariants';
 
 export type SpeechStatus = 'idle' | 'listening' | 'result' | 'error';
@@ -164,18 +164,22 @@ let modelFailed = false;
 
 export function getModel(): Promise<Model> {
   if (!modelPromise) {
-    modelPromise = createModel(MODEL_URL, -1).catch((err) => {
-      console.error('[Vosk] Failed to load model:', err);
-      modelFailed = true;
-      throw err;
-    });
+    // Dynamic import keeps the ~5.8 MB vosk-browser WASM library out of the
+    // main bundle — it loads lazily only when voice recognition first starts.
+    modelPromise = import('vosk-browser')
+      .then(({ createModel }) => createModel(MODEL_URL, -1))
+      .catch((err) => {
+        console.error('[Vosk] Failed to load model:', err);
+        modelFailed = true;
+        throw err;
+      });
   }
   return modelPromise;
 }
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useVoskRecognition(elementNames: string[]) {
+export function useVoskRecognition(elementNames: string[], enabled: boolean) {
   const [state, setState] = useState<SpeechState>({
     status: 'idle',
     transcript: null,
@@ -195,14 +199,17 @@ export function useVoskRecognition(elementNames: string[]) {
     grammarRef.current = buildGrammar(elementNames);
   }, [elementNames]);
 
-  // Load model on mount
+  // Preload the model only when voice is enabled. This keeps the ~5.8 MB vosk
+  // engine chunk and 46 MB model download from ever loading on kiosks that
+  // aren't configured for voice assistance.
   useEffect(() => {
+    if (!enabled) return;
     getModel()
       .then(() => setModelReady(true))
       .catch(() => setModelReady(false));
-  }, []);
+  }, [enabled]);
 
-  const isSupported = !modelFailed && typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
+  const isSupported = enabled && !modelFailed && typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
 
   const startListening = useCallback(async () => {
     if (!isSupported) return;

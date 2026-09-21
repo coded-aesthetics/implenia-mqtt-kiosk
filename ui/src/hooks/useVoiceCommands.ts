@@ -37,7 +37,9 @@ function useLocalStorageSetting(
 function useVoiceEnabledSetting(): boolean {
   return useLocalStorageSetting(
     'voiceEnabledChanged',
-    () => localStorage.getItem('voiceEnabled') !== 'false', // default true for backwards compatibility
+    // Opt-in: voice stays off (and its ~5.8 MB engine + 46 MB model never load)
+    // until explicitly enabled in the config page.
+    () => localStorage.getItem('voiceEnabled') === 'true',
   );
 }
 
@@ -51,7 +53,7 @@ function useMagicWordSetting(): boolean {
 export function useVoiceCommands(ctx: VoiceContext) {
   const voiceEnabled = useVoiceEnabledSetting();
   const { state: speech, startListening: pttStart, stopListening: pttStop, reset, isSupported } =
-    useVoskRecognition(ctx.elementNames);
+    useVoskRecognition(ctx.elementNames, voiceEnabled);
   const [feedback, setFeedback] = useState<VoiceFeedback>(null);
   const [pttActive, setPttActive] = useState(false);
 
