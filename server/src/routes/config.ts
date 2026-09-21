@@ -16,7 +16,7 @@ import {
   setMqttSettings,
 } from '../mqtt-config.js';
 import { getActiveVerfahren, loadSensorCsv } from '../sensor-meta.js';
-import { clearResolverCache, loadTopicMap } from '../topic-resolver.js';
+import { clearResolverCache, loadTopicMap, getResolverContext, resolveSensorKey } from '../topic-resolver.js';
 import {
   TRANSPORTS, getTransport, isTransportConfigured, isValidTransport, setTransport,
   TransportAlreadySetError, clearTransportCache,
@@ -271,13 +271,25 @@ export function registerConfigRoutes(app: FastifyInstance): void {
     const shipped = verfahren ? loadTopicMap(verfahren) : new Map<string, string>();
     const overrides = getTopicOverrides();
 
-    const boundBySensor = new Map<string, { topic: string; source: 'override' | 'shipped' }>();
+    const boundBySensor = new Map<string, { topic: string; source: 'override' | 'shipped' | 'name' }>();
     for (const [topic, sensorName] of shipped) {
       boundBySensor.set(sensorName.toLowerCase(), { topic, source: 'shipped' });
     }
     // Overrides win, mirroring resolveSensorKey().
     for (const o of overrides) {
       boundBySensor.set(o.sensorName.toLowerCase(), { topic: o.topic, source: 'override' });
+    }
+
+    // A topic whose last segment already equals a sensor name needs no
+    // binding — it resolves today. Showing it as "not assigned" would send a
+    // technician off rebinding sensors that already work, so resolve what is
+    // actually arriving and report that too.
+    const observed = getObservedTopics(Date.now() - 5 * 60_000);
+    const ctx = getResolverContext();
+    for (const t of observed) {
+      const key = resolveSensorKey(t.topic, ctx);
+      if (!key || boundBySensor.has(key)) continue;
+      boundBySensor.set(key, { topic: t.topic, source: 'name' });
     }
 
     const rows = verfahren ? loadSensorCsv(verfahren) ?? [] : [];
@@ -290,8 +302,7 @@ export function registerConfigRoutes(app: FastifyInstance): void {
           unit: r.unit,
           priority: r.priority,
           topic: bound?.topic ?? null,
-          // "name" = resolves already because the topic equals the sensor name.
-          boundBy: bound?.source ?? 'name',
+          boundBy: bound?.source ?? 'none',
         };
       });
 

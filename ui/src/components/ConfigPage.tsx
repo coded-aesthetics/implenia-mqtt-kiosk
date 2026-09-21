@@ -3,6 +3,7 @@ import type { ConfigState } from '../hooks/useImplenia';
 import type { DeviceFrame } from '../hooks/useWebSocket';
 import { UpdateUpload } from './UpdateUpload';
 import { MqttSettings } from './MqttSettings';
+import { TopicAssignment } from './TopicAssignment';
 import { DeviceConfig } from './DeviceConfig';
 
 interface Props {
@@ -381,14 +382,25 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
       </div>
 
       {transport === 'mqtt' && (
-        <div style={styles.cardWrapper}>
-          <div style={styles.card}>
-            <div style={styles.statusRow}>
-              <span style={styles.label}>MQTT-Einstellungen</span>
+        <>
+          <div style={styles.cardWrapper}>
+            <div style={styles.card}>
+              <div style={styles.statusRow}>
+                <span style={styles.label}>MQTT-Einstellungen</span>
+              </div>
+              <MqttSettings />
             </div>
-            <MqttSettings />
           </div>
-        </div>
+
+          <div style={styles.cardWrapper}>
+            <div style={styles.card}>
+              <div style={styles.statusRow}>
+                <span style={styles.label}>Sensorzuordnung</span>
+              </div>
+              <TopicAssignment />
+            </div>
+          </div>
+        </>
       )}
 
       {transport === 'serial' && (
