@@ -11,7 +11,7 @@ the per-Verfahren page.
 | Verfahren | Page | Kiosk status |
 |---|---|---|
 | Injektionsbohren | [injektionsbohren.md](injektionsbohren.md) | **Next field deployment** — MQTT, simplest workflow |
-| DSV (Düsenstrahlverfahren) | — | Implemented; currently the hardcoded default |
+| DSV (Düsenstrahlverfahren) | — | Implemented; the first supported Verfahren |
 | Ankerbohren | — | CSV only, no kiosk work yet |
 | Grosspfahlbohren | — | Placeholder CSV (`Kommentar` only) |
 
@@ -96,23 +96,22 @@ Framework code must never branch on the Verfahren. It reads the CSV and acts on
 Use-case code that legitimately varies: phase semantics, derived calculations,
 protocol layout, export column formulas.
 
-### The one place the Verfahren is still hardcoded
+### How the active Verfahren is resolved
 
-```ts
-// server/src/sensor-meta.ts
-const ACTIVE_VERFAHREN = 'dsv';   // "Hardcoded until the setup wizard lets service personnel choose"
+It is stored in the database (`meta.active_verfahren`) and read through
+`getActiveVerfahren()` in `server/src/sensor-meta.ts`, which returns `null`
+on a machine that has not been set up yet. `setActiveVerfahren()` is
+**write-once** — sessions, channel mappings and export columns are all
+interpreted through it, so switching it under existing data would silently
+reinterpret that data. Changing it requires a full reset.
+
+```
+GET  /api/verfahren/active   → { verfahren, label }; null until set up
+PUT  /api/verfahren/active   → write-once, 409 if already set
 ```
 
-and in the UI:
-
-```ts
-// ui/src/components/ChannelPicker.tsx
-fetch('/api/verfahren/dsv/sensors?source=mqtt')
-```
-
-Everything else already flows from the CSV. Making the active Verfahren a
-runtime setting is the single highest-leverage change for supporting a second
-machine type.
+While unset, `getSensorMetaLookup()` returns an empty map: sensors fall back
+to their API metadata, so the live view degrades rather than breaking.
 
 ---
 

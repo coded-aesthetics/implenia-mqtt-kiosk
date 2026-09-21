@@ -255,12 +255,11 @@ What already works, unchanged, for Injektionsbohren:
 
 What is missing:
 
-1. **`ACTIVE_VERFAHREN` is hardcoded to `'dsv'`** (`server/src/sensor-meta.ts:12`).
-   Every `Priorität` / `Rolle` / unit lookup resolves against the DSV CSV, so on
-   an Injektionsbohren machine no tile would get a hero size and the depth
-   indicator would fall back to its name heuristic. Needs to become a runtime
-   setting (config UI + `meta` table), with `ChannelPicker.tsx:42`'s hardcoded
-   `/api/verfahren/dsv/sensors` following along.
+1. ~~`ACTIVE_VERFAHREN` hardcoded to `'dsv'`.~~ **Done.** The Verfahren now
+   lives in `meta.active_verfahren`, is read through `getActiveVerfahren()`
+   and is write-once (see the index page). `ChannelPicker` resolves sensor
+   names through `/api/verfahren/active` instead of a fixed `dsv`. What
+   remains is the wizard UI that calls `PUT /api/verfahren/active`.
 2. **No phase UI.** The live view has no concept of a phase: it renders every
    `mqtt`/`kiosk` sensor at once, sized by `Priorität`. Injektionsbohren needs
    the two screens described above, with the switch writing an Integer `Status`

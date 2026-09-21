@@ -33,18 +33,39 @@ const CHANNEL_COUNT = 15;
 
 export function ChannelPicker({ devices, deviceFrames, mappings, onClose, onMappingsChanged }: Props) {
   const [sensors, setSensors] = useState<MqttSensor[]>([]);
+  const [sensorsStatus, setSensorsStatus] = useState<'loading' | 'ready' | 'no-verfahren' | 'error'>('loading');
   const [selectedSensor, setSelectedSensor] = useState<MqttSensor | null>(null);
   const [pendingUnassign, setPendingUnassign] = useState<string | null>(null);
   const [pendingReset, setPendingReset] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Sensor names come from the Verfahren this machine was set up for, not from
+  // a fixed machine type.
   useEffect(() => {
-    fetch('/api/verfahren/dsv/sensors?source=mqtt')
-      .then(async (r) => {
-        if (!r.ok) return;
-        setSensors(await r.json());
-      })
-      .catch(() => {});
+    let cancelled = false;
+    (async () => {
+      try {
+        const activeRes = await fetch('/api/verfahren/active');
+        if (!activeRes.ok) throw new Error('active verfahren unavailable');
+        const { verfahren } = (await activeRes.json()) as { verfahren: string | null };
+        if (cancelled) return;
+        if (!verfahren) {
+          setSensorsStatus('no-verfahren');
+          return;
+        }
+        const res = await fetch(`/api/verfahren/${verfahren}/sensors?source=mqtt`);
+        if (!res.ok) throw new Error('sensor definitions unavailable');
+        const rows = await res.json();
+        if (cancelled) return;
+        setSensors(rows);
+        setSensorsStatus('ready');
+      } catch {
+        if (!cancelled) setSensorsStatus('error');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const mappingLookup = useMemo(() => {
@@ -190,7 +211,13 @@ export function ChannelPicker({ devices, deviceFrames, mappings, onClose, onMapp
 
           {sensors.length === 0 && (
             <div style={styles.hint}>
-              Sensordefinitionen werden geladen...
+              {sensorsStatus === 'loading' && 'Sensordefinitionen werden geladen...'}
+              {sensorsStatus === 'no-verfahren' &&
+                'Noch kein Verfahren eingerichtet. Bitte zuerst in den Einstellungen das Verfahren festlegen, dann können Kanäle zugeordnet werden.'}
+              {sensorsStatus === 'error' &&
+                'Sensordefinitionen konnten nicht geladen werden. Bitte das Fenster schließen und erneut öffnen.'}
+              {sensorsStatus === 'ready' &&
+                'Für dieses Verfahren sind keine Sensoren für die Kanalzuordnung hinterlegt.'}
             </div>
           )}
 

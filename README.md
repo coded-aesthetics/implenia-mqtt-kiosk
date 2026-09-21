@@ -104,7 +104,15 @@ The server exposes these via `GET /api/verfahren/:type/sensors` (optional `?sour
 
 Each Verfahren's process, sensor semantics and kiosk-side requirements are documented in [`docs/verfahren/`](docs/verfahren/README.md) — start there when working on a new machine type.
 
-**Note:** the active Verfahren is currently hardcoded to `dsv` in `server/src/sensor-meta.ts`. All `Priorität` / `Rolle` / unit lookups resolve against that CSV.
+The Verfahren a machine is set up for is stored in the database (`meta.active_verfahren`) and drives every `Priorität` / `Rolle` / unit lookup:
+
+```
+GET  /api/verfahren             → all selectable Verfahren
+GET  /api/verfahren/active      → { verfahren, label }; null until set up
+PUT  /api/verfahren/active      → { verfahren } — write-once, 409 if already set
+```
+
+**Write-once by design.** Recorded sessions, serial channel mappings and stream-export columns are all interpreted through the active Verfahren, so switching it under existing data would silently reinterpret that data. Changing it requires a full reset. Until it is set, sensor metadata enrichment is skipped — the live view still works, just without CSV-derived priorities, roles and units.
 
 ## Session Data Export
 

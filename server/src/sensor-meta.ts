@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getMeta, setMeta } from './db.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('sensor-meta');
@@ -8,8 +9,30 @@ const log = createLogger('sensor-meta');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SENSORS_DIR = path.join(__dirname, '..', 'assets', 'sensors');
 
-// Hardcoded until the setup wizard lets service personnel choose
-const ACTIVE_VERFAHREN = 'dsv';
+/**
+ * The Verfahren (construction methods) this kiosk can be configured for.
+ * Each key must have a matching `<key>-sensors-herstellen.csv` in
+ * `server/assets/sensors/`, synced from implenia-web.
+ */
+export const VERFAHREN: Record<string, string> = {
+  dsv: 'DSV (Düsenstrahlverfahren)',
+  ankerbohren: 'Ankerbohren',
+  grosspfahlbohren: 'Grosspfahlbohren',
+  injektionsbohren: 'Injektionsbohren',
+};
+
+export function isValidVerfahren(key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(VERFAHREN, key);
+}
+
+/** `meta` key holding the Verfahren this machine was set up for. */
+const ACTIVE_VERFAHREN_KEY = 'active_verfahren';
+
+/**
+ * Cached active Verfahren. `undefined` means "not read from the DB yet",
+ * `null` means "read, and this machine has not been set up".
+ */
+let activeVerfahren: string | null | undefined;
 
 export interface CsvSensorRow {
   name: string;
@@ -73,9 +96,18 @@ let metaCache: Map<string, SensorMetaLookup> | null = null;
 export function getSensorMetaLookup(): Map<string, SensorMetaLookup> {
   if (metaCache) return metaCache;
 
-  const rows = loadSensorCsv(ACTIVE_VERFAHREN);
+  const verfahren = getActiveVerfahren();
+  if (!verfahren) {
+    // Not set up yet. No enrichment is available, so sensors fall back to
+    // their API metadata — the live view still works, just without
+    // CSV-derived priorities, roles and units.
+    metaCache = new Map();
+    return metaCache;
+  }
+
+  const rows = loadSensorCsv(verfahren);
   if (!rows) {
-    log.warn('Could not load sensor CSV for verfahren: %s', ACTIVE_VERFAHREN);
+    log.warn('Could not load sensor CSV for verfahren: %s', verfahren);
     metaCache = new Map();
     return metaCache;
   }
@@ -90,13 +122,66 @@ export function getSensorMetaLookup(): Map<string, SensorMetaLookup> {
     map.set(row.name, meta);
   }
 
-  log.info('Loaded %d sensor definitions from %s CSV', map.size, ACTIVE_VERFAHREN);
+  log.info('Loaded %d sensor definitions from %s CSV', map.size, verfahren);
   metaCache = map;
   return metaCache;
 }
 
-export function getActiveVerfahren(): string {
-  return ACTIVE_VERFAHREN;
+/**
+ * The Verfahren this machine was set up for, or `null` if it has not been
+ * through the setup wizard yet. Cached after the first read; every mutation
+ * path clears the cache.
+ */
+export function getActiveVerfahren(): string | null {
+  if (activeVerfahren === undefined) {
+    const stored = getMeta(ACTIVE_VERFAHREN_KEY) ?? null;
+    if (stored && !isValidVerfahren(stored)) {
+      // A CSV was removed or renamed under a configured machine. Treat it as
+      // unset rather than serving metadata from a Verfahren we cannot load.
+      log.error('Stored verfahren "%s" is not a known Verfahren — treating machine as unconfigured', stored);
+      activeVerfahren = null;
+    } else {
+      activeVerfahren = stored;
+    }
+  }
+  return activeVerfahren;
+}
+
+/** Raised when a second Verfahren is written to an already-configured kiosk. */
+export class VerfahrenAlreadySetError extends Error {
+  constructor(public readonly current: string) {
+    super(`Verfahren already set to "${current}"`);
+    this.name = 'VerfahrenAlreadySetError';
+  }
+}
+
+/**
+ * Set the Verfahren for this machine. Write-once by design: recorded sessions,
+ * serial channel mappings and stream-export columns are all interpreted
+ * through the active Verfahren, so switching it under existing data would
+ * silently reinterpret that data. Changing it requires a full reset.
+ */
+export function setActiveVerfahren(verfahren: string): void {
+  if (!isValidVerfahren(verfahren)) {
+    throw new Error(`Unbekanntes Verfahren: ${verfahren}`);
+  }
+  const current = getActiveVerfahren();
+  if (current !== null) {
+    throw new VerfahrenAlreadySetError(current);
+  }
+  setMeta(ACTIVE_VERFAHREN_KEY, verfahren);
+  activeVerfahren = verfahren;
+  metaCache = null;
+  log.info('Verfahren set to %s', verfahren);
+}
+
+/**
+ * Drop all cached Verfahren state so the next read hits the DB again.
+ * For the reset flow and for tests.
+ */
+export function clearVerfahrenCache(): void {
+  activeVerfahren = undefined;
+  metaCache = null;
 }
 
 export interface StreamSensor {
@@ -125,7 +210,8 @@ export const STREAM_LABELS: Record<string, string> = {
  * `*-sensors-herstellen.csv` contract exactly.
  */
 export function getStreamSensors(stream: string): StreamSensor[] {
-  const rows = loadSensorCsv(ACTIVE_VERFAHREN);
+  const verfahren = getActiveVerfahren();
+  const rows = verfahren ? loadSensorCsv(verfahren) : null;
   if (!rows) return [];
   return rows
     .filter((r) => r.stream === stream)
@@ -139,7 +225,8 @@ export function getStreamSensors(stream: string): StreamSensor[] {
  * shared CSV contract, never hardcoded per machine type.
  */
 export function getAvailableStreams(): string[] {
-  const rows = loadSensorCsv(ACTIVE_VERFAHREN);
+  const verfahren = getActiveVerfahren();
+  const rows = verfahren ? loadSensorCsv(verfahren) : null;
   if (!rows) return [];
   const present = new Set(rows.map((r) => r.stream).filter(Boolean));
   return STREAM_ORDER.filter((s) => present.has(s));
