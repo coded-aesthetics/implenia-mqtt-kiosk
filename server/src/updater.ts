@@ -122,6 +122,14 @@ class UpdateManager extends EventEmitter {
     return this._pendingUpdate?.source ?? null;
   }
 
+  /**
+   * GitHub release polling needs owner + repo. They ship with the release
+   * image; when they are missing the kiosk still updates from USB.
+   */
+  private get githubConfigured(): boolean {
+    return Boolean(config.GITHUB_OWNER && config.GITHUB_REPO);
+  }
+
   private get apiHeaders(): Record<string, string> {
     const h: Record<string, string> = {
       Accept: 'application/vnd.github.v3+json',
@@ -142,6 +150,7 @@ class UpdateManager extends EventEmitter {
   }
 
   async checkGitHub(): Promise<string | null> {
+    if (!this.githubConfigured) return null;
     if (!connectivity.isOnline()) return null;
 
     try {
@@ -284,6 +293,7 @@ class UpdateManager extends EventEmitter {
   }
 
   private async applyFromGitHub(version: string): Promise<void> {
+    if (!this.githubConfigured) return;
     if (!connectivity.isOnline()) return;
 
     this.emit('update-applying');
@@ -361,6 +371,10 @@ class UpdateManager extends EventEmitter {
     if (config.NODE_ENV === 'development') {
       log.info('Update checker disabled in development mode');
       return;
+    }
+
+    if (!this.githubConfigured) {
+      log.warn('GITHUB_OWNER/GITHUB_REPO not set — GitHub update checks disabled, USB updates still active');
     }
 
     setTimeout(() => this.checkForUpdate(), 10_000);

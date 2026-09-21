@@ -43,12 +43,12 @@ The UI dev server runs on `http://localhost:5173` and proxies API/WS requests to
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `MQTT_BROKER_URL` | Yes | — | MQTT broker URL (e.g. `mqtt://192.168.1.50:1883`) |
-| `MQTT_TOPICS` | Yes | — | Comma-separated MQTT topics |
+| `MQTT_BROKER_URL` | No | — | MQTT broker URL (e.g. `mqtt://192.168.1.50:1883`). Normally set by the setup wizard; without it the MQTT source stays disconnected |
+| `MQTT_TOPICS` | No | — | Comma-separated MQTT topics. Normally set by the setup wizard |
 | `IMPLENIA_API_URL` | No | — | Implenia REST API base URL (also configurable in UI) |
 | `IMPLENIA_API_KEY` | No | — | Bearer token for the API (also configurable in UI) |
-| `GITHUB_OWNER` | Yes | — | GitHub org/user for update checks |
-| `GITHUB_REPO` | Yes | — | GitHub repo name for update checks |
+| `GITHUB_OWNER` | No | — | GitHub org/user for update checks. Baked into the release image; without it GitHub polling is skipped and USB updates still work |
+| `GITHUB_REPO` | No | — | GitHub repo name for update checks. See `GITHUB_OWNER` |
 | `GITHUB_TOKEN` | No | — | Token for private repo access |
 | `UPDATE_CHECK_INTERVAL_MS` | No | `3500000` | Update check interval (ms) |
 | `PORT` | No | `3000` | HTTP server port |
@@ -58,6 +58,8 @@ The UI dev server runs on `http://localhost:5173` and proxies API/WS requests to
 | `USB_UPDATE_PATHS` | No | `/media` | Comma-separated dirs to scan for USB update bundles |
 | `LOG_SENSOR_UPLOAD` | No | `false` | Upload log entries as string sensor readings |
 | `LOG_SENSOR_LEVEL` | No | `warn` | Minimum level for sensor-uploaded logs |
+
+**No variable is required to boot.** A machine with no `.env` at all starts, serves the UI and answers `GET /api/verfahren` — that is what lets the setup wizard run on a fresh industry PC. Missing values degrade the affected feature (MQTT stays disconnected, GitHub update checks are skipped) and are logged as warnings. A *malformed* value (e.g. an unparseable URL) is still a hard startup failure.
 
 ## Logging
 
@@ -99,6 +101,10 @@ Sensor definitions live as CSV files in `server/assets/sensors/` (copied from `.
 ```
 
 The server exposes these via `GET /api/verfahren/:type/sensors` (optional `?source=mqtt` filter).
+
+Each Verfahren's process, sensor semantics and kiosk-side requirements are documented in [`docs/verfahren/`](docs/verfahren/README.md) — start there when working on a new machine type.
+
+**Note:** the active Verfahren is currently hardcoded to `dsv` in `server/src/sensor-meta.ts`. All `Priorität` / `Rolle` / unit lookups resolve against that CSV.
 
 ## Session Data Export
 

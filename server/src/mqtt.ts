@@ -18,6 +18,14 @@ class MqttSource extends DataSource {
   }
 
   start(): void {
+    // Not configured yet (fresh machine, setup wizard not run). Stay
+    // disconnected and let the rest of the kiosk boot — the status bar will
+    // show the source as offline, which is a state the UI already handles.
+    if (!config.MQTT_BROKER_URL || !config.MQTT_TOPICS) {
+      log.warn('MQTT is not configured (broker URL and/or topics missing) — source stays disconnected');
+      return;
+    }
+
     const topics = config.MQTT_TOPICS.split(',').map((t) => t.trim());
 
     this.client = mqtt.connect(config.MQTT_BROKER_URL, {
