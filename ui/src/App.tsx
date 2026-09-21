@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useHashRouter, navigate } from './hooks/useHashRouter';
-import { useConfig, useShiftAssignment } from './hooks/useImplenia';
+import { useConfig, useShiftAssignment, useActiveVerfahren } from './hooks/useImplenia';
 import { useVoiceCommands } from './hooks/useVoiceCommands';
 import { Header } from './components/Header';
 import { UpdateBanner } from './components/UpdateBanner';
@@ -11,6 +11,7 @@ import { ShiftAssignment } from './components/ShiftAssignment';
 import { ElementDetail } from './components/ElementDetail';
 import { VoiceFeedbackOverlay } from './components/VoiceFeedbackOverlay';
 import { CommentQueuePage } from './components/CommentQueuePage';
+import { SetupWizard } from './components/SetupWizard';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
 
@@ -19,6 +20,7 @@ export function App() {
     useWebSocket();
   const route = useHashRouter();
   const config = useConfig();
+  const setup = useActiveVerfahren();
   const shift = useShiftAssignment(config.hasApiKey);
   const { importShift, clearImport } = shift;
 
@@ -53,6 +55,20 @@ export function App() {
     navigate,
     enqueueComment: commentQueue.enqueue,
   });
+
+  // ── First-start gate ──────────────────────────────────────────────────
+  // The Verfahren decides how every sensor is interpreted, so nothing else can
+  // be shown until it is set. Deliberately checked before any other routing.
+  if (setup.loading) {
+    return <div style={styles.gate}>Einrichtung wird geprüft...</div>;
+  }
+  if (setup.error) {
+    // State unknown (server unreachable) — never assume "not set up".
+    return <div style={styles.gate}>{setup.error}</div>;
+  }
+  if (!setup.verfahren) {
+    return <SetupWizard onVerfahrenSet={setup.refetch} hasApiKey={config.hasApiKey} />;
+  }
 
   let content: React.ReactNode;
   let pageTitle: string | undefined;
@@ -159,5 +175,17 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     overflow: 'auto',
     minHeight: 0,
+  },
+  gate: {
+    height: '100vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 'var(--space-xl)',
+    textAlign: 'center',
+    backgroundColor: 'var(--surface-1)',
+    color: 'var(--text-primary)',
+    fontFamily: 'var(--font-body)',
+    fontSize: 'var(--font-md)',
   },
 };

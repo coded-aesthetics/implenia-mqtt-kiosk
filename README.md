@@ -114,6 +114,13 @@ PUT  /api/verfahren/active      → { verfahren } — write-once, 409 if already
 
 **Write-once by design.** Recorded sessions, serial channel mappings and stream-export columns are all interpreted through the active Verfahren, so switching it under existing data would silently reinterpret that data. Changing it requires a full reset. Until it is set, sensor metadata enrichment is skipped — the live view still works, just without CSV-derived priorities, roles and units.
 
+
+### First-start setup
+
+Until a Verfahren is set, `App` renders `SetupWizard` instead of the whole app — not as a modal over it, but in place of it. The gate is checked before any routing, so there is no way into the app around it. If the state cannot be determined (server unreachable), the UI says so and retries rather than assuming "not set up" and showing the wizard by mistake.
+
+The wizard is **service-personnel UI** and is deliberately exempt from the "no modals or multi-step flows" rule in `CLAUDE.md`, which is written for the worker-facing screens. Glove-sized tap targets, contrast, German text and the 1024x768 budget still apply. Each step commits its own setting as it completes, so an interrupted setup resumes instead of starting over.
+
 ## Session Data Export
 
 A completed recording can be exported to Excel files for offline import into the implenia-web DSV widget — the offline counterpart to the batch upload (record → export to USB → import in the web app).

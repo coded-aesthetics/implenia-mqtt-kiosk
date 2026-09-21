@@ -50,6 +50,56 @@ export function useConfig(): ConfigState {
   return { ...state, refetch };
 }
 
+// --- Setup: active Verfahren ---
+
+export interface ActiveVerfahrenState {
+  /** null = this machine has not been set up yet. */
+  verfahren: string | null;
+  label: string | null;
+  /** True until the first answer arrives — do not show the wizard before then. */
+  loading: boolean;
+  /** Set when the server could not be reached at all (state unknown). */
+  error: string | null;
+  refetch: () => void;
+}
+
+/**
+ * The Verfahren this kiosk was set up for. Drives the first-start gate in App:
+ * while `verfahren` is null the setup wizard replaces the whole app.
+ */
+export function useActiveVerfahren(): ActiveVerfahrenState {
+  const [state, setState] = useState<{
+    verfahren: string | null;
+    label: string | null;
+    loading: boolean;
+    error: string | null;
+  }>({ verfahren: null, label: null, loading: true, error: null });
+
+  const refetch = useCallback(() => {
+    setState((s) => ({ ...s, loading: true }));
+    fetch('/api/verfahren/active')
+      .then(async (r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        const data = (await r.json()) as { verfahren: string | null; label: string | null };
+        setState({ verfahren: data.verfahren, label: data.label, loading: false, error: null });
+      })
+      .catch(() => {
+        // Unknown, not "unconfigured" — never show the wizard because of a
+        // transient failure.
+        setState({
+          verfahren: null,
+          label: null,
+          loading: false,
+          error: 'Die Anwendung ist nicht erreichbar. Bitte die Seite neu laden.',
+        });
+      });
+  }, []);
+
+  useEffect(() => { refetch(); }, [refetch]);
+
+  return { ...state, refetch };
+}
+
 // --- Shift Assignment ---
 
 export interface MeasuringDevice {
