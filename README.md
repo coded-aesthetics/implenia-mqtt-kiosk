@@ -159,12 +159,17 @@ Because the reset clears the in-memory caches (`clearVerfahrenCache`, `clearTran
 ### Resetting the setup
 
 ```bash
-./scripts/reset-setup.sh          # asks first
-./scripts/reset-setup.sh --yes    # no prompt
+./scripts/reset-setup.sh                      # asks first
+./scripts/reset-setup.sh --yes                # no prompt
+./scripts/reset-setup.sh --with-data          # also deletes recordings
 DB_PATH=/path/to/kiosk.db ./scripts/reset-setup.sh
 ```
 
 Clears the active Verfahren, the transport choice, the MQTT settings and the topic overrides, so the wizard runs again. **Keeps** recorded sessions and readings, serial devices and channel mappings, and the API key. Restart the server afterwards — the Verfahren and transport are cached in memory.
+
+It warns when keeping data would orphan it: sessions recorded under the Verfahren being cleared would later export against a *different* Verfahren's column contract.
+
+`--with-data` also deletes recorded sessions and readings, the buffer, devices and channel mappings — the escape hatch for data that will never upload, since the in-app reset refuses while readings are neither uploaded nor exported. It always asks separately and `--yes` does not cover it; you type `DELETE DATA` to confirm, or pass `--force`.
 
 This is a development and service helper, not the kiosk's reset feature. The in-app reset still has to refuse to run while un-uploaded readings exist and confirm by tap; this script does neither, which is why it is not reachable from the UI. Since the Verfahren is write-once, this is currently the only way to choose a different one.
 

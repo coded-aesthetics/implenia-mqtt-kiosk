@@ -141,6 +141,8 @@ This software auto-updates on machines where a broken deploy costs real time and
 
 **What not to test**: React component rendering, CSS layout, trivial getters, framework glue code. Don't mock the database — use in-memory SQLite so tests verify real SQL.
 
+**Tests never touch a real database.** `DB_PATH` is forced to `:memory:` in `server/vitest.config.ts`, which is the only correct place for it: `db.ts` opens its connection at *import* time, so setting `process.env.DB_PATH` inside a test file — even in `beforeAll` — is too late if any module already pulled `db.ts` in. Do not set it per-test and do not remove it from the vitest config. A suite that deletes rows must additionally assert `databasePath() === ':memory:'` before it runs. This rule exists because a reset test once wiped a developer's real `kiosk.db`, sessions and readings included.
+
 **Smoke tests** (Playwright, minimal): Not a full E2E suite — just 2-3 tests that boot the app at 1024x768 and verify the shell renders, key elements are visible, and there are no JS console errors. These catch catastrophic failures (broken build, missing assets, layout completely off-screen) that unit/integration tests can't. Keep the count low and the assertions broad. If a smoke test breaks on every CSS change, it's too specific.
 
 **Pre-update health check** (server-side): Before the auto-updater commits to a new version, the new server must boot and respond to `/health` with a passing status (DB accessible, config loadable, static assets present). If the health check fails, the updater keeps the previous version. No browser involved — this runs on the kiosk itself.
