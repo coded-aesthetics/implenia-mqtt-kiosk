@@ -6,7 +6,7 @@ import {
 } from '../db.js';
 import { getApiConfig, fetchImplenia } from '../implenia-api.js';
 import { config as envConfig } from '../config.js';
-import { ingestion } from '../ingestion.js';
+import { ingestion, DataIngestion } from '../ingestion.js';
 import {
   DEFAULT_BROKER_URL,
   DEFAULT_TOPICS,
@@ -17,6 +17,9 @@ import {
 } from '../mqtt-config.js';
 import { getActiveVerfahren, loadSensorCsv } from '../sensor-meta.js';
 import { clearResolverCache, loadTopicMap } from '../topic-resolver.js';
+import {
+  TRANSPORTS, getTransport, isTransportConfigured, isValidTransport, setTransport,
+} from '../transport.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('config');
@@ -106,6 +109,43 @@ export function registerConfigRoutes(app: FastifyInstance): void {
       return reply.send({ ok: false, error: `Verbindung fehlgeschlagen: ${message}` });
     }
   });
+
+  // ── Transport ───────────────────────────────────────────────────────────
+
+  app.get('/api/config/transport', async () => {
+    const transport = getTransport();
+    return {
+      transport,
+      label: TRANSPORTS[transport],
+      // False until the wizard actually asked — the value is a default, not a
+      // choice, and the UI should say so.
+      configured: isTransportConfigured(),
+      available: Object.entries(TRANSPORTS).map(([key, label]) => ({ key, label })),
+    };
+  });
+
+  /**
+   * Freely changeable, unlike the Verfahren: switching does not reinterpret
+   * existing data. Serial mappings are keyed (device_id, value_index) and MQTT
+   * overrides by topic, so they cannot collide.
+   */
+  app.put<{ Body: { transport?: string } }>(
+    '/api/config/transport',
+    async (request, reply) => {
+      const transport = request.body?.transport;
+      if (!transport || !isValidTransport(transport)) {
+        return reply.status(400).send({
+          error: 'Bitte eine gültige Datenquelle wählen: ' + Object.values(TRANSPORTS).join(' oder ') + '.',
+        });
+      }
+
+      setTransport(transport);
+      // Swap the live source so the change takes effect without a restart.
+      ingestion.setSource(DataIngestion.sourceFor(transport));
+
+      return reply.send({ transport, label: TRANSPORTS[transport] });
+    },
+  );
 
   // ── MQTT ────────────────────────────────────────────────────────────────
 

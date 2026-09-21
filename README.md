@@ -14,6 +14,20 @@ DataSource (MQTT | Serial | Simulator)
 
 Data intake is abstracted behind a `DataSource` interface. Each source emits `SensorReading` events. The `DataIngestion` layer routes readings to SQLite, WebSocket broadcast, and session recording — source-agnostic.
 
+**One transport is active at a time**, chosen by `meta.transport` (`mqtt` or `serial`) and swapped at runtime via `ingestion.setSource()`:
+
+- **MQTT** (`mqttSource`) — one broker, one subscription, topics resolved to sensors
+- **Serial** (`deviceSource`) — wraps `deviceManager`, turning each device frame into readings using the channel mappings (`device_id`, `value_index`) → sensor name, emitted as `device/<id>/<sensor>`
+
+Both converge on the same `SensorReading` shape before anything is buffered, recorded or uploaded. `deviceManager` is owned by the serial source, so an MQTT kiosk does not also poll USB ports. Raw `device-frame` messages are still broadcast separately, because the channel picker needs values by index.
+
+```
+GET /api/config/transport   → { transport, label, configured, available }
+PUT /api/config/transport   → { transport } — swaps the live source, no restart
+```
+
+Unlike the Verfahren, the transport is freely changeable: switching does not reinterpret existing data, since serial mappings are keyed by `(device_id, value_index)` and MQTT overrides by topic.
+
 ## Prerequisites
 
 - **Node.js** >= 20
@@ -51,6 +65,7 @@ The UI dev server runs on `http://localhost:5173` and proxies API/WS requests to
 | `GITHUB_REPO` | No | — | GitHub repo name for update checks. See `GITHUB_OWNER` |
 | `GITHUB_TOKEN` | No | — | Token for private repo access |
 | `UPDATE_CHECK_INTERVAL_MS` | No | `3500000` | Update check interval (ms) |
+| `DB_PATH` | No | `<cwd>/kiosk.db` | SQLite database path. `:memory:` for an ephemeral DB (used by integration tests) |
 | `PORT` | No | `3000` | HTTP server port |
 | `NODE_ENV` | No | `production` | `development` / `production` / `test` |
 | `CONNECTIVITY_PROBE_HOST` | No | `8.8.8.8` | DNS host for connectivity checks |

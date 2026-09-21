@@ -42,6 +42,11 @@ const envSchema = z.object({
   GITHUB_REPO: z.preprocess(blankAsUndefined, z.string().min(1).optional()),
   UPDATE_CHECK_INTERVAL_MS: z.coerce.number().positive().default(3_500_000),
 
+  // Database. Defaults to <cwd>/kiosk.db. ':memory:' gives an ephemeral DB,
+  // which is how integration tests exercise real SQL without touching a real
+  // kiosk database.
+  DB_PATH: z.preprocess(blankAsUndefined, z.string().min(1).optional()),
+
   // Server
   PORT: z.coerce.number().positive().default(3000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),

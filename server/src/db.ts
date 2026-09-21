@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
+import { config } from './config.js';
 
 // --- Types ---
 
@@ -56,7 +57,7 @@ export interface MappingRow {
 
 // --- Init ---
 
-const DB_PATH = path.join(process.cwd(), 'kiosk.db');
+const DB_PATH = config.DB_PATH ?? path.join(process.cwd(), 'kiosk.db');
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
