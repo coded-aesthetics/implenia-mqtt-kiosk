@@ -37,6 +37,12 @@ export default defineConfig(({ mode }) => {
         skipWaiting: true,
         clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+        // The app bundle is several MB (the offline voice engine dominates it)
+        // and workbox's 2 MiB default makes the production build fail outright
+        // — which only the release workflow ever hits, because CI does not
+        // build. Precaching it is the point: the kiosk has to come up with no
+        // internet, so the whole bundle belongs in the service worker.
+        maximumFileSizeToCacheInBytes: 16 * 1024 * 1024,
         runtimeCaching: [
           {
             urlPattern: /\/status$/,

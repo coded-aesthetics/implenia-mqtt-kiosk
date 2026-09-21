@@ -111,7 +111,22 @@ export function TopicAssignment() {
     setBusy(true);
     setError(null);
     try {
-      await fetch(`/api/config/topic-overrides/${encodeURIComponent(topic)}`, { method: 'DELETE' });
+      const res = await fetch(
+        `/api/config/topic-overrides/${encodeURIComponent(topic)}`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok) {
+        // Without this check a failed delete looked exactly like a successful
+        // one: the row simply reappeared, and the only thing left to do was
+        // tap it again.
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(
+          body.error ??
+            'Die Zuordnung konnte nicht aufgehoben werden. Bitte erneut versuchen.',
+        );
+        setPendingUnassign(null);
+        return;
+      }
       setPendingUnassign(null);
       loadSensors();
     } catch {

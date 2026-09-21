@@ -33,5 +33,15 @@ jobs:
       - name: Typecheck
         run: npm run lint
 
-      - name: Test
+      - name: Test (ui)
         run: npm test -w ui
+
+      # The server suite is where the data-integrity rules live — the reset
+      # guard, export safety, the parsers. It was not running here at all.
+      - name: Test (server)
+        run: npm test -w server
+
+      # Only the release workflow used to build, so a build break stayed
+      # invisible until someone pushed a tag and got no release at all.
+      - name: Build
+        run: npm run build

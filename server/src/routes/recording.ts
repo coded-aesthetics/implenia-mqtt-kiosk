@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { beginRecording, endRecording, uploadSession, getRecordingState } from '../recording.js';
-import { getSessions, getSessionStats, markSessionExported } from '../db.js';
+import { getSessions, getSessionStats, getExportedStreams } from '../db.js';
 import {
   buildSessionExport,
   getSessionExportStreams,
   isExportableStream,
+  recordStreamExport,
 } from '../session-export.js';
 import { broadcastMessage } from '../websocket.js';
 import { createLogger } from '../logger.js';
@@ -65,7 +66,12 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
     if (isNaN(sessionId)) {
       return reply.status(400).send({ error: 'Ungültige Sitzungs-ID' });
     }
-    return reply.send({ streams: getSessionExportStreams(sessionId) });
+    const exported = new Set(getExportedStreams(sessionId));
+    const streams = getSessionExportStreams(sessionId).map((o) => ({
+      ...o,
+      exported: exported.has(o.stream),
+    }));
+    return reply.send({ streams });
   });
 
   app.get('/api/recording/:id/export', async (request, reply) => {
@@ -86,7 +92,13 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       // header-only file, and marking that "exported" would let the reset
       // guard discard data nobody ever saved.
       if (dataRows > 0) {
-        markSessionExported(sessionId);
+        const { remaining } = recordStreamExport(sessionId, stream);
+        if (remaining.length > 0) {
+          log.info(
+            'Session %d: stream %s exported, still missing %s',
+            sessionId, stream, remaining.join(', '),
+          );
+        }
       } else {
         log.warn('Export of session %d (%s) contained no rows — not marked as exported', sessionId, stream);
       }

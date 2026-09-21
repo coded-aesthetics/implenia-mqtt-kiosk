@@ -117,6 +117,13 @@ db.exec(`
     type  TEXT    NOT NULL DEFAULT 'elvis'
   );
 
+  CREATE TABLE IF NOT EXISTS session_exports (
+    session_id  INTEGER NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+    stream      TEXT    NOT NULL,
+    exported_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, stream)
+  );
+
   CREATE TABLE IF NOT EXISTS topic_overrides (
     topic       TEXT    PRIMARY KEY,
     sensor_name TEXT    NOT NULL,
@@ -227,6 +234,15 @@ export function insertBuffer(topic: string, payload: string): void {
 
 export function pruneBuffer(maxAgeMs = 86_400_000): void {
   pruneBufferStmt.run(Date.now() - maxAgeMs);
+}
+
+/**
+ * Drop the live buffer. Only for when its contents stop meaning anything —
+ * a changed broker, a reset. Recorded measurements live in session_readings
+ * and are untouched by this.
+ */
+export function clearBuffer(): void {
+  db.prepare('DELETE FROM mqtt_buffer').run();
 }
 
 /**
@@ -521,9 +537,35 @@ const markSessionExportedStmt = db.prepare(
   'UPDATE recording_sessions SET exported_at = ? WHERE id = ?'
 );
 
-/** Record that a session's data left the kiosk as a file. */
+/**
+ * Record that a session's data left the kiosk as a file — *all* of it.
+ *
+ * A session exports one file per stream, so this may only be called once every
+ * stream that has data has been written. Setting it after a single stream
+ * would tell the reset guard that the other streams' readings are safe to
+ * delete when nothing has saved them. Callers go through markStreamExported()
+ * and let getUnexportedStreams() decide.
+ */
 export function markSessionExported(sessionId: number): void {
   markSessionExportedStmt.run(Date.now(), sessionId);
+}
+
+const markStreamExportedStmt = db.prepare(
+  `INSERT INTO session_exports (session_id, stream, exported_at) VALUES (?, ?, ?)
+   ON CONFLICT(session_id, stream) DO UPDATE SET exported_at = excluded.exported_at`
+);
+const getExportedStreamsStmt = db.prepare(
+  'SELECT stream FROM session_exports WHERE session_id = ?'
+);
+
+/** Record that one stream of a session was written to a file. */
+export function markStreamExported(sessionId: number, stream: string): void {
+  markStreamExportedStmt.run(sessionId, stream, Date.now());
+}
+
+/** Streams of this session that have already been written to a file. */
+export function getExportedStreams(sessionId: number): string[] {
+  return (getExportedStreamsStmt.all(sessionId) as { stream: string }[]).map((r) => r.stream);
 }
 
 const unsafeSummaryStmt = db.prepare(`
@@ -560,6 +602,7 @@ const RESET_PRESERVED_META = ['implenia_api_key', 'implenia_api_url'];
 export function resetKiosk(): void {
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM session_readings').run();
+    db.prepare('DELETE FROM session_exports').run();
     db.prepare('DELETE FROM recording_sessions').run();
     db.prepare('DELETE FROM mqtt_buffer').run();
     db.prepare('DELETE FROM sensor_mappings').run();

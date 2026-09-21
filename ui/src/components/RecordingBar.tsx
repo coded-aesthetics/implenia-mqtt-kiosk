@@ -14,6 +14,8 @@ interface ExportOption {
   stream: string;
   label: string;
   count: number;
+  /** Already written to a file. Until every stream is, the data is only here. */
+  exported: boolean;
 }
 
 export function RecordingBar({ currentPage, elementName, recordingState, uploadProgress }: Props) {
@@ -22,6 +24,8 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
   const [lastUploadResult, setLastUploadResult] = useState<'uploaded' | 'partial' | null>(null);
   const [emptyWarning, setEmptyWarning] = useState(false);
   const [exportOptions, setExportOptions] = useState<ExportOption[]>([]);
+  // Bumped after a download so the ✓ marks appear without a page reload.
+  const [exportTick, setExportTick] = useState(0);
 
   // Determine current display status
   const status: SessionStatus = (() => {
@@ -83,7 +87,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     return () => {
       cancelled = true;
     };
-  }, [status, recordingState.sessionId]);
+  }, [status, recordingState.sessionId, exportTick]);
 
   // Only show on element page, or if recording is active for any element
   if (currentPage !== 'element' && !recordingState.active) return null;
@@ -138,6 +142,11 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     document.body.appendChild(a);
     a.click();
     a.remove();
+    // The download is a plain navigation, so there is no completion event to
+    // wait for. Re-read the options shortly after: the server has recorded the
+    // export by then, and the worker sees which stream is still only on the
+    // kiosk.
+    setTimeout(() => setExportTick((n) => n + 1), 1500);
   }
 
   async function upload() {
@@ -213,9 +222,15 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
               onClick={() => exportSession(opt.stream)}
               disabled={loading}
             >
-              {opt.label} exportieren
+              {opt.exported ? `${opt.label} ✓ erneut exportieren` : `${opt.label} exportieren`}
             </button>
           ))}
+          {exportOptions.some((o) => !o.exported) && exportOptions.some((o) => o.exported) && (
+            <span style={styles.exportHint}>
+              Noch nicht exportiert:{' '}
+              {exportOptions.filter((o) => !o.exported).map((o) => o.label).join(', ')}
+            </span>
+          )}
         </div>
       )}
 
@@ -320,6 +335,10 @@ const styles: Record<string, React.CSSProperties> = {
   exportButton: {
     backgroundColor: '#1565c0',
     color: '#ffffff',
+  },
+  exportHint: {
+    fontSize: 'var(--font-base)',
+    color: 'var(--text-muted)',
   },
   retryButton: {
     backgroundColor: '#e65100',

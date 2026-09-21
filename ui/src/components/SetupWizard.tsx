@@ -60,6 +60,9 @@ export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
   const [verfahren, setVerfahren] = useState<Verfahren[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  // The Verfahren already stored on this machine, if any. Write-once on the
+  // server, so the wizard must not offer to write it a second time.
+  const [lockedVerfahren, setLockedVerfahren] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -106,7 +109,12 @@ export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
   useEffect(() => {
     fetch('/api/verfahren/active')
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d?.verfahren) setSelected(d.verfahren); })
+      .then((d) => {
+        if (d?.verfahren) {
+          setSelected(d.verfahren);
+          setLockedVerfahren(d.verfahren);
+        }
+      })
       .catch(() => {});
 
     fetch('/api/config/transport')
@@ -151,6 +159,20 @@ export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
 
   async function confirmVerfahren() {
     if (!selected || saving) return;
+    // Already stored: the server would answer 409 and the step has no way
+    // back, so move on instead of writing the same value again.
+    if (lockedVerfahren) {
+      if (selected !== lockedVerfahren) {
+        setSaveError(
+          'Das Verfahren ist bereits festgelegt und kann nicht geändert werden. ' +
+            'Um ein anderes Verfahren zu wählen, muss die Software in den ' +
+            'Einstellungen zurückgesetzt werden.',
+        );
+        return;
+      }
+      goto('transport');
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -186,10 +208,25 @@ export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
   return (
     <div style={styles.container}>
       <header style={styles.header}>
-        <div style={styles.headerTitle}>Einrichtung</div>
-        <div style={styles.headerStep}>
-          Schritt {Math.max(stepOrder(transport).indexOf(step), 0) + 1} von{' '}
-          {stepOrder(transport).length} · {STEP_TITLES[step]}
+        <div style={styles.headerRow}>
+          <div>
+            <div style={styles.headerTitle}>Einrichtung</div>
+            <div style={styles.headerStep}>
+              Schritt {Math.max(stepOrder(transport).indexOf(step), 0) + 1} von{' '}
+              {stepOrder(transport).length} · {STEP_TITLES[step]}
+            </div>
+          </div>
+          {/* This machine is already set up, so the wizard is optional —
+              without a way out, landing on #/setup (browser-back, a bookmark)
+              would trap whoever is standing at the screen. */}
+          {lockedVerfahren && (
+            <button
+              onClick={() => { onFinish(); navigate(''); }}
+              style={styles.exitButton}
+            >
+              Einrichtung verlassen
+            </button>
+          )}
         </div>
       </header>
 
@@ -205,11 +242,17 @@ export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
             <div style={styles.grid}>
               {verfahren.map((v) => {
                 const isSelected = v.key === selected;
+                const locked = lockedVerfahren !== null && v.key !== lockedVerfahren;
                 return (
                   <button
                     key={v.key}
                     onClick={() => { setSelected(v.key); setSaveError(null); }}
-                    style={isSelected ? styles.tileSelected : styles.tile}
+                    disabled={locked}
+                    style={
+                      isSelected ? styles.tileSelected
+                      : locked ? styles.tileLocked
+                      : styles.tile
+                    }
                   >
                     {v.label}
                   </button>
@@ -218,9 +261,9 @@ export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
             </div>
 
             <div style={styles.warning}>
-              Das Verfahren kann später nicht geändert werden. Um ein anderes
-              Verfahren zu wählen, muss die Software zurückgesetzt werden —
-              dabei gehen alle aufgezeichneten Daten verloren.
+              {lockedVerfahren
+                ? 'Das Verfahren ist für diese Maschine bereits festgelegt. Um ein anderes Verfahren zu wählen, muss die Software in den Einstellungen zurückgesetzt werden — dabei gehen alle aufgezeichneten Daten verloren.'
+                : 'Das Verfahren kann später nicht geändert werden. Um ein anderes Verfahren zu wählen, muss die Software zurückgesetzt werden — dabei gehen alle aufgezeichneten Daten verloren.'}
             </div>
 
             {saveError && <div style={styles.error}>{saveError}</div>}
@@ -232,9 +275,11 @@ export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
             >
               {saving
                 ? 'Wird gespeichert...'
-                : selected
-                  ? `${selectedLabel} festlegen`
-                  : 'Bitte ein Verfahren wählen'}
+                : lockedVerfahren
+                  ? 'Weiter'
+                  : selected
+                    ? `${selectedLabel} festlegen`
+                    : 'Bitte ein Verfahren wählen'}
             </button>
           </>
         )}
@@ -263,7 +308,8 @@ export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
             </div>
 
             <div style={styles.hint}>
-              Diese Auswahl lässt sich später in den Einstellungen ändern.
+              Diese Auswahl gilt dauerhaft. Sie lässt sich nur ändern, indem die
+              Software in den Einstellungen zurückgesetzt wird.
             </div>
 
             {saveError && <div style={styles.error}>{saveError}</div>}
@@ -416,6 +462,24 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: 'var(--surface-0)',
     borderBottom: '2px solid var(--border)',
   },
+  headerRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 'var(--space-md)',
+  },
+  exitButton: {
+    minHeight: 'var(--tap-min)',
+    padding: '0 var(--space-lg)',
+    fontSize: 'var(--font-base)',
+    fontWeight: 600,
+    fontFamily: 'inherit',
+    color: 'var(--text-primary)',
+    backgroundColor: 'var(--surface-3)',
+    border: '2px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+    cursor: 'pointer',
+  },
   headerTitle: {
     fontSize: 'var(--font-lg)',
     fontWeight: 700,
@@ -466,6 +530,23 @@ const styles: Record<string, React.CSSProperties> = {
     border: '3px solid var(--border)',
     borderRadius: 'var(--radius-lg)',
     cursor: 'pointer',
+  },
+  tileLocked: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 'var(--space-xs)',
+    minHeight: 'var(--tap-min)',
+    padding: 'var(--space-lg)',
+    fontSize: 'var(--font-md)',
+    fontWeight: 600,
+    fontFamily: 'inherit',
+    color: 'var(--text-muted)',
+    backgroundColor: 'var(--surface-2)',
+    border: '3px solid var(--border)',
+    borderRadius: 'var(--radius-lg)',
+    cursor: 'default',
   },
   tileSelected: {
     minHeight: 'var(--tap-min)',

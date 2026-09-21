@@ -12,5 +12,15 @@ export default defineConfig({
      * kiosk.db. That is not hypothetical — it happened.
      */
     env: { DB_PATH: ':memory:' },
+    /**
+     * Never collect from the build output.
+     *
+     * tsconfig used to compile the test files into dist/, so after a build
+     * vitest ran every suite twice — once from source, once from dist — and
+     * the reported test count was double the real one. The tsconfig exclude
+     * stops new builds producing them; this stops a stale dist/ on someone's
+     * machine from quietly doing it again.
+     */
+    exclude: ['**/node_modules/**', 'dist/**'],
   },
 });

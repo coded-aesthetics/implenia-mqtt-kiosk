@@ -5,6 +5,7 @@ import { UpdateUpload } from './UpdateUpload';
 import { navigate } from '../hooks/useHashRouter';
 import { MqttSettings } from './MqttSettings';
 import { DeviceConfig } from './DeviceConfig';
+import { pendingCommentCount, clearCommentQueue } from '../hooks/useCommentQueue';
 
 interface Props {
   config: ConfigState;
@@ -84,8 +85,12 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
   } | null>(null);
   const [resetPending, setResetPending] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
+  // Queued voice comments never reach the server, so the server-side guard
+  // cannot count them. Checked here, alongside it.
+  const [pendingComments, setPendingComments] = useState(0);
 
   const loadResetState = useCallback(() => {
+    setPendingComments(pendingCommentCount());
     fetch('/api/config/reset')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (d) setResetState(d); })
@@ -96,6 +101,14 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
 
   async function doReset() {
     setResetError(null);
+    // Re-check right before the destructive call: a comment may have been
+    // dictated since the page loaded.
+    const queued = pendingCommentCount();
+    if (queued > 0) {
+      setPendingComments(queued);
+      setResetPending(false);
+      return;
+    }
     try {
       const res = await fetch('/api/config/reset', { method: 'POST' });
       if (!res.ok) {
@@ -106,8 +119,9 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
         return;
       }
       // Voice comments live in localStorage, so the server reset cannot clear
-      // them — they would otherwise survive into the new configuration.
-      try { localStorage.removeItem('commentQueue'); } catch { /* private mode */ }
+      // them — they would otherwise survive into the new configuration. The
+      // guard above has already established that none are unsent.
+      clearCommentQueue();
       window.location.hash = '#/setup';
       window.location.reload();
     } catch {
@@ -440,9 +454,17 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
             </div>
           )}
 
+          {pendingComments > 0 && (
+            <div style={styles.blockedNotice}>
+              Zurücksetzen ist gesperrt: {pendingComments} Kommentar(e) sind noch
+              nicht gesendet und würden gelöscht. Bitte die Kommentare oben in
+              der Leiste senden oder löschen.
+            </div>
+          )}
+
           {resetError && <div style={styles.blockedNotice}>{resetError}</div>}
 
-          {resetState?.allowed && (
+          {resetState?.allowed && pendingComments === 0 && (
             <button
               onClick={() => { if (resetPending) doReset(); else setResetPending(true); }}
               onBlur={() => setResetPending(false)}

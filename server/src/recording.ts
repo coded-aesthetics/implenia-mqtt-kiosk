@@ -134,6 +134,24 @@ export function endRecording(): { sessionId: number } {
   return { sessionId: session.id };
 }
 
+/**
+ * Detach the live recording without touching the database.
+ *
+ * Only the reset path needs this: it deletes recording_sessions outright, and
+ * an ingestion layer still holding the deleted session id writes readings
+ * against a missing parent row. With foreign keys on, that throws inside the
+ * source's synchronous 'reading' handler — an uncaught exception that takes
+ * the process down the moment data starts arriving again. Callers that end a
+ * session normally want endRecording().
+ */
+export function abortRecording(): void {
+  ingestion.stopRecording();
+  if (unsubscribeLog) {
+    unsubscribeLog();
+    unsubscribeLog = null;
+  }
+}
+
 export async function uploadSession(
   sessionId: number,
   onProgress?: (progress: UploadProgress) => void,

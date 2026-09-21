@@ -1,12 +1,14 @@
 import mqtt from 'mqtt';
 import type { FastifyInstance } from 'fastify';
 import {
-  getMeta, setMeta, deleteMeta, getObservedTopics,
+  getMeta, setMeta, deleteMeta, getObservedTopics, clearBuffer,
   getTopicOverrides, setTopicOverride, deleteTopicOverride,
 } from '../db.js';
 import { getApiConfig, fetchImplenia } from '../implenia-api.js';
 import { config as envConfig } from '../config.js';
 import { ingestion, DataIngestion } from '../ingestion.js';
+import { deviceSource } from '../device-source.js';
+import { abortRecording } from '../recording.js';
 import {
   DEFAULT_BROKER_URL,
   DEFAULT_TOPICS,
@@ -186,13 +188,26 @@ export function registerConfigRoutes(app: FastifyInstance): void {
       });
     }
 
+    // Detach the live recording *before* its session row disappears. An
+    // ingestion layer still pointing at a deleted session writes readings
+    // against a missing parent, and that foreign-key error is thrown from the
+    // source's synchronous handler — it would kill the process as soon as the
+    // next message arrived.
+    abortRecording();
+
     resetKiosk();
     // In-memory caches would otherwise keep serving the old setup; clearing
     // them here is why the in-app reset needs no restart.
     clearVerfahrenCache();
     clearTransportCache();
     clearResolverCache();
+    deviceSource.clearMappingCache();
     ingestion.setSource(DataIngestion.sourceFor(getTransport()));
+    // setSource is a no-op when the transport is unchanged (the common case),
+    // so cycle the source explicitly: otherwise the MQTT client keeps the old
+    // site's connection and subscription, and the restarted wizard lists
+    // topics from a broker this kiosk is no longer being set up for.
+    ingestion.restartSource();
 
     log.info('Kiosk setup reset');
     return reply.send({ ok: true });
@@ -236,8 +251,19 @@ export function registerConfigRoutes(app: FastifyInstance): void {
       const topics = normalizeTopics(request.body?.topics ?? DEFAULT_TOPICS);
       if (!topics.ok) return reply.status(400).send({ error: topics.error });
 
+      const previous = getMqttSettings();
+      const changed =
+        previous.brokerUrl !== broker.url || previous.topics !== topics.url;
+
       setMqttSettings(broker.url, topics.url);
       log.info('MQTT settings updated: %s (%s)', broker.url, topics.url);
+
+      if (changed) {
+        // Rows from the previous broker would otherwise keep answering "topics
+        // are arriving" for the next five minutes — reporting success for
+        // exactly the wrong address the caller just typed.
+        clearBuffer();
+      }
 
       // Pick up the new settings without a process restart.
       ingestion.restartSource();
@@ -344,7 +370,10 @@ export function registerConfigRoutes(app: FastifyInstance): void {
   app.delete<{ Params: { topic: string } }>(
     '/api/config/topic-overrides/:topic',
     async (request, reply) => {
-      const topic = decodeURIComponent(request.params.topic);
+      // Fastify hands params over already percent-decoded, so decoding again
+      // would corrupt a topic containing a literal '%' — or throw URIError on
+      // one that is not valid escape syntax.
+      const topic = request.params.topic;
       deleteTopicOverride(topic);
       clearResolverCache();
       log.info('Topic assignment removed for %s', topic);

@@ -148,13 +148,17 @@ GET  /api/config/reset   → { allowed, unsafe: { sessions, readings }, preserve
 POST /api/config/reset   → 409 while data is unsafe, otherwise wipes and clears caches
 ```
 
-**Clears:** Verfahren, transport, MQTT settings, devices, channel mappings, topic overrides, recorded sessions and readings, the buffer, the imported shift assignment. The UI additionally clears the voice comment queue, which lives in `localStorage` and is therefore out of the server's reach.
+**Clears:** Verfahren, transport, MQTT settings, devices, channel mappings, topic overrides, recorded sessions and readings, export records, the buffer, the imported shift assignment. The UI additionally clears the voice comment queue, which lives in `localStorage` and is therefore out of the server's reach — and, for the same reason, blocks the reset itself while comments are still unsent: the server's guard cannot see them, so a kiosk that was offline all shift would otherwise report "nothing unsaved" and discard a shift of dictation.
 
 **Keeps:** the API key and server address — the site's credentials, not this machine's setup, and re-entering a token on a touchscreen is miserable.
 
 **Refuses — does not warn — while recorded data exists only on this kiosk.** "Safe" means uploaded *or* exported to a file: if only uploading counted, a kiosk with no connectivity could never be reset, which is the dead end the guard exists to prevent. An export only counts when the file actually contained readings; a Verfahren with no streams defined produces a header-only file, and treating that as saved would discard data nobody ever got off the machine.
 
-Because the reset clears the in-memory caches (`clearVerfahrenCache`, `clearTransportCache`, `clearResolverCache`) and re-selects the data source, it needs no restart — unlike `scripts/reset-setup.sh`.
+A session exports **one file per stream**, so it only counts as exported once every stream that has data has been written (`session_exports` tracks them individually, `recordStreamExport()` decides). Marking the session after the first file would hand the remaining streams' readings to the next reset — never uploaded, never saved anywhere.
+
+Because the reset clears the in-memory caches (`clearVerfahrenCache`, `clearTransportCache`, `clearResolverCache`, `clearMappingCache`) and cycles the data source, it needs no restart — unlike `scripts/reset-setup.sh`. The source is cycled, not just re-selected: `setSource()` is a no-op when the transport is unchanged, which is the common case, and the MQTT client would otherwise hold the previous site's connection and subscription straight through the reset.
+
+It also detaches any running recording first (`abortRecording()`). The ingestion layer holds the session id in memory, and with `foreign_keys = ON` a reading arriving after the session row is deleted throws inside the data source's synchronous handler — uncaught, taking the process with it.
 
 ### Resetting the setup
 
@@ -292,6 +296,8 @@ git push origin v1.1.0
 ```
 
 GitHub Actions builds, packages, and publishes the release automatically. Never manually bump `package.json` versions — CI stamps them from the git tag.
+
+The bundle contains `server/dist/`, `server/assets/`, `ui/dist/`, both `package.json` files and `.env.example`. `server/assets/` is not optional: the server reads the sensor CSVs and topic maps from disk at runtime (`__dirname/../assets/...`), so leaving them out ships a kiosk that resolves no topics and rejects every sensor name on the assignment screen — silently, because a missing topic map is a normal state.
 
 ## Project Structure
 

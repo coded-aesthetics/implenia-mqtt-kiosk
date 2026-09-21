@@ -1,5 +1,8 @@
 import ExcelJS from 'exceljs';
-import { getSessionById, getAllSessionReadings, type SessionReadingRow } from './db.js';
+import {
+  getSessionById, getAllSessionReadings, markSessionExported,
+  markStreamExported, getExportedStreams, type SessionReadingRow,
+} from './db.js';
 import { getStreamSensors, getAvailableStreams, STREAM_LABELS } from './sensor-meta.js';
 
 /**
@@ -165,6 +168,33 @@ export function getSessionExportStreams(sessionId: number): StreamExportOption[]
     }
   }
   return options;
+}
+
+/**
+ * Record that one stream's file was written, and decide whether the session as
+ * a whole now counts as exported.
+ *
+ * The reset guard reads `exported_at` as "every reading of this session has
+ * been saved somewhere", but a session exports one file per stream. Marking
+ * the session after the first file would hand the remaining streams' readings
+ * to the next reset — never uploaded, never written anywhere. So the session
+ * is only marked once no stream that has data is still missing.
+ *
+ * Returns the streams still waiting to be exported, for logging and for the UI.
+ */
+export function recordStreamExport(
+  sessionId: number,
+  stream: ExportableStream,
+): { remaining: string[] } {
+  markStreamExported(sessionId, stream);
+  const exported = new Set(getExportedStreams(sessionId));
+  const remaining = getSessionExportStreams(sessionId)
+    .filter((o) => !exported.has(o.stream))
+    .map((o) => o.stream);
+  if (remaining.length === 0) {
+    markSessionExported(sessionId);
+  }
+  return { remaining };
 }
 
 /**
