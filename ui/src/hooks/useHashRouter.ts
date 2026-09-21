@@ -1,13 +1,17 @@
 import { useSyncExternalStore } from 'react';
 
 export interface Route {
-  page: 'home' | 'config' | 'element' | 'comments';
+  page: 'home' | 'config' | 'element' | 'comments' | 'setup';
   params: Record<string, string>;
   query: Record<string, string>;
 }
 
-function parseHash(): Route {
-  const raw = window.location.hash.replace(/^#\/?/, '');
+/**
+ * Pure so it can be tested: the wizard's step now lives in the URL, which
+ * makes this parser load-bearing for whether someone can finish setup.
+ */
+export function parseRoute(hash: string): Route {
+  const raw = hash.replace(/^#\/?/, '');
   const [path, qs] = raw.split('?', 2);
   const query: Record<string, string> = {};
   if (qs) {
@@ -25,6 +29,14 @@ function parseHash(): Route {
     return { page: 'comments', params: {}, query };
   }
 
+  // The setup wizard is a route, not a conditional overlay. Its step lives in
+  // the URL so that a remount cannot silently send the technician back to the
+  // first screen, and so each step can be opened directly.
+  const setupMatch = path.match(/^setup(?:\/(.+))?$/);
+  if (setupMatch) {
+    return { page: 'setup', params: { step: setupMatch[1] ?? 'verfahren' }, query };
+  }
+
   const elementMatch = path.match(/^element\/(.+)$/);
   if (elementMatch) {
     return { page: 'element', params: { name: decodeURIComponent(elementMatch[1]) }, query };
@@ -33,7 +45,13 @@ function parseHash(): Route {
   return { page: 'home', params: {}, query };
 }
 
-let currentRoute = parseHash();
+function parseHash(): Route {
+  return parseRoute(window.location.hash);
+}
+
+// Resolved lazily rather than at import: touching `window` at module load
+// makes the module unimportable outside a browser, including from tests.
+let currentRoute: Route | null = null;
 
 function subscribe(callback: () => void): () => void {
   const handler = () => {
@@ -45,6 +63,7 @@ function subscribe(callback: () => void): () => void {
 }
 
 function getSnapshot(): Route {
+  if (currentRoute === null) currentRoute = parseHash();
   return currentRoute;
 }
 

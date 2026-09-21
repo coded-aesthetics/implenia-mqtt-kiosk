@@ -12,6 +12,7 @@ import { ElementDetail } from './components/ElementDetail';
 import { VoiceFeedbackOverlay } from './components/VoiceFeedbackOverlay';
 import { CommentQueuePage } from './components/CommentQueuePage';
 import { SetupWizard } from './components/SetupWizard';
+import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
 
@@ -43,6 +44,21 @@ export function App() {
     [shift.data],
   );
 
+  // The wizard is a route, so its visibility cannot be knocked out by the
+  // state it writes. An unconfigured kiosk is redirected into it; from there
+  // the URL is what decides, until the wizard navigates away itself.
+  const gate = {
+    onSetupRoute: route.page === 'setup',
+    settled: !setup.loading,
+    hasError: setup.error !== null,
+    verfahren: setup.verfahren,
+  };
+  const screen = resolveScreen(gate);
+
+  useEffect(() => {
+    if (needsSetupRedirect(gate)) navigate('setup');
+  }, [gate.onSetupRoute, gate.settled, gate.hasError, gate.verfahren]);
+
   // Comment queue (background whisper transcription + API posting)
   const commentQueue = useCommentQueue();
 
@@ -59,15 +75,21 @@ export function App() {
   // ── First-start gate ──────────────────────────────────────────────────
   // The Verfahren decides how every sensor is interpreted, so nothing else can
   // be shown until it is set. Deliberately checked before any other routing.
-  if (setup.loading) {
-    return <div style={styles.gate}>Einrichtung wird geprüft...</div>;
+  if (screen === 'setup') {
+    return (
+      <SetupWizard
+        step={route.params.step ?? 'verfahren'}
+        onFinish={() => { setup.refetch(); navigate(''); }}
+        hasApiKey={config.hasApiKey}
+      />
+    );
   }
-  if (setup.error) {
+  if (screen === 'error') {
     // State unknown (server unreachable) — never assume "not set up".
     return <div style={styles.gate}>{setup.error}</div>;
   }
-  if (!setup.verfahren) {
-    return <SetupWizard onVerfahrenSet={setup.refetch} hasApiKey={config.hasApiKey} />;
+  if (screen === 'checking') {
+    return <div style={styles.gate}>Einrichtung wird geprüft...</div>;
   }
 
   let content: React.ReactNode;

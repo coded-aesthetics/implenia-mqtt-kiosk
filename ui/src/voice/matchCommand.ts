@@ -10,7 +10,7 @@ export interface VoiceCommand {
 }
 
 export interface VoiceContext {
-  route: { page: 'home' | 'config' | 'element' | 'comments'; params: Record<string, string> };
+  route: { page: 'home' | 'config' | 'element' | 'comments' | 'setup'; params: Record<string, string> };
   recordingState: {
     active: boolean;
     sessionId: number | null;

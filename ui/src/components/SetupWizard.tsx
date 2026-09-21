@@ -18,8 +18,10 @@ interface Verfahren {
 }
 
 interface Props {
-  /** Refetch the active Verfahren in App once it has been set. */
-  onVerfahrenSet: () => void;
+  /** Current step, from the URL (`#/setup/<step>`). */
+  step: string;
+  /** Leave the wizard: the app re-reads the Verfahren and routes home. */
+  onFinish: () => void;
   hasApiKey: boolean;
 }
 
@@ -47,8 +49,14 @@ interface SerialDevice {
   connected: boolean;
 }
 
-export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
-  const [step, setStep] = useState<Step>('verfahren');
+function isStep(value: string): value is Step {
+  return value in STEP_TITLES;
+}
+
+export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
+  const step: Step = isStep(rawStep) ? rawStep : 'verfahren';
+  const goto = (next: Step) => navigate(`setup/${next}`);
+
   const [verfahren, setVerfahren] = useState<Verfahren[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -92,6 +100,31 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
     return () => { cancelled = true; clearInterval(timer); };
   }, [step]);
 
+  // Everything the wizard needs to render a step is read back from the server,
+  // not carried in component state. A reload — or landing on #/setup/done
+  // directly — then shows the real situation instead of an empty summary.
+  useEffect(() => {
+    fetch('/api/verfahren/active')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.verfahren) setSelected(d.verfahren); })
+      .catch(() => {});
+
+    fetch('/api/config/transport')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.configured) setTransport(d.transport); })
+      .catch(() => {});
+
+    fetch('/api/config/mqtt')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.source === 'runtime' && d.brokerUrl) {
+          setMqttSaved(true);
+          setBrokerUrl(d.brokerUrl);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   async function chooseTransport(choice: Transport) {
     if (transportSaving) return;
     setTransportSaving(true);
@@ -108,7 +141,7 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
         return;
       }
       setTransport(choice);
-      setStep(choice);
+      goto(choice);
     } catch {
       setSaveError('Die Anwendung ist nicht erreichbar. Bitte erneut versuchen.');
     } finally {
@@ -134,8 +167,7 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
         );
         return;
       }
-      onVerfahrenSet();
-      setStep('transport');
+      goto('transport');
     } catch {
       setSaveError(
         'Die Anwendung ist nicht erreichbar. Bitte die Verbindung prüfen und erneut versuchen.',
@@ -243,10 +275,10 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
             <h1 style={styles.question}>MQTT-Box verbinden</h1>
             <MqttSettings onSaved={(url) => { setMqttSaved(true); setBrokerUrl(url); }} />
             <div style={styles.doneActions}>
-              <button onClick={() => setStep('transport')} style={styles.secondaryButton}>
+              <button onClick={() => goto('transport')} style={styles.secondaryButton}>
                 Zurück
               </button>
-              <button onClick={() => setStep('done')} style={styles.secondaryButton}>
+              <button onClick={() => goto('done')} style={styles.secondaryButton}>
                 {mqttSaved ? 'Weiter' : 'Überspringen'}
               </button>
             </div>
@@ -295,13 +327,13 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
             </div>
 
             <div style={styles.doneActions}>
-              <button onClick={() => setStep('transport')} style={styles.secondaryButton}>
+              <button onClick={() => goto('transport')} style={styles.secondaryButton}>
                 Zurück
               </button>
-              <button onClick={() => navigate('config')} style={styles.confirmButton}>
+              <button onClick={() => { onFinish(); navigate('config'); }} style={styles.confirmButton}>
                 Einstellungen öffnen
               </button>
-              <button onClick={() => setStep('done')} style={styles.secondaryButton}>
+              <button onClick={() => goto('done')} style={styles.secondaryButton}>
                 Weiter
               </button>
             </div>
@@ -350,13 +382,13 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
 
             <div style={styles.doneActions}>
               <button
-                onClick={() => navigate('config')}
+                onClick={() => { onFinish(); navigate('config'); }}
                 style={styles.confirmButton}
               >
                 Einstellungen öffnen
               </button>
               <button
-                onClick={() => navigate('')}
+                onClick={() => { onFinish(); navigate(''); }}
                 style={styles.secondaryButton}
               >
                 Zur Anwendung

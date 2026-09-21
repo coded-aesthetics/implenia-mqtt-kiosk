@@ -38,7 +38,10 @@ export function useConfig(): ConfigState {
   });
 
   const refetch = useCallback(() => {
-    setState((s) => ({ ...s, loading: true }));
+    // `loading` means "nothing to show yet", not "a request is in flight".
+    // Flipping it on every refetch is what let a background refresh blank a
+    // screen someone was using — see setupGate.ts.
+    setState((s) => ({ ...s, loading: s.apiUrl === null && !s.hasApiKey }));
     fetch('/api/config')
       .then((r) => r.json())
       .then((data) => setState({ hasApiKey: data.hasApiKey, apiUrl: data.apiUrl, apiUrlSource: data.apiUrlSource, loading: false }))
@@ -76,7 +79,8 @@ export function useActiveVerfahren(): ActiveVerfahrenState {
   }>({ verfahren: null, label: null, loading: true, error: null });
 
   const refetch = useCallback(() => {
-    setState((s) => ({ ...s, loading: true }));
+    // Only "no answer yet" blanks the UI; a refresh keeps the current value.
+    setState((s) => ({ ...s, loading: s.verfahren === null && s.error === null }));
     fetch('/api/verfahren/active')
       .then(async (r) => {
         if (!r.ok) throw new Error(String(r.status));
@@ -142,7 +146,9 @@ export function useShiftAssignment(hasApiKey: boolean): ShiftAssignmentState {
 
   const fetchShift = useCallback(() => {
     const id = ++fetchIdRef.current;
-    setState((s) => ({ ...s, loading: true, error: null, notFound: false }));
+    // Keep the element list on screen while refreshing: a worker looking at it
+    // must not have it replaced by "wird geladen..." mid-shift.
+    setState((s) => ({ ...s, loading: s.data === null, error: null, notFound: false }));
     fetch('/api/shift-assignment')
       .then(async (r) => {
         if (id !== fetchIdRef.current) return;
