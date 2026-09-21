@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { navigate } from '../hooks/useHashRouter';
+import { MqttSettings } from './MqttSettings';
 
 /**
  * First-start setup, shown instead of the whole app until this machine has a
@@ -22,14 +23,29 @@ interface Props {
   hasApiKey: boolean;
 }
 
-type Step = 'verfahren' | 'mqtt' | 'done';
+type Transport = 'mqtt' | 'serial';
+type Step = 'verfahren' | 'transport' | 'mqtt' | 'serial' | 'done';
 
 const STEP_TITLES: Record<Step, string> = {
   verfahren: 'Verfahren wählen',
-  mqtt: 'Datenquelle verbinden',
+  transport: 'Datenquelle wählen',
+  mqtt: 'MQTT-Box verbinden',
+  serial: 'Geräte anschließen',
   done: 'Einrichtung abgeschlossen',
 };
-const STEP_ORDER: Step[] = ['verfahren', 'mqtt', 'done'];
+
+/** The step sequence depends on the transport, so the counter stays honest. */
+function stepOrder(transport: Transport | null): Step[] {
+  if (transport === null) return ['verfahren', 'transport', 'done'];
+  return ['verfahren', 'transport', transport, 'done'];
+}
+
+interface SerialDevice {
+  deviceId: number;
+  label: string;
+  type: string;
+  connected: boolean;
+}
 
 export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
   const [step, setStep] = useState<Step>('verfahren');
@@ -39,13 +55,12 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // ── MQTT step ──
-  const [brokerUrl, setBrokerUrl] = useState('');
-  const [topics, setTopics] = useState('');
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [topicCount, setTopicCount] = useState<number | null>(null);
+  // ── Transport ──
+  const [transport, setTransport] = useState<Transport | null>(null);
+  const [transportSaving, setTransportSaving] = useState(false);
   const [mqttSaved, setMqttSaved] = useState(false);
+  const [brokerUrl, setBrokerUrl] = useState('');
+  const [serialDevices, setSerialDevices] = useState<SerialDevice[] | null>(null);
 
   useEffect(() => {
     fetch('/api/verfahren')
@@ -61,84 +76,43 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
       );
   }, []);
 
-  // Prefill from whatever is already configured, falling back to the Implenia
-  // MQTT box's default address so the common case is "confirm and continue".
+  // Devices are listed on the serial step so the technician can see whether the
+  // USB connection is actually up before leaving the wizard.
   useEffect(() => {
-    fetch('/api/config/mqtt')
-      .then(async (r) => {
-        if (!r.ok) throw new Error(String(r.status));
-        const d = (await r.json()) as {
-          brokerUrl: string | null; topics: string | null;
-          defaultBrokerUrl: string; defaultTopics: string;
-        };
-        setBrokerUrl(d.brokerUrl ?? d.defaultBrokerUrl);
-        setTopics(d.topics ?? d.defaultTopics);
-      })
-      .catch(() => {
-        setBrokerUrl('mqtt://192.168.2.1:1883');
-        setTopics('#');
-      });
-  }, []);
-
-  // While on the MQTT step, poll how many topics have actually arrived. A
-  // successful connection with zero topics is its own kind of problem.
-  useEffect(() => {
-    if (step !== 'mqtt' || !mqttSaved) return;
+    if (step !== 'serial') return;
     let cancelled = false;
     const poll = () => {
-      fetch('/api/config/mqtt/topics')
+      fetch('/status')
         .then((r) => (r.ok ? r.json() : null))
-        .then((d) => { if (!cancelled && d) setTopicCount(d.count); })
-        .catch(() => {});
+        .then((d) => { if (!cancelled && d) setSerialDevices(d.devices ?? []); })
+        .catch(() => { if (!cancelled) setSerialDevices([]); });
     };
     poll();
     const timer = setInterval(poll, 3000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [step, mqttSaved]);
+  }, [step]);
 
-  async function testBroker() {
-    if (testing) return;
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const res = await fetch('/api/config/mqtt/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brokerUrl }),
-      });
-      const body = (await res.json()) as { ok?: boolean; error?: string; brokerUrl?: string };
-      setTestResult(
-        body.ok
-          ? { ok: true, message: `Verbunden mit ${body.brokerUrl}` }
-          : { ok: false, message: body.error ?? 'Verbindung fehlgeschlagen.' },
-      );
-    } catch {
-      setTestResult({ ok: false, message: 'Die Anwendung ist nicht erreichbar.' });
-    } finally {
-      setTesting(false);
-    }
-  }
-
-  async function saveMqtt() {
-    if (saving) return;
-    setSaving(true);
+  async function chooseTransport(choice: Transport) {
+    if (transportSaving) return;
+    setTransportSaving(true);
     setSaveError(null);
     try {
-      const res = await fetch('/api/config/mqtt', {
+      const res = await fetch('/api/config/transport', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brokerUrl, topics }),
+        body: JSON.stringify({ transport: choice }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setSaveError(body.error ?? 'Die Einstellungen konnten nicht gespeichert werden.');
+        setSaveError(body.error ?? 'Die Datenquelle konnte nicht gespeichert werden.');
         return;
       }
-      setMqttSaved(true);
+      setTransport(choice);
+      setStep(choice);
     } catch {
       setSaveError('Die Anwendung ist nicht erreichbar. Bitte erneut versuchen.');
     } finally {
-      setSaving(false);
+      setTransportSaving(false);
     }
   }
 
@@ -161,7 +135,7 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
         return;
       }
       onVerfahrenSet();
-      setStep('mqtt');
+      setStep('transport');
     } catch {
       setSaveError(
         'Die Anwendung ist nicht erreichbar. Bitte die Verbindung prüfen und erneut versuchen.',
@@ -172,14 +146,18 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
   }
 
   const selectedLabel = verfahren.find((v) => v.key === selected)?.label ?? '';
+  const transportDone =
+    transport === 'mqtt' ? mqttSaved
+    : transport === 'serial' ? (serialDevices?.length ?? 0) > 0
+    : false;
 
   return (
     <div style={styles.container}>
       <header style={styles.header}>
         <div style={styles.headerTitle}>Einrichtung</div>
         <div style={styles.headerStep}>
-          Schritt {STEP_ORDER.indexOf(step) + 1} von {STEP_ORDER.length} ·{' '}
-          {STEP_TITLES[step]}
+          Schritt {Math.max(stepOrder(transport).indexOf(step), 0) + 1} von{' '}
+          {stepOrder(transport).length} · {STEP_TITLES[step]}
         </div>
       </header>
 
@@ -229,67 +207,102 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
           </>
         )}
 
+        {step === 'transport' && (
+          <>
+            <h1 style={styles.question}>Wie ist die Maschine angeschlossen?</h1>
+
+            <div style={styles.grid}>
+              <button
+                onClick={() => chooseTransport('mqtt')}
+                disabled={transportSaving}
+                style={styles.tile}
+              >
+                MQTT-Box
+                <div style={styles.tileHint}>Daten über das Netzwerk</div>
+              </button>
+              <button
+                onClick={() => chooseTransport('serial')}
+                disabled={transportSaving}
+                style={styles.tile}
+              >
+                Serielle Verbindung
+                <div style={styles.tileHint}>Daten über USB</div>
+              </button>
+            </div>
+
+            <div style={styles.hint}>
+              Diese Auswahl lässt sich später in den Einstellungen ändern.
+            </div>
+
+            {saveError && <div style={styles.error}>{saveError}</div>}
+          </>
+        )}
+
         {step === 'mqtt' && (
           <>
-            <h1 style={styles.question}>Womit ist die Maschine verbunden?</h1>
-
-            <label style={styles.fieldLabel}>
-              Adresse der MQTT-Box
-              <input
-                value={brokerUrl}
-                onChange={(e) => { setBrokerUrl(e.target.value); setTestResult(null); setMqttSaved(false); }}
-                style={styles.input}
-                inputMode="url"
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </label>
-            <div style={styles.fieldHint}>
-              Voreingestellt ist die Standard-Adresse der Implenia MQTT-Box. Nur
-              ändern, wenn die Box anders eingerichtet wurde.
-            </div>
-
-            <label style={styles.fieldLabel}>
-              Topic-Filter
-              <input
-                value={topics}
-                onChange={(e) => { setTopics(e.target.value); setMqttSaved(false); }}
-                style={styles.input}
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </label>
-            <div style={styles.fieldHint}>
-              „#" empfängt alle Topics. Das ist bei der Einrichtung gewollt —
-              so werden auch unbekannte Sensornamen sichtbar.
-            </div>
-
-            {testResult && (
-              <div style={testResult.ok ? styles.success : styles.error}>
-                {testResult.message}
-              </div>
-            )}
-            {saveError && <div style={styles.error}>{saveError}</div>}
-            {mqttSaved && (
-              <div style={styles.success}>
-                Gespeichert.{' '}
-                {topicCount === null
-                  ? 'Empfangene Topics werden geprüft...'
-                  : topicCount > 0
-                    ? `${topicCount} Topics empfangen.`
-                    : 'Noch keine Topics empfangen — läuft die Maschine bereits?'}
-              </div>
-            )}
-
+            <h1 style={styles.question}>MQTT-Box verbinden</h1>
+            <MqttSettings onSaved={(url) => { setMqttSaved(true); setBrokerUrl(url); }} />
             <div style={styles.doneActions}>
-              <button onClick={testBroker} disabled={testing} style={styles.secondaryButton}>
-                {testing ? 'Wird geprüft...' : 'Verbindung testen'}
-              </button>
-              <button onClick={saveMqtt} disabled={saving} style={styles.confirmButton}>
-                {saving ? 'Wird gespeichert...' : 'Speichern'}
+              <button onClick={() => setStep('transport')} style={styles.secondaryButton}>
+                Zurück
               </button>
               <button onClick={() => setStep('done')} style={styles.secondaryButton}>
                 {mqttSaved ? 'Weiter' : 'Überspringen'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === 'serial' && (
+          <>
+            <h1 style={styles.question}>Geräte anschließen</h1>
+
+            {serialDevices === null && <div style={styles.hint}>Geräte werden geprüft...</div>}
+
+            {serialDevices?.length === 0 && (
+              <div style={styles.warning}>
+                Es ist noch kein Gerät eingerichtet. Geräte und die Zuordnung der
+                Kanäle zu den Sensoren werden in den Einstellungen angelegt —
+                dafür muss die Maschine angeschlossen und eingeschaltet sein.
+              </div>
+            )}
+
+            {serialDevices && serialDevices.length > 0 && (
+              <div style={styles.deviceList}>
+                {serialDevices.map((d) => (
+                  <div key={d.deviceId} style={styles.deviceRow}>
+                    <span
+                      style={{
+                        ...styles.deviceDot,
+                        backgroundColor: d.connected
+                          ? 'var(--color-success)'
+                          : 'var(--color-danger)',
+                      }}
+                    />
+                    <span style={styles.deviceLabel}>{d.label}</span>
+                    <span style={styles.deviceState}>
+                      {d.connected ? 'Verbunden' : 'Nicht verbunden'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={styles.hint}>
+              Die Kanalzuordnung — welcher Messwert zu welchem Sensor gehört —
+              erfolgt in den Einstellungen. Am einfachsten ist das, während die
+              Maschine läuft: dann sind die Werte an ihrer Bewegung zu erkennen.
+            </div>
+
+            <div style={styles.doneActions}>
+              <button onClick={() => setStep('transport')} style={styles.secondaryButton}>
+                Zurück
+              </button>
+              <button onClick={() => navigate('config')} style={styles.confirmButton}>
+                Einstellungen öffnen
+              </button>
+              <button onClick={() => setStep('done')} style={styles.secondaryButton}>
+                Weiter
               </button>
             </div>
           </>
@@ -304,13 +317,17 @@ export function SetupWizard({ onVerfahrenSet, hasApiKey }: Props) {
                 <span>Verfahren: <strong>{selectedLabel}</strong></span>
               </div>
               <div style={styles.doneRow}>
-                <span style={mqttSaved ? styles.doneCheck : styles.doneOpen}>
-                  {mqttSaved ? '✓' : '!'}
+                <span style={transportDone ? styles.doneCheck : styles.doneOpen}>
+                  {transportDone ? '✓' : '!'}
                 </span>
                 <span>
-                  {mqttSaved
+                  {transport === 'mqtt' && (mqttSaved
                     ? <>Datenquelle: <strong>{brokerUrl}</strong></>
-                    : 'Datenquelle noch nicht eingerichtet — ohne sie kommen keine Messwerte an'}
+                    : 'MQTT-Box noch nicht eingerichtet — ohne sie kommen keine Messwerte an')}
+                  {transport === 'serial' && (transportDone
+                    ? <>Datenquelle: <strong>Serielle Verbindung</strong> ({serialDevices?.length} Gerät(e))</>
+                    : 'Noch kein serielles Gerät eingerichtet — ohne Gerät kommen keine Messwerte an')}
+                  {transport === null && 'Datenquelle noch nicht gewählt'}
                 </span>
               </div>
               <div style={styles.doneRow}>
@@ -402,6 +419,11 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 'var(--space-md)',
   },
   tile: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 'var(--space-xs)',
     minHeight: 'var(--tap-min)',
     padding: 'var(--space-lg)',
     fontSize: 'var(--font-md)',
@@ -517,38 +539,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#fff',
     fontWeight: 700,
   },
-  fieldLabel: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 'var(--space-sm)',
-    fontSize: 'var(--font-base)',
-    fontWeight: 600,
-    color: 'var(--text-primary)',
-  },
-  input: {
-    minHeight: 'var(--tap-min)',
-    padding: '0 var(--space-md)',
-    fontSize: 'var(--font-md)',
-    fontFamily: 'var(--font-mono)',
-    color: 'var(--text-primary)',
-    backgroundColor: 'var(--surface-0)',
-    border: '2px solid var(--border)',
-    borderRadius: 'var(--radius-md)',
-  },
-  fieldHint: {
-    fontSize: 'var(--font-sm)',
-    lineHeight: 1.4,
-    color: 'var(--text-muted)',
-    marginTop: 'calc(-1 * var(--space-sm))',
-  },
-  success: {
-    padding: 'var(--space-md)',
-    fontSize: 'var(--font-base)',
-    lineHeight: 1.4,
-    color: 'var(--text-primary)',
-    backgroundColor: 'var(--color-success-muted)',
-    borderRadius: 'var(--radius-sm)',
-  },
   hint: {
     fontSize: 'var(--font-base)',
     lineHeight: 1.4,
@@ -557,5 +547,40 @@ const styles: Record<string, React.CSSProperties> = {
   doneActions: {
     display: 'flex',
     gap: 'var(--space-md)',
+  },
+  tileHint: {
+    fontSize: 'var(--font-sm)',
+    fontWeight: 400,
+    color: 'var(--text-muted)',
+  },
+  deviceList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'var(--space-sm)',
+  },
+  deviceRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'var(--space-md)',
+    minHeight: 'var(--tap-sm)',
+    padding: '0 var(--space-md)',
+    backgroundColor: 'var(--surface-2)',
+    borderRadius: 'var(--radius-md)',
+  },
+  deviceDot: {
+    flexShrink: 0,
+    width: '1rem',
+    height: '1rem',
+    borderRadius: '50%',
+  },
+  deviceLabel: {
+    flex: 1,
+    fontSize: 'var(--font-base)',
+    fontWeight: 600,
+    color: 'var(--text-primary)',
+  },
+  deviceState: {
+    fontSize: 'var(--font-sm)',
+    color: 'var(--text-muted)',
   },
 };

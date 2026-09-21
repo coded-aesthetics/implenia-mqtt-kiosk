@@ -136,6 +136,11 @@ Until a Verfahren is set, `App` renders `SetupWizard` instead of the whole app �
 
 The wizard is **service-personnel UI** and is deliberately exempt from the "no modals or multi-step flows" rule in `CLAUDE.md`, which is written for the worker-facing screens. Glove-sized tap targets, contrast, German text and the 1024x768 budget still apply. Each step commits its own setting as it completes, so an interrupted setup resumes instead of starting over.
 
+
+Steps: **Verfahren** → **Datenquelle** (MQTT or serial) → the branch for that choice → summary. The step counter reflects the branch, so it does not promise a step that will not appear. The MQTT branch uses the same `MqttSettings` component as the config page, so the two cannot drift; the serial branch lists devices with live connection state and sends the technician to the settings for channel mapping, which needs the machine running to be doable at all.
+
+The config page mirrors the choice: with `transport = mqtt` it shows MQTT settings, with `serial` the device list and channel mapping. Switching there swaps the live data source immediately, no restart.
+
 ### Resetting the setup
 
 ```bash

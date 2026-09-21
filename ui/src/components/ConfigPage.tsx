@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ConfigState } from '../hooks/useImplenia';
 import type { DeviceFrame } from '../hooks/useWebSocket';
 import { UpdateUpload } from './UpdateUpload';
+import { MqttSettings } from './MqttSettings';
 import { DeviceConfig } from './DeviceConfig';
 
 interface Props {
@@ -59,6 +60,41 @@ function CardOverlay({ overlay, onDismiss }: { overlay: OverlayState; onDismiss:
 }
 
 export function ConfigPage({ config, devMode, deviceFrames }: Props) {
+  // Which data-source section to show. Mirrors the wizard's transport choice.
+  const [transport, setTransport] = useState<'mqtt' | 'serial' | null>(null);
+  const [transportConfigured, setTransportConfigured] = useState(true);
+  const [transportSaving, setTransportSaving] = useState(false);
+
+  const loadTransport = useCallback(() => {
+    fetch('/api/config/transport')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return;
+        setTransport(d.transport);
+        setTransportConfigured(d.configured);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { loadTransport(); }, [loadTransport]);
+
+  async function switchTransport(next: 'mqtt' | 'serial') {
+    if (transportSaving || next === transport) return;
+    setTransportSaving(true);
+    try {
+      const res = await fetch('/api/config/transport', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transport: next }),
+      });
+      if (res.ok) { setTransport(next); setTransportConfigured(true); }
+    } catch {
+      // Leave the current selection in place; the next load corrects it.
+    } finally {
+      setTransportSaving(false);
+    }
+  }
+
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [keyOverlay, setKeyOverlay] = useState<OverlayState | null>(null);
@@ -302,13 +338,61 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
       {/* Software Update card */}
       <UpdateUpload />
 
-      {/* Device config + sensor mapping */}
-      <DeviceConfig
-        devMode={devMode}
-        deviceFrames={deviceFrames}
-        pendingDeleteId={pendingDeleteDeviceId}
-        onPendingDelete={(id) => { setPendingDeleteDeviceId(id); if (id !== null) setPendingDeleteKey(false); }}
-      />
+      {/* Data source: the transport decides what this section is */}
+      <div style={styles.cardWrapper}>
+        <div style={styles.card}>
+          <div style={styles.statusRow}>
+            <span style={styles.label}>Datenquelle</span>
+            {!transportConfigured && (
+              <span style={{ ...styles.statusBadge, backgroundColor: '#e65100' }}>
+                Nicht gewählt
+              </span>
+            )}
+          </div>
+          <div style={styles.presetRow}>
+            <button
+              style={transport === 'mqtt' ? styles.presetButtonActive : styles.presetButton}
+              onClick={() => switchTransport('mqtt')}
+              disabled={transportSaving}
+            >
+              MQTT-Box
+            </button>
+            <button
+              style={transport === 'serial' ? styles.presetButtonActive : styles.presetButton}
+              onClick={() => switchTransport('serial')}
+              disabled={transportSaving}
+            >
+              Seriell (USB)
+            </button>
+          </div>
+          {!transportConfigured && (
+            <div style={styles.envHint}>
+              Es wurde noch keine Datenquelle gewählt. Angezeigt wird die
+              Voreinstellung MQTT.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {transport === 'mqtt' && (
+        <div style={styles.cardWrapper}>
+          <div style={styles.card}>
+            <div style={styles.statusRow}>
+              <span style={styles.label}>MQTT-Einstellungen</span>
+            </div>
+            <MqttSettings />
+          </div>
+        </div>
+      )}
+
+      {transport === 'serial' && (
+        <DeviceConfig
+          devMode={devMode}
+          deviceFrames={deviceFrames}
+          pendingDeleteId={pendingDeleteDeviceId}
+          onPendingDelete={(id) => { setPendingDeleteDeviceId(id); if (id !== null) setPendingDeleteKey(false); }}
+        />
+      )}
 
       {/* API URL card */}
       <div style={styles.cardWrapper}>
