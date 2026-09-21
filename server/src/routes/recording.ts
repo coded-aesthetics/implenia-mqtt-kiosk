@@ -1,12 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { beginRecording, endRecording, uploadSession, getRecordingState } from '../recording.js';
-import { getSessions, getSessionStats } from '../db.js';
+import { getSessions, getSessionStats, markSessionExported } from '../db.js';
 import {
   buildSessionExport,
   getSessionExportStreams,
   isExportableStream,
 } from '../session-export.js';
 import { broadcastMessage } from '../websocket.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('recording-routes');
 
 export function registerRecordingRoutes(app: FastifyInstance): void {
   app.post('/api/recording/start', async (request, reply) => {
@@ -77,7 +80,16 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
     }
 
     try {
-      const { buffer, filename } = await buildSessionExport(sessionId, stream);
+      const { buffer, filename, dataRows } = await buildSessionExport(sessionId, stream);
+      // Only a file that actually contains readings counts as the data having
+      // left the kiosk. A verfahren with no streams defined yields a
+      // header-only file, and marking that "exported" would let the reset
+      // guard discard data nobody ever saved.
+      if (dataRows > 0) {
+        markSessionExported(sessionId);
+      } else {
+        log.warn('Export of session %d (%s) contained no rows — not marked as exported', sessionId, stream);
+      }
       return reply
         .header(
           'Content-Type',

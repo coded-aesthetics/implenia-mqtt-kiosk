@@ -63,7 +63,6 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
   // Which data-source section to show. Mirrors the wizard's transport choice.
   const [transport, setTransport] = useState<'mqtt' | 'serial' | null>(null);
   const [transportConfigured, setTransportConfigured] = useState(true);
-  const [transportSaving, setTransportSaving] = useState(false);
 
   const loadTransport = useCallback(() => {
     fetch('/api/config/transport')
@@ -78,20 +77,41 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
 
   useEffect(() => { loadTransport(); }, [loadTransport]);
 
-  async function switchTransport(next: 'mqtt' | 'serial') {
-    if (transportSaving || next === transport) return;
-    setTransportSaving(true);
+  // ── Reset ──
+  const [resetState, setResetState] = useState<{
+    allowed: boolean; unsafe: { sessions: number; readings: number };
+  } | null>(null);
+  const [resetPending, setResetPending] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  const loadResetState = useCallback(() => {
+    fetch('/api/config/reset')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setResetState(d); })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { loadResetState(); }, [loadResetState]);
+
+  async function doReset() {
+    setResetError(null);
     try {
-      const res = await fetch('/api/config/transport', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transport: next }),
-      });
-      if (res.ok) { setTransport(next); setTransportConfigured(true); }
+      const res = await fetch('/api/config/reset', { method: 'POST' });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setResetError(body.error ?? 'Zurücksetzen fehlgeschlagen.');
+        setResetPending(false);
+        loadResetState();
+        return;
+      }
+      // Voice comments live in localStorage, so the server reset cannot clear
+      // them — they would otherwise survive into the new configuration.
+      try { localStorage.removeItem('commentQueue'); } catch { /* private mode */ }
+      window.location.hash = '#/setup';
+      window.location.reload();
     } catch {
-      // Leave the current selection in place; the next load corrects it.
-    } finally {
-      setTransportSaving(false);
+      setResetError('Die Anwendung ist nicht erreichbar. Bitte erneut versuchen.');
+      setResetPending(false);
     }
   }
 
@@ -349,28 +369,14 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
               </span>
             )}
           </div>
-          <div style={styles.presetRow}>
-            <button
-              style={transport === 'mqtt' ? styles.presetButtonActive : styles.presetButton}
-              onClick={() => switchTransport('mqtt')}
-              disabled={transportSaving}
-            >
-              MQTT-Box
-            </button>
-            <button
-              style={transport === 'serial' ? styles.presetButtonActive : styles.presetButton}
-              onClick={() => switchTransport('serial')}
-              disabled={transportSaving}
-            >
-              Seriell (USB)
-            </button>
+          <div style={styles.settledValue}>
+            {transport === 'serial' ? 'Serielle Verbindung (USB)' : 'MQTT-Box'}
           </div>
-          {!transportConfigured && (
-            <div style={styles.envHint}>
-              Es wurde noch keine Datenquelle gewählt. Angezeigt wird die
-              Voreinstellung MQTT.
-            </div>
-          )}
+          <div style={styles.envHint}>
+            {transportConfigured
+              ? 'Bei der Einrichtung festgelegt. Eine Änderung erfordert ein Zurücksetzen der Software.'
+              : 'Es wurde noch keine Datenquelle gewählt. Angezeigt wird die Voreinstellung MQTT-Box.'}
+          </div>
         </div>
       </div>
 
@@ -393,6 +399,41 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
           onPendingDelete={(id) => { setPendingDeleteDeviceId(id); if (id !== null) setPendingDeleteKey(false); }}
         />
       )}
+
+      {/* Reset — last, because it is the destructive one */}
+      <div style={styles.cardWrapper}>
+        <div style={styles.card}>
+          <div style={styles.statusRow}>
+            <span style={styles.label}>Software zurücksetzen</span>
+          </div>
+
+          <div style={styles.envHint}>
+            Löscht Verfahren, Datenquelle, Geräte, Kanal- und Topic-Zuordnungen
+            sowie alle aufgezeichneten Daten. API-Schlüssel und Server-Adresse
+            bleiben erhalten. Danach startet die Einrichtung neu.
+          </div>
+
+          {resetState && !resetState.allowed && (
+            <div style={styles.blockedNotice}>
+              Zurücksetzen ist gesperrt: {resetState.unsafe.readings} Messwerte aus{' '}
+              {resetState.unsafe.sessions} Aufzeichnung(en) sind weder hochgeladen
+              noch exportiert. Bitte zuerst hochladen oder als Datei exportieren.
+            </div>
+          )}
+
+          {resetError && <div style={styles.blockedNotice}>{resetError}</div>}
+
+          {resetState?.allowed && (
+            <button
+              onClick={() => { if (resetPending) doReset(); else setResetPending(true); }}
+              onBlur={() => setResetPending(false)}
+              style={resetPending ? styles.dangerButtonConfirm : styles.dangerButton}
+            >
+              {resetPending ? 'Wirklich zurücksetzen?' : 'Zurücksetzen'}
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* API URL card */}
       <div style={styles.cardWrapper}>
@@ -681,6 +722,50 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     minHeight: 'var(--tap-sm)',
     fontFamily: 'inherit',
+  },
+  settledValue: {
+    fontSize: 'var(--font-md)',
+    fontWeight: 700,
+    color: 'var(--text-primary)',
+    padding: 'var(--space-sm) 0 var(--space-md)',
+  },
+  blockedNotice: {
+    fontSize: 'var(--font-base)',
+    lineHeight: 1.5,
+    color: 'var(--text-primary)',
+    padding: 'var(--space-md)',
+    marginBottom: 'var(--space-md)',
+    backgroundColor: 'var(--surface-0)',
+    borderRadius: 'var(--radius-md)',
+    borderLeft: '3px solid var(--color-warning)',
+  },
+  // House pattern for destructive actions: default state is muted with danger
+  // text, the pending state is solid danger. No confirmation dialog.
+  dangerButton: {
+    minHeight: 'var(--tap-min)',
+    width: '100%',
+    padding: '0 var(--space-lg)',
+    fontSize: 'var(--font-md)',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    color: 'var(--color-danger)',
+    backgroundColor: 'var(--surface-3)',
+    border: '2px solid var(--color-danger)',
+    borderRadius: 'var(--radius-md)',
+    cursor: 'pointer',
+  },
+  dangerButtonConfirm: {
+    minHeight: 'var(--tap-min)',
+    width: '100%',
+    padding: '0 var(--space-lg)',
+    fontSize: 'var(--font-md)',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    color: '#ffffff',
+    backgroundColor: 'var(--color-danger)',
+    border: '2px solid var(--color-danger)',
+    borderRadius: 'var(--radius-md)',
+    cursor: 'pointer',
   },
   envHint: {
     fontSize: 'var(--font-sm)',

@@ -26,7 +26,7 @@ GET /api/config/transport   → { transport, label, configured, available }
 PUT /api/config/transport   → { transport } — swaps the live source, no restart
 ```
 
-Unlike the Verfahren, the transport is freely changeable: switching does not reinterpret existing data, since serial mappings are keyed by `(device_id, value_index)` and MQTT overrides by topic.
+The transport is **write-once**, like the Verfahren. A rig's wiring does not change mid-project, and a wrong choice announces itself within minutes — no data arrives at all — at a point where resetting costs nothing because nothing has been recorded yet. Changing it requires a reset.
 
 ## Prerequisites
 
@@ -140,6 +140,21 @@ The wizard is **service-personnel UI** and is deliberately exempt from the "no m
 Steps: **Verfahren** → **Datenquelle** (MQTT or serial) → the branch for that choice → summary. The step counter reflects the branch, so it does not promise a step that will not appear. The MQTT branch uses the same `MqttSettings` component as the config page, so the two cannot drift; the serial branch lists devices with live connection state and sends the technician to the settings for channel mapping, which needs the machine running to be doable at all.
 
 The config page mirrors the choice: with `transport = mqtt` it shows MQTT settings, with `serial` the device list and channel mapping. Switching there swaps the live data source immediately, no restart.
+
+### Reset
+
+```
+GET  /api/config/reset   → { allowed, unsafe: { sessions, readings }, preserves }
+POST /api/config/reset   → 409 while data is unsafe, otherwise wipes and clears caches
+```
+
+**Clears:** Verfahren, transport, MQTT settings, devices, channel mappings, topic overrides, recorded sessions and readings, the buffer, the imported shift assignment. The UI additionally clears the voice comment queue, which lives in `localStorage` and is therefore out of the server's reach.
+
+**Keeps:** the API key and server address — the site's credentials, not this machine's setup, and re-entering a token on a touchscreen is miserable.
+
+**Refuses — does not warn — while recorded data exists only on this kiosk.** "Safe" means uploaded *or* exported to a file: if only uploading counted, a kiosk with no connectivity could never be reset, which is the dead end the guard exists to prevent. An export only counts when the file actually contained readings; a Verfahren with no streams defined produces a header-only file, and treating that as saved would discard data nobody ever got off the machine.
+
+Because the reset clears the in-memory caches (`clearVerfahrenCache`, `clearTransportCache`, `clearResolverCache`) and re-selects the data source, it needs no restart — unlike `scripts/reset-setup.sh`.
 
 ### Resetting the setup
 

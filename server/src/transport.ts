@@ -6,10 +6,11 @@ const log = createLogger('transport');
 /**
  * How sensor data reaches this kiosk. One machine uses exactly one.
  *
- * Unlike the Verfahren, this is freely changeable: switching it does not
- * reinterpret existing data. Serial channel mappings are keyed
- * (device_id, value_index) and MQTT overrides by topic, so they cannot
- * collide, and readings already recorded keep their own sensor map.
+ * Write-once, like the Verfahren. A rig's physical wiring does not change
+ * mid-project, and a wrong choice announces itself within minutes — no data
+ * arrives at all — at a point where resetting costs nothing because nothing
+ * has been recorded yet. Making it switchable bought a case nobody has, at
+ * the price of a second rule for service personnel to remember.
  */
 export const TRANSPORTS = {
   mqtt: 'MQTT-Box',
@@ -49,7 +50,18 @@ export function isTransportConfigured(): boolean {
   return getMeta(TRANSPORT_KEY) != null;
 }
 
+/** Raised when a second transport is written to an already-configured kiosk. */
+export class TransportAlreadySetError extends Error {
+  constructor(public readonly current: Transport) {
+    super(`Transport already set to "${current}"`);
+    this.name = 'TransportAlreadySetError';
+  }
+}
+
 export function setTransport(transport: Transport): void {
+  if (isTransportConfigured()) {
+    throw new TransportAlreadySetError(getTransport());
+  }
   setMeta(TRANSPORT_KEY, transport);
   cached = transport;
   log.info('Transport set to %s', transport);

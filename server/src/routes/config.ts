@@ -19,7 +19,10 @@ import { getActiveVerfahren, loadSensorCsv } from '../sensor-meta.js';
 import { clearResolverCache, loadTopicMap } from '../topic-resolver.js';
 import {
   TRANSPORTS, getTransport, isTransportConfigured, isValidTransport, setTransport,
+  TransportAlreadySetError, clearTransportCache,
 } from '../transport.js';
+import { getUnsafeDataSummary, resetKiosk } from '../db.js';
+import { clearVerfahrenCache } from '../sensor-meta.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('config');
@@ -124,11 +127,7 @@ export function registerConfigRoutes(app: FastifyInstance): void {
     };
   });
 
-  /**
-   * Freely changeable, unlike the Verfahren: switching does not reinterpret
-   * existing data. Serial mappings are keyed (device_id, value_index) and MQTT
-   * overrides by topic, so they cannot collide.
-   */
+  // Write-once, like the Verfahren — see transport.ts.
   app.put<{ Body: { transport?: string } }>(
     '/api/config/transport',
     async (request, reply) => {
@@ -139,13 +138,65 @@ export function registerConfigRoutes(app: FastifyInstance): void {
         });
       }
 
-      setTransport(transport);
-      // Swap the live source so the change takes effect without a restart.
+      try {
+        setTransport(transport);
+      } catch (err) {
+        if (err instanceof TransportAlreadySetError) {
+          return reply.status(409).send({
+            error:
+              `Die Datenquelle ist bereits auf „${TRANSPORTS[err.current]}" festgelegt ` +
+              'und kann nicht geändert werden. Um eine andere Datenquelle zu wählen, ' +
+              'muss die Software zurückgesetzt werden.',
+            current: err.current,
+          });
+        }
+        throw err;
+      }
+
+      // Swap the live source so the choice takes effect without a restart.
       ingestion.setSource(DataIngestion.sourceFor(transport));
 
       return reply.send({ transport, label: TRANSPORTS[transport] });
     },
   );
+
+  // ── Reset ───────────────────────────────────────────────────────────────
+
+  /** What a reset would destroy, and whether it is allowed right now. */
+  app.get('/api/config/reset', async () => {
+    const unsafe = getUnsafeDataSummary();
+    return {
+      allowed: unsafe.readings === 0,
+      unsafe,
+      preserves: ['API-Schlüssel', 'Server-Adresse'],
+    };
+  });
+
+  app.post('/api/config/reset', async (_request, reply) => {
+    const unsafe = getUnsafeDataSummary();
+    if (unsafe.readings > 0) {
+      // Refusing, not warning: losing recorded measurements is the one
+      // outcome this software must never produce.
+      return reply.status(409).send({
+        error:
+          `Zurücksetzen nicht möglich: ${unsafe.readings} Messwerte aus ` +
+          `${unsafe.sessions} Aufzeichnung(en) sind weder hochgeladen noch exportiert. ` +
+          'Bitte zuerst hochladen oder als Datei exportieren.',
+        unsafe,
+      });
+    }
+
+    resetKiosk();
+    // In-memory caches would otherwise keep serving the old setup; clearing
+    // them here is why the in-app reset needs no restart.
+    clearVerfahrenCache();
+    clearTransportCache();
+    clearResolverCache();
+    ingestion.setSource(DataIngestion.sourceFor(getTransport()));
+
+    log.info('Kiosk setup reset');
+    return reply.send({ ok: true });
+  });
 
   // ── MQTT ────────────────────────────────────────────────────────────────
 

@@ -199,6 +199,15 @@ const sessionStatsStmt = db.prepare(`
 `);
 
 // Meta
+// Added after the fact: a session that has been exported to USB counts as
+// "safe" for the reset guard, even if it was never uploaded.
+{
+  const cols = db.prepare('PRAGMA table_info(recording_sessions)').all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'exported_at')) {
+    db.exec('ALTER TABLE recording_sessions ADD COLUMN exported_at INTEGER');
+  }
+}
+
 const getMetaStmt = db.prepare('SELECT value FROM meta WHERE key = ?');
 const setMetaStmt = db.prepare(
   'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
@@ -499,4 +508,61 @@ export function setDeviceMappings(
 
 export function close(): void {
   db.close();
+}
+
+// --- Reset ---
+
+const markSessionExportedStmt = db.prepare(
+  'UPDATE recording_sessions SET exported_at = ? WHERE id = ?'
+);
+
+/** Record that a session's data left the kiosk as a file. */
+export function markSessionExported(sessionId: number): void {
+  markSessionExportedStmt.run(Date.now(), sessionId);
+}
+
+const unsafeSummaryStmt = db.prepare(`
+  SELECT COUNT(DISTINCT s.id) AS sessions, COUNT(r.id) AS readings
+  FROM recording_sessions s
+  JOIN session_readings r ON r.session_id = s.id
+  WHERE s.exported_at IS NULL AND r.upload_status != 'uploaded'
+`);
+
+export interface UnsafeDataSummary {
+  sessions: number;
+  readings: number;
+}
+
+/**
+ * Recorded data that exists only on this kiosk: not uploaded, and not
+ * exported to a file either. The reset guard refuses while this is non-zero.
+ *
+ * Exported counts as safe deliberately — otherwise a kiosk with no
+ * connectivity could never be reset, which is the dead end the guard exists
+ * to prevent.
+ */
+export function getUnsafeDataSummary(): UnsafeDataSummary {
+  return unsafeSummaryStmt.get() as UnsafeDataSummary;
+}
+
+/** meta keys that survive a reset: the site's credentials, not this machine's setup. */
+const RESET_PRESERVED_META = ['implenia_api_key', 'implenia_api_url'];
+
+/**
+ * Wipe this machine's setup and its recorded data, leaving the API
+ * credentials in place. Callers must check getUnsafeDataSummary() first.
+ */
+export function resetKiosk(): void {
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM session_readings').run();
+    db.prepare('DELETE FROM recording_sessions').run();
+    db.prepare('DELETE FROM mqtt_buffer').run();
+    db.prepare('DELETE FROM sensor_mappings').run();
+    db.prepare('DELETE FROM devices').run();
+    db.prepare('DELETE FROM topic_overrides').run();
+    db.prepare(
+      `DELETE FROM meta WHERE key NOT IN (${RESET_PRESERVED_META.map(() => '?').join(',')})`
+    ).run(...RESET_PRESERVED_META);
+  });
+  tx();
 }

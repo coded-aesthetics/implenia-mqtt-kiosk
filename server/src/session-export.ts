@@ -174,7 +174,7 @@ export function getSessionExportStreams(sessionId: number): StreamExportOption[]
 export async function buildSessionExport(
   sessionId: number,
   stream: ExportableStream,
-): Promise<{ buffer: Buffer; filename: string }> {
+): Promise<{ buffer: Buffer; filename: string; dataRows: number }> {
   const session = getSessionById(sessionId);
   if (!session) {
     throw new Error(`Sitzung ${sessionId} nicht gefunden`);
@@ -194,5 +194,12 @@ export async function buildSessionExport(
   }
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-  return { buffer, filename: exportFilename(session.element_name, stream) };
+  // Row count excludes the header. A stream the verfahren does not define
+  // produces a header-only file — which must not count as data having been
+  // saved anywhere.
+  return {
+    buffer,
+    filename: exportFilename(session.element_name, stream),
+    dataRows: Math.max(rows.length - 1, 0),
+  };
 }
