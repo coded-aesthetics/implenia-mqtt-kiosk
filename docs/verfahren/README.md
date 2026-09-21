@@ -60,6 +60,23 @@ sensor that has no UI control is silently invisible and never recorded.
 
 ---
 
+## Completion: a pillar is done when someone says so
+
+**Production of one element can span several days** — drilling on one day, jetting or injecting on the next — and therefore several recording sessions. Stopping a recording does not mean the element is finished, and the kiosk must never imply that it does.
+
+The contract across all Verfahren is: **an element counts as produced when its `Ausführungsdatum` is set.** Only then does implenia-web mark it green in the BIM widget and treat it as ready. `sensor-meta.ts` in that repo states the role plainly — `is_completed — marks element as done, triggers completion UI`.
+
+So the kiosk needs an explicit **"Element fertig"** action that writes today's date to that sensor. This is framework surface, not use-case: drive it off `Rolle === 'is_completed'` rather than the sensor name, the same way the depth indicator uses `Rolle === 'depth'`.
+
+Four things that are easy to get wrong:
+
+- **Format: ISO 8601** (`2026-09-22`). The protocol renders it via `formatDateDE`, which does `new Date(value)` and falls back to printing the raw string when that fails. `new Date("22.09.2026")` is `Invalid Date`, so a German-formatted value would survive by accident and break the moment anything actually treats it as a date.
+- **Not every Verfahren has it.** Only `dsv` and `injektionsbohren` define an `is_completed` sensor today; Ankerbohren and Grosspfahlbohren do not. The button appears only when the active Verfahren has one.
+- **It is `Quelle=user`**, so it only reaches the platform because `isRecordableSensor()` includes `user` — before that fix it would have been recorded with a null sensor id and silently never uploaded.
+- **Clearing it is a supported rework path.** implenia-web's `ensure-materialization.ts` resets the materialization flag when `Ausführungsdatum` disappears, deliberately: *"Ausführungsdatum missing + flag set → clear flag (rework reset)"*. So marking an element done should not be a one-way door in the kiosk either.
+
+Until the kiosk sets it, implenia-web falls back to per-Verfahren proxies — Injektionsbohren counts "any `Status` reading equals 1" — which is what the `TODO(post-PR-458)` in its drilling-stats profile is waiting to remove.
+
 ## How the Verfahren differ
 
 | Dimension | DSV | Injektionsbohren | Ankerbohren |
@@ -70,6 +87,7 @@ sensor that has no UI control is silently invisible and never recorded.
 | Phase signal | `Bohren/Düsen` (Integer, `mqtt`) | `Status` (Integer, **`user`**) | `Reserve 5` (Text, `mqtt`) |
 | Hero sensors | `Tiefe` | `Bohrtiefe`, `Suspensionsdruck`, `Status` | `Bohrtiefe`, `Reserve 5` |
 | Geology on the kiosk | Vorgabe layers (DIN 4023) | Vorgabe layers **+ worker-recorded `GeoDIN`** | — |
+| Completion sensor (`is_completed`) | `Ausführungsdatum` | `Ausführungsdatum` | none yet |
 | `Stream` column | `hdi` / `ivl` / `result` | **none** | none |
 | Offline XLSX export | Works (per stream) | **Not wired up** — no streams defined | Not wired up |
 | Protocols in web | Herstellprotokoll + Bohrlochverlaufsprotokoll | Herstellprotokoll | Herstellprotokoll + Injektionsprotokoll |

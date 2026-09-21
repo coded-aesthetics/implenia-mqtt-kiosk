@@ -273,10 +273,15 @@ What is missing:
    reading into the session (and once at session start). Best built as
    framework surface — phase sets keyed off `Rolle === 'mode'` — so Ankerbohren
    inherits it. Voice commands ("Bohren", "Verpressen") are an obvious fit.
-3. **No UI control for `Ausführungsdatum` / `Geologie`.** `Quelle=user` sensors
-   are currently invisible — `fetchHerstellenSensors()` keeps only `mqtt` and
-   `kiosk` sources. Populating `Ausführungsdatum` would also let web drop its
-   `Status == 1` proxy (the `TODO(post-PR-458)` in the drilling-stats profile).
+3. **No "Element fertig" button, and no `Geologie` input.** The recording side
+   is fixed — `isRecordableSensor()` now includes `Quelle=user`, so both can be
+   uploaded — but nothing writes them. `Ausführungsdatum` is the
+   cross-Verfahren completion contract: a borehole only turns green in the BIM
+   widget once it is set, and production can span several days, so it cannot be
+   inferred from a recording ending. See
+   [Completion](README.md#completion-a-pillar-is-done-when-someone-says-so).
+   Setting it also lets web drop its `Status == 1` proxy (the
+   `TODO(post-PR-458)` in the drilling-stats profile).
 4. **No derivation for `Q_Bohren` / `Q_verpressen`.** `Quelle=kiosk` sensors
    have no producer in this codebase at all. Given that web recomputes them
    anyway, the honest options are: compute them correctly here as a live display
