@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 export interface Route {
-  page: 'home' | 'config' | 'element' | 'comments' | 'setup';
+  page: 'home' | 'config' | 'element' | 'comments' | 'setup' | 'sensors';
   params: Record<string, string>;
   query: Record<string, string>;
 }
@@ -27,6 +27,12 @@ export function parseRoute(hash: string): Route {
 
   if (path === 'comments') {
     return { page: 'comments', params: {}, query };
+  }
+
+  // Sensor assignment gets its own screen: it is a focused, two-step task that
+  // needs the whole display, not a card inside the settings page.
+  if (path === 'sensors') {
+    return { page: 'sensors', params: {}, query };
   }
 
   // The setup wizard is a route, not a conditional overlay. Its step lives in

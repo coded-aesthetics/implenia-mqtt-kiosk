@@ -12,6 +12,7 @@ import { ElementDetail } from './components/ElementDetail';
 import { VoiceFeedbackOverlay } from './components/VoiceFeedbackOverlay';
 import { CommentQueuePage } from './components/CommentQueuePage';
 import { SetupWizard } from './components/SetupWizard';
+import { TopicAssignment } from './components/TopicAssignment';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
@@ -107,6 +108,11 @@ export function App() {
       pageTitle = 'Einstellungen';
       break;
     }
+    case 'sensors': {
+      content = <TopicAssignment />;
+      pageTitle = 'Sensorzuordnung';
+      break;
+    }
     case 'comments': {
       content = (
         <CommentQueuePage
@@ -169,7 +175,9 @@ export function App() {
       />
       <main style={{
         ...styles.main,
-        ...(route.page === 'element' ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const } : {}),
+        ...(route.page === 'element' || route.page === 'sensors'
+          ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const }
+          : {}),
       }}>
         {content}
       </main>

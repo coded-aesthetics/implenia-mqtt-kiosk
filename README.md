@@ -206,7 +206,7 @@ PUT    /api/config/topic-overrides          → { topic, sensorName }
 DELETE /api/config/topic-overrides/:topic
 ```
 
-The **Sensorzuordnung** card in the config page (MQTT transport only) drives this: expected sensors on the left, observed topics with live values on the right, tap a sensor then a topic to bind. It is built for the case where nothing auto-matches, since a box's topic names may not resemble the sensor names at all — the live values are how you tell opaque channels apart, by watching which one moves when the machine moves. Sensors that already resolve by name are shown as `passt automatisch` rather than unassigned, so nobody rebinds what already works.
+The **Sensorzuordnung** screen at `#/sensors` (reached from the config page under the MQTT transport) drives this. It mirrors the serial `ChannelPicker`'s two-step shape — pick a sensor, then pick its source — because it is the same task: the sensor list shows what is bound and what is not, and the source list shows every observed topic with its live value and age. It is built for the case where nothing auto-matches, since a box's topic names may not resemble the sensor names at all — the live values are how you tell opaque channels apart, by watching which one moves when the machine moves. Sensors that already resolve by name are shown as `passt automatisch` rather than unassigned, so nobody rebinds what already works.
 
 Overrides win so a stale shipped map can never override a human decision. `PUT` rejects a sensor name that does not exist for the active Verfahren — a typo there would otherwise drop that sensor's data at upload time with no error anywhere. Binding a sensor releases its previous topic, so two topics can never feed one sensor and interleave.
 

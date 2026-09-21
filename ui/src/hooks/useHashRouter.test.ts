@@ -30,6 +30,10 @@ describe('parseRoute', () => {
     }
   });
 
+  it('parses the sensor assignment route', () => {
+    expect(parseRoute('#/sensors').page).toBe('sensors');
+  });
+
   it('does not mistake a prefix for a setup route', () => {
     expect(parseRoute('#/setups').page).toBe('home');
     expect(parseRoute('#/element/setup').page).toBe('element');

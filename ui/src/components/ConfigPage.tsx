@@ -2,8 +2,8 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ConfigState } from '../hooks/useImplenia';
 import type { DeviceFrame } from '../hooks/useWebSocket';
 import { UpdateUpload } from './UpdateUpload';
+import { navigate } from '../hooks/useHashRouter';
 import { MqttSettings } from './MqttSettings';
-import { TopicAssignment } from './TopicAssignment';
 import { DeviceConfig } from './DeviceConfig';
 
 interface Props {
@@ -397,7 +397,14 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
               <div style={styles.statusRow}>
                 <span style={styles.label}>Sensorzuordnung</span>
               </div>
-              <TopicAssignment />
+              <div style={styles.envHint}>
+                Welches Topic welchen Sensor liefert. Die Zuordnung gelingt am
+                einfachsten, während die Maschine läuft — dann sind die Werte an
+                ihrer Bewegung zu erkennen.
+              </div>
+              <button onClick={() => navigate('sensors')} style={styles.presetButtonActive}>
+                Sensorzuordnung öffnen
+              </button>
             </div>
           </div>
         </>
