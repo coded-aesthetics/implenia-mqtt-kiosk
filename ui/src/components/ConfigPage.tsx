@@ -4,6 +4,7 @@ import type { DeviceFrame } from '../hooks/useWebSocket';
 import { UpdateUpload } from './UpdateUpload';
 import { navigate } from '../hooks/useHashRouter';
 import { MqttSettings } from './MqttSettings';
+import { RohrwechselSettings } from './RohrwechselSettings';
 import { DeviceConfig } from './DeviceConfig';
 import { pendingCommentCount, clearCommentQueue } from '../hooks/useCommentQueue';
 
@@ -440,6 +441,34 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
           onPendingDelete={(id) => { setPendingDeleteDeviceId(id); if (id !== null) setPendingDeleteKey(false); }}
         />
       )}
+
+      {/* Applies to every transport and every Verfahren. */}
+      <div style={styles.cardWrapper}>
+        <div style={styles.card}>
+          <div style={styles.statusRow}>
+            <span style={styles.label}>Kalibrierung</span>
+          </div>
+          <div style={styles.envHint}>
+            Faktor und Versatz je Sensor, wenn ein Messwert nicht in der Einheit
+            ankommt, in der er sein sollte. Gehört eigentlich ans Gerät — hier für
+            Geräte, an denen das gerade nicht geht.
+          </div>
+          <button onClick={() => navigate('kalibrierung')} style={styles.presetButtonActive}>
+            Kalibrierung öffnen
+          </button>
+        </div>
+      </div>
+
+      {/* Applies to both transports: every rotary drilling rig extends its
+          Bohrrohr, whatever it is connected by. */}
+      <div style={styles.cardWrapper}>
+        <div style={styles.card}>
+          <div style={styles.statusRow}>
+            <span style={styles.label}>Rohrverlängerung</span>
+          </div>
+          <RohrwechselSettings />
+        </div>
+      </div>
 
       {/* Reset — last, because it is the destructive one */}
       <div style={styles.cardWrapper}>

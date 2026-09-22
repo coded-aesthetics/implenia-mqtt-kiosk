@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { beginRecording, endRecording, uploadSession, getRecordingState } from '../recording.js';
-import { getSessions, getSessionStats, getExportedStreams } from '../db.js';
+import {
+  getSessions, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
+} from '../db.js';
 import {
   buildSessionExport,
   getSessionExportStreams,
@@ -8,6 +10,7 @@ import {
   recordStreamExport,
 } from '../session-export.js';
 import { broadcastMessage } from '../websocket.js';
+import { ingestion, isOperatingMode } from '../ingestion.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('recording-routes');
@@ -114,9 +117,50 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
     }
   });
 
+  /**
+   * Switch between drilling and grouting.
+   *
+   * The worker sets this, mirroring the screen switch they already make on the
+   * rig's own UI. It decides whether a closed Klemmbacke means a pipe change
+   * (Bohren) or simply a held pipe string (Verpressen).
+   */
+  app.put<{ Body: { mode?: string } }>('/api/recording/mode', async (request, reply) => {
+    const mode = request.body?.mode;
+    if (!mode || !isOperatingMode(mode)) {
+      return reply.status(400).send({ error: 'Bitte „bohren" oder „verpressen" angeben.' });
+    }
+    if (!ingestion.operatingMode) {
+      return reply.status(409).send({
+        error: 'Es läuft keine Aufzeichnung. Bitte zuerst die Aufzeichnung starten.',
+      });
+    }
+    ingestion.setOperatingMode(mode);
+    broadcastMessage({ type: 'operating-mode', mode });
+    return reply.send({ mode });
+  });
+
   app.get('/api/recording/state', async (_request, reply) => {
     return reply.send(getRecordingState());
   });
+
+  /**
+   * Recorded readings with their drilling phase, newest first — including the
+   * clipped ones, which no other read path returns.
+   *
+   * For service personnel: it shows which readings were clipped as a
+   * Rohrwechsel and which reached the upload, without anyone driving to site.
+   */
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
+    '/api/recording/sessions/:id/readings',
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) {
+        return reply.status(400).send({ error: 'Ungültige Aufzeichnungs-ID.' });
+      }
+      const limit = Math.min(Math.max(Number(request.query.limit) || 500, 1), 5000);
+      return reply.send({ sessionId, readings: getSessionReadingsDetailed(sessionId, limit) });
+    },
+  );
 
   app.get('/api/recording/sessions', async (_request, reply) => {
     const sessions = getSessions();

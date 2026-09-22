@@ -1,1 +1,10 @@
-{}
+{
+  "Bohrgeraet/Tiefe": "Bohrtiefe",
+  "Bohrgeraet/Drehzahl": "Drehzahl",
+  "Bohrgeraet/Ziehgeschwindigkeit": "Vorschubgeschw.",
+  "Maschine/Druck_Hammer": "Druck Hammer",
+  "Maschine/Druck_Vorschub": "Vorschubdruck",
+  "Maschine/Druck_Medium": "Suspensionsdruck",
+  "Spuelpumpe/Durchfluss": "DurchflussB",
+  "Verpresspumpe/Durchfluss": "DurchflussV"
+}

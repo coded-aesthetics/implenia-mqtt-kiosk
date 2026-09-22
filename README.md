@@ -202,7 +202,9 @@ An MQTT reading reaches its sensor by resolving the topic to a sensor name, in t
 
 1. **`topic_overrides`** — wired on site, highest priority
 2. **`server/assets/topic-maps/<verfahren>.json`** — shipped with the release
-3. **The topic's last segment equals the sensor name** — the no-configuration case
+3. **The topic ends with a known sensor name** — the no-configuration case
+
+Step 3 matches against the Verfahren's actual sensor names, longest first, rather than splitting the topic on `/`. A sensor name may itself contain a slash: `Drehzahl [1/min]` has the last segment `min]`, which matches nothing — so that sensor used to resolve to no id at all, was filtered out of every upload, and still displayed live. The screen looked right and the data never left the kiosk. Also affects `Durchfluss [l/min]` and, in DSV, `Bohren/Düsen` and `W/Z-Wert`.
 
 ```
 GET    /api/config/topic-overrides          → expected sensors, what feeds each, and how it was bound
@@ -219,6 +221,108 @@ Overrides are keyed by the **full topic** the technician saw, so an override doe
 **Why an unresolved topic matters.** It is still buffered and broadcast live, but stored with a null `sensor_id` — and `getSessionUploadGroups` filters those out. So the data appears on screen, the upload reports success, and nothing is ever sent. This resolution chain, and the assignment screen on top of it, exist to make that visible.
 
 This is deliberately *not* in the sensor CSV: implenia-web and implenia-machine-backend never see MQTT topics, and it is unrelated to the CSV's `Alias` column, which carries a sensor's legacy name on the platform.
+
+## Rohrverlängerung (Klemmbacke)
+
+A drilling rig can only drill one Bohrrohr length at a time — 2 m or 3 m, depending on the site. When that length is used up, drilling is interrupted: the lower **Klemmbacke** closes and holds the pipe string in the ground, the Drehantrieb runs Linkslauf and unscrews itself from the pipe, travels back up the mast, the excavator lays a new Bohrrohr in position, Rechtslauf screws it into the old pipe and into the drive, the Klemmbacke opens, and drilling continues.
+
+Everything the rig publishes during that window is real but is not drilling: Drehzahl, Drehmoment and Vorschub come from the drive unscrewing itself, and left in they corrupt every average. So the window is clipped.
+
+`server/src/rohrwechsel.ts` is the pure state machine for that. It decides, from the Klemmbacke pressure, whether the rig is drilling or changing a pipe:
+
+- **Closed** (≥ `closeThreshold`) → `phase = 'rohrwechsel'`, and every reading until the clamp opens is clipped.
+- **Open** (< `openThreshold`) → back to `bohren`, and the pipe count goes up.
+
+**Clipping only applies while drilling.** A closed Klemmbacke means a pipe change during Bohren, but during Verpressen it is simply holding the pipe string steady — on the G08 reference capture it is closed for **81% of the grouting phase**, against 43% while drilling. Clipping on the clamp alone would discard most of the grouting data, which is exactly the data Injektionsbohren exists to record. So the recording carries an operating mode, and the worker switches it on the recording bar, mirroring the screen switch they already make on the rig's own UI:
+
+```
+PUT /api/recording/mode   → { mode: 'bohren' | 'verpressen' }
+```
+
+It is persisted on the session, so a restart mid-element does not silently resume clipping a grouting phase.
+
+Two thresholds with a dead band between them, because the clamp is hydraulic (around 180 bar closed, near 0 open) and a single threshold would flap on sensor noise — clipping half the drilling data.
+
+**Nothing is discarded.** Clipped readings are stored with `phase = 'rohrwechsel'` and `upload_status = 'clipped'` — a terminal status the upload query and the export both skip, so implenia-web receives only drilling data, matching how clipping has always been done machine-side. Values are never rewritten; the phase records what a reading is *worth*, not what it says. Clipped rows are also exempt from the reset guard, which would otherwise refuse forever on any rig that changes pipes.
+
+```
+GET /api/recording/sessions/:id/readings?limit=500   → phase and upload status per reading, clipped ones included
+```
+
+### How the rig reports depth
+
+Both kinds of machine are in the fleet, so `depthMode` is set per kiosk:
+
+- **`absolut`** — the manufacturer publishes the depth of the hole, usually over CAN. It holds still while the string is clamped because the bit has not moved, so nothing is corrected and the reading is recorded as it arrives.
+- **`inkrementell`** — a rig Implenia retrofitted publishes the **Schlittenweg**, how far the Drehantrieb has travelled down the mast. It runs *backwards* by a pipe length at every change and then restarts from the top while the bit is still at the bottom of the hole, so a running offset is carried:
+
+  ```
+  tiefe = schlittenweg + offset
+  ```
+
+  The unit conversion is **not** done here — a retrofitted rig's sensor measures the feed mechanism rather than the hole (on G08 the carriage travels ~2,6 m per metre drilled), and that is the depth sensor's entry in *Sensor Calibration* above. One place converts units, not two.
+
+  On close the depth is frozen at the hole bottom; on open the offset is rebuilt from where the carriage actually ended up, because the geometry is better evidence than a nominal length. An offset step of zero or less is refused outright rather than inventing a jump — pulling the string back out cycles the clamp identically. The corrected depth goes into `value_numeric` and the raw reading is kept in `value_raw`, which is what makes a wrong offset reconstructable afterwards instead of lost.
+
+The setting matters, and the difference is visible in the G08 reference capture. Replaying the same recorded Rohrwechsel both ways (`server/src/replay-field-data.test.ts`):
+
+| depthMode | worst backwards step | end vs. start |
+|---|---:|---|
+| `absolut` (wrong for this rig) | **−5,63 m** | ends shallower than it began |
+| `inkrementell` (correct) | 0,00 m | +7,3 m, continuous |
+
+A wrong choice announces itself within one pipe: the per-pipe check below sees a Rohrwechsel with no drilling in between and says so.
+
+**Per-pipe check.** Depth readings (found by CSV `Rolle` = `depth`, not by name) are observed for one purpose: between two Rohrwechsel, about one `Rohrlänge` should have been drilled. A deviation beyond the tolerance is reported in German on the recording bar and logged — and a change with *no* drilling in between names the likely cause, a pressure threshold sitting inside the clamp's normal range. That is how a mis-set threshold announces itself instead of silently clipping drilling data. The first change of a session is not checked: there is no baseline, and recording may have started with pipes already in the ground.
+
+The phase and pipe count are persisted to `recording_sessions.drill_state` on every phase change, so a PM2 restart mid-element (a crash, an auto-update) does not record the rest of the pipe change as drilling data.
+
+**Off until configured.** Handling is enabled only once a Klemmbacke topic is set; a rig without that signal behaves exactly as before — nothing clipped, everything uploaded. The topic is matched on its full name or its last segment, so `machine/Klemmbacke` (MQTT) and `device/1/Klemmbacke` (serial) share one setting.
+
+```
+GET /api/config/rohrwechsel   → { clampTopic, enabled, depthMode, pipeLength, closeThreshold, openThreshold, tolerance }
+PUT /api/config/rohrwechsel   → same fields; takes effect on the running session
+```
+
+The **Rohrverlängerung** card on the config page shows the live Klemmbacke value next to the thresholds, so they can be set by watching the clamp open and close rather than by guessing.
+
+## Sensor Calibration
+
+A reading does not always arrive in the unit the sensor is supposed to be in — a channel scaled for a different machine, a different transducer, or a depth sensor that sits on the feed mechanism rather than in the hole. That belongs fixed on the machine, but a rig cannot always be taken out of service, so every float sensor carries a linear correction:
+
+```
+wert = rohwert × faktor + versatz
+```
+
+Factor and offset default to their neutral elements — **1 and 0** — so a sensor nobody has touched behaves exactly as it always did. Calibration is keyed by **sensor name, not topic**: it is a property of what is being measured, so it survives a technician rebinding which topic feeds the sensor.
+
+```
+GET    /api/config/calibration                   → every float sensor, its factor/offset, and its live raw + corrected value
+PUT    /api/config/calibration                   → { sensorName, scale, offset }
+POST   /api/config/calibration/:sensorName/tare  → { scale? } — offset := -(live rohwert × faktor)
+DELETE /api/config/calibration/:sensorName       → back to neutral
+```
+
+The **Kalibrierung** screen at `#/kalibrierung` (from the config page) shows one row per sensor with the raw value and the corrected value side by side, updating live — a factor gets set by comparing the kiosk against the display on the rig, not by arithmetic.
+
+**Nullen** covers the most common correction in one tap: a pressure or load channel that idles at a non-zero value gets the offset that cancels it (`versatz = -(rohwert × faktor)`, so the *scaled* value goes to zero, not the raw one). The server reads the live value itself at the moment of the tap rather than taking the one the screen last polled, and answers with the offset it stored. It refuses — in German, with what to do about it — when nothing is arriving for that sensor. The machine has to be at rest when it is tapped: whatever the sensor reads at that moment becomes the new zero.
+
+`value_numeric` stores the corrected value, so upload and export need no knowledge of the correction; `value_raw` keeps the reading as it arrived, so a wrong factor can be undone instead of having destroyed the measurement. The Klemmbacke pressure is deliberately **not** calibrated — its thresholds are set by watching what the clamp actually publishes, and a calibration meant for a sensor of the same name must not move them underneath the technician.
+
+The Rohrwechsel per-pipe check reports the correction to make: if a rig consistently reports the wrong distance per pipe, the warning names the factor to multiply the existing one by.
+
+## Field Reference Data
+
+A two-hour raw MQTT capture from a live Injektionsbohren rig (Bohrung G08, Marktbreit, 18.05.2026 — 275 935 messages) is the ground truth behind the Rohrverlängerung and calibration behaviour above: what the rig published, and — in two screenshots of the old LabView UI recorded during the same session — what the operator saw while it did.
+
+**The capture itself is not in the repo.** At 15 MB it does not belong in a tree cloned on every CI run. It is kept beside the repo as `assets/bohrung_g8_marktbreit_mqtt.txt`, which is gitignored; ask for a copy if you need the full session. Everything *derived* from it is committed: `assets/reference/` holds the screenshots, the paired video/MQTT CSV, and a README documenting the topic inventory, the measured clamp thresholds, the session timeline, and — importantly — where the capture contradicts assumptions the kiosk was built on. Read it before changing anything that interprets rig data.
+
+`server/src/mqtt-dump.ts` reads any capture in this format. `server/test-fixtures/` holds two small slices of this one, and `server/src/replay-field-data.test.ts` replays them through the real ingestion path and SQLite — so the tests run without the full capture. Every number that test asserts was measured from the capture rather than chosen, so it fails when the pipeline's interpretation of real data changes.
+
+```bash
+# topic inventory of a capture
+awk '{c[$3]++} END{for(t in c) print c[t], t}' assets/<capture>.txt | sort -rn
+```
 
 ## Session Data Export
 
@@ -311,7 +415,10 @@ server/src/
   serial-source.ts    — Serial/Elvis data source
   simulator-source.ts — Simulated data source (dev mode)
   elvis-parser.ts     — Elvis hex frame parser
-  ingestion.ts        — Routes readings to storage/WS/recording
+  ingestion.ts        — Routes readings to storage/WS/recording, applies depth correction
+  rohrwechsel.ts      — Pure Rohrverlängerung state machine (Klemmbacke phase + clipping)
+  rohrwechsel-config.ts — Klemmbacke topic, Rohrlänge and thresholds (meta-backed)
+  calibration.ts      — Per-sensor linear correction (scale + offset)
   db.ts               — SQLite schema, migrations, queries
   websocket.ts        — WS broadcast
   implenia-api.ts     — Implenia API auth + fetch wrapper
@@ -342,7 +449,9 @@ ui/src/
     DeviceConfig.tsx   — Device management + sensor mapping
     ChannelPicker.tsx  — Serial channel → sensor assignment
     ShiftAssignment.tsx — Shift import + element tiles
-    RecordingBar.tsx   — Session recording controls
+    RecordingBar.tsx   — Session recording controls, Bohren/Verpressen switch, Rohrwechsel indicator
+    RohrwechselSettings.tsx — Klemmbacke topic, Rohrlänge, thresholds
+    CalibrationPage.tsx — Per-sensor factor and offset, with live values
     UpdateUpload.tsx   — Manual update upload
     StatusBar.tsx      — Connectivity indicator
     Header.tsx         — App header + navigation

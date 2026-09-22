@@ -19,6 +19,8 @@ interface ExportOption {
 }
 
 export function RecordingBar({ currentPage, elementName, recordingState, uploadProgress }: Props) {
+  const rohrwechsel = recordingState.rohrwechsel;
+  const operatingMode = recordingState.operatingMode;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUploadResult, setLastUploadResult] = useState<'uploaded' | 'partial' | null>(null);
@@ -113,6 +115,24 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     }
   }
 
+  async function setMode(mode: 'bohren' | 'verpressen') {
+    if (mode === operatingMode) return;
+    setError(null);
+    try {
+      const res = await fetch('/api/recording/mode', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `Fehler ${res.status}`);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   async function stopRecording() {
     const hadReadings = recordingState.readingCount > 0;
     setLoading(true);
@@ -171,6 +191,25 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     <div style={styles.bar}>
       {error && <div style={styles.error}>{error}</div>}
 
+      {/* Rohrverlängerung. Shown above the controls rather than in place of
+          them: "Beenden" has to stay reachable even mid-Rohrwechsel. */}
+      {recordingState.active && operatingMode === 'bohren' && rohrwechsel?.phase === 'rohrwechsel' && (
+        <div style={styles.rohrwechselBanner}>
+          <span style={styles.pauseIcon}>❚❚</span>
+          <span>
+            Rohrwechsel — Messwerte werden nicht aufgezeichnet. Rohr{' '}
+            {rohrwechsel.pipeCount + 1} einbauen.
+          </span>
+        </div>
+      )}
+
+      {recordingState.active && rohrwechsel?.warning && (
+        <div style={styles.rohrwechselWarning}>
+          <span style={styles.warningIcon}>!</span>
+          <span>{rohrwechsel.warning}</span>
+        </div>
+      )}
+
       {status === 'idle' && currentPage === 'element' && (
         <button
           style={{ ...styles.button, ...styles.startButton }}
@@ -181,10 +220,34 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
         </button>
       )}
 
+      {/* Which operation is running. It decides whether a closed Klemmbacke
+          is a pipe change or simply a held pipe string, so it has to be as
+          easy to reach as the stop button. */}
+      {status === 'recording' && operatingMode && (
+        <div style={styles.modeRow}>
+          <button
+            style={operatingMode === 'bohren' ? styles.modeButtonActive : styles.modeButton}
+            onClick={() => setMode('bohren')}
+          >
+            Bohren
+          </button>
+          <button
+            style={operatingMode === 'verpressen' ? styles.modeButtonActive : styles.modeButton}
+            onClick={() => setMode('verpressen')}
+          >
+            Verpressen
+          </button>
+        </div>
+      )}
+
       {status === 'recording' && (
         <div style={styles.recordingRow}>
           <span style={styles.redDot} />
-          <span style={styles.recordingLabel}>Aufzeichnung</span>
+          <span style={styles.recordingLabel}>
+            {operatingMode === 'bohren' && rohrwechsel?.phase === 'rohrwechsel'
+              ? 'Pausiert'
+              : 'Aufzeichnung'}
+          </span>
           <span style={styles.elapsed}>
             <ElapsedTime startedAt={recordingState.startedAt} />
           </span>
@@ -433,8 +496,73 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#e65100',
   },
   error: {
-    fontSize: '0.9rem',
+    fontSize: 'var(--font-sm)',
     color: '#f44336',
     marginBottom: '0.5rem',
+  },
+  modeRow: {
+    display: 'flex',
+    gap: '2px',
+    marginBottom: '0.5rem',
+    borderRadius: '8px',
+    overflow: 'hidden',
+  },
+  modeButton: {
+    minHeight: '64px',
+    minWidth: '170px',
+    padding: '0 1.5rem',
+    fontSize: '1.4rem',
+    fontWeight: 600,
+    fontFamily: 'inherit',
+    border: 'none',
+    cursor: 'pointer',
+    backgroundColor: 'var(--surface-0)',
+    color: 'var(--text-muted)',
+  },
+  modeButtonActive: {
+    minHeight: '64px',
+    minWidth: '170px',
+    padding: '0 1.5rem',
+    fontSize: '1.4rem',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    border: 'none',
+    cursor: 'pointer',
+    backgroundColor: 'var(--color-accent)',
+    color: '#ffffff',
+  },
+  rohrwechselBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '0.75rem',
+    width: '100%',
+    padding: '0.5rem 1rem',
+    marginBottom: '0.5rem',
+    borderRadius: '8px',
+    backgroundColor: '#e65100',
+    color: '#ffffff',
+    fontSize: '1.4rem',
+    fontWeight: 700,
+    textAlign: 'center',
+  },
+  pauseIcon: {
+    fontSize: '1.4rem',
+    letterSpacing: '0.1em',
+    flexShrink: 0,
+  },
+  rohrwechselWarning: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.75rem',
+    width: '100%',
+    padding: '0.5rem 1rem',
+    marginBottom: '0.5rem',
+    borderRadius: '8px',
+    backgroundColor: '#b71c1c',
+    color: '#ffffff',
+    fontSize: '1.1rem',
+    fontWeight: 600,
+    lineHeight: 1.3,
   },
 };

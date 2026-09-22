@@ -8,6 +8,7 @@ import { deviceManager } from './device-manager.js';
 import type { DeviceFrame } from './simulator-source.js';
 import { getRecordingState } from './recording.js';
 import { getSessionReadingCount } from './db.js';
+import type { DrillStatus } from './rohrwechsel.js';
 
 const clients = new Set<WebSocket>();
 
@@ -59,6 +60,13 @@ export function setupWebSocket(app: FastifyInstance): void {
       })
     );
 
+    // Rohrverlängerung state, so a screen that connects mid-Rohrwechsel does
+    // not claim the rig is drilling.
+    const drill = ingestion.drillStatus;
+    if (drill) {
+      socket.send(JSON.stringify({ type: 'rohrwechsel', transition: null, status: drill }));
+    }
+
     if (updater.updateAvailable) {
       socket.send(
         JSON.stringify({
@@ -94,6 +102,14 @@ export function setupWebSocket(app: FastifyInstance): void {
       payload: msg.payload,
       receivedAt: msg.receivedAt,
     });
+  });
+
+  ingestion.on('rohrwechsel', (event: { transition: string | null; status: DrillStatus }) => {
+    broadcast({ type: 'rohrwechsel', ...event });
+  });
+
+  ingestion.on('operating-mode', (mode: string) => {
+    broadcast({ type: 'operating-mode', mode });
   });
 
   connectivity.on('change', (state: ConnectivityState) => {
