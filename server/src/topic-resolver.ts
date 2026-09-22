@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getTopicOverrides } from './db.js';
-import { getActiveVerfahren } from './sensor-meta.js';
+import { getActiveVerfahren, loadSensorCsv } from './sensor-meta.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('topic-resolver');
@@ -19,7 +19,7 @@ const TOPIC_MAPS_DIR = path.join(__dirname, '..', 'assets', 'topic-maps');
  *
  *   1. `topic_overrides` — what a technician wired on site (highest priority)
  *   2. `assets/topic-maps/<verfahren>.json` — shipped with the release
- *   3. the topic segment itself — the no-configuration case
+ *   3. the topic ending with a known sensor name — the no-configuration case
  *
  * Overrides win so a stale shipped map can never override a human decision.
  *
@@ -33,6 +33,24 @@ export interface ResolverContext {
   overrides: Map<string, string>;
   /** Full topic or last segment → sensor name. From the shipped asset. */
   topicMap: Map<string, string>;
+  /**
+   * Sensor names of the active Verfahren, lowercased and **longest first**.
+   *
+   * The no-configuration case needs the actual names rather than a split on
+   * '/', because a sensor name may contain one. Longest first so that a name
+   * containing a slash wins over a shorter suffix of itself.
+   */
+  sensorNames: string[];
+}
+
+/** Build the lookup order `resolveSensorKey` expects from CSV rows. */
+export function sensorNameIndex(rows: { name: string }[]): string[] {
+  const names = new Set<string>();
+  for (const row of rows) {
+    const name = row.name.trim().toLowerCase();
+    if (name) names.add(name);
+  }
+  return [...names].sort((a, b) => b.length - a.length);
 }
 
 /** Last path segment of a topic, lowercased. Mirrors the sensor-map key. */
@@ -51,6 +69,18 @@ export function resolveSensorKey(topic: string, ctx: ResolverContext): string | 
   for (const source of [ctx.overrides, ctx.topicMap]) {
     const hit = source.get(full) ?? source.get(segment);
     if (hit) return hit.toLowerCase();
+  }
+
+  // The no-configuration case: the topic *ends with* a sensor name.
+  //
+  // Matched against the known names instead of splitting the topic on '/',
+  // because a sensor name may itself contain one. "Drehzahl [1/min]" has the
+  // last segment "min]", which matches nothing — so that sensor resolved to no
+  // id, was filtered out of every upload, and still displayed live. The screen
+  // looked right and the data never left the kiosk. Also affects
+  // "Durchfluss [l/min]" and, in DSV, "Bohren/Düsen" and "W/Z-Wert".
+  for (const name of ctx.sensorNames) {
+    if (full === name || full.endsWith('/' + name)) return name;
   }
 
   return segment || null;
@@ -104,6 +134,7 @@ export function getResolverContext(): ResolverContext {
       getTopicOverrides().map((o) => [o.topic.toLowerCase(), o.sensorName]),
     ),
     topicMap: verfahren ? loadTopicMap(verfahren) : new Map(),
+    sensorNames: verfahren ? sensorNameIndex(loadSensorCsv(verfahren) ?? []) : [],
   };
   cached = { ctx, builtAt: Date.now() };
   return ctx;

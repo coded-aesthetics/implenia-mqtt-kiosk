@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseTopicMap,
   resolveSensorKey,
+  sensorNameIndex,
   topicSegment,
   type ResolverContext,
 } from './topic-resolver.js';
@@ -9,10 +10,15 @@ import {
 function ctx(
   overrides: Record<string, string> = {},
   topicMap: Record<string, string> = {},
+  sensorNames: string[] = [],
 ): ResolverContext {
   const lower = (o: Record<string, string>) =>
     new Map(Object.entries(o).map(([k, v]) => [k.toLowerCase(), v]));
-  return { overrides: lower(overrides), topicMap: lower(topicMap) };
+  return {
+    overrides: lower(overrides),
+    topicMap: lower(topicMap),
+    sensorNames: sensorNameIndex(sensorNames.map((name) => ({ name }))),
+  };
 }
 
 describe('topicSegment', () => {
@@ -55,6 +61,50 @@ describe('resolveSensorKey', () => {
     expect(resolveSensorKey('sensors/Vorschubgeschw', ctx())).toBe('vorschubgeschw');
     const c = ctx({}, { Vorschubgeschw: 'Vorschubgeschw.' });
     expect(resolveSensorKey('sensors/Vorschubgeschw', c)).toBe('vorschubgeschw.');
+  });
+
+  it('resolves a sensor whose name contains a slash', () => {
+    // The last segment of this topic is "min]", which matches nothing. Before
+    // the names were consulted, such a sensor resolved to no id at all: it
+    // displayed live, was filtered out of every upload, and the screen looked
+    // right while the data never left the kiosk.
+    const c = ctx({}, {}, ['Drehzahl [1/min]', 'Bohrtiefe [m]']);
+    expect(resolveSensorKey('machine/Drehzahl [1/min]', c)).toBe('drehzahl [1/min]');
+  });
+
+  it('resolves the DSV names that contain a slash', () => {
+    const c = ctx({}, {}, ['Bohren/Düsen', 'W/Z-Wert']);
+    expect(resolveSensorKey('hdi/Bohren/Düsen', c)).toBe('bohren/düsen');
+    expect(resolveSensorKey('hdi/W/Z-Wert', c)).toBe('w/z-wert');
+  });
+
+  it('matches a topic that is nothing but the sensor name', () => {
+    const c = ctx({}, {}, ['Drehzahl [1/min]']);
+    expect(resolveSensorKey('Drehzahl [1/min]', c)).toBe('drehzahl [1/min]');
+  });
+
+  it('prefers the longest sensor name that fits', () => {
+    // Otherwise "Z-Wert" would swallow a topic meant for "W/Z-Wert".
+    const c = ctx({}, {}, ['Z-Wert', 'W/Z-Wert']);
+    expect(resolveSensorKey('hdi/W/Z-Wert', c)).toBe('w/z-wert');
+    expect(resolveSensorKey('hdi/Z-Wert', c)).toBe('z-wert');
+  });
+
+  it('still lets a wired override win over a name match', () => {
+    const c = ctx({ 'machine/Drehzahl [1/min]': 'Vorschubgeschw.' }, {}, ['Drehzahl [1/min]']);
+    expect(resolveSensorKey('machine/Drehzahl [1/min]', c)).toBe('vorschubgeschw.');
+  });
+
+  it('only matches on a segment boundary', () => {
+    // "xDrehzahl" is a different channel, not this sensor.
+    const c = ctx({}, {}, ['Drehzahl']);
+    expect(resolveSensorKey('machine/xDrehzahl', c)).toBe('xdrehzahl');
+  });
+
+  it('falls back to the segment when the Verfahren is not set up', () => {
+    // No names are known before setup, and a reading must still be buffered
+    // and displayed rather than dropped.
+    expect(resolveSensorKey('machine/Bohrtiefe', ctx())).toBe('bohrtiefe');
   });
 
   it('is case-insensitive on the topic', () => {

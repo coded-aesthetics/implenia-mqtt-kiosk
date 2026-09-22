@@ -92,6 +92,7 @@ export interface SensorMetaLookup {
 }
 
 let metaCache: Map<string, SensorMetaLookup> | null = null;
+let roleCache: Map<string, string> | null = null;
 
 export function getSensorMetaLookup(): Map<string, SensorMetaLookup> {
   if (metaCache) return metaCache;
@@ -125,6 +126,36 @@ export function getSensorMetaLookup(): Map<string, SensorMetaLookup> {
   log.info('Loaded %d sensor definitions from %s CSV', map.size, verfahren);
   metaCache = map;
   return metaCache;
+}
+
+/**
+ * The role of a sensor, looked up by the key the topic resolver produces — a
+ * lowercased sensor name.
+ *
+ * `getSensorMetaLookup()` is keyed by the exact CSV name, which a resolved
+ * topic never is, so ingestion cannot use it to answer "is this the depth
+ * sensor?" without a second index. This is that index.
+ */
+export function getSensorRole(sensorKey: string): string | null {
+  if (!roleCache) {
+    roleCache = new Map();
+    const depthSensors: string[] = [];
+    for (const [name, meta] of getSensorMetaLookup()) {
+      if (!meta.role) continue;
+      roleCache.set(name.toLowerCase(), meta.role);
+      if (meta.role === 'depth') depthSensors.push(name);
+    }
+    // Rohrverlängerung handling feeds every `depth` sensor into one per-pipe
+    // check, so two of them would interleave into nonsense. That would be a
+    // mistake in the shared CSV, and it is worth saying out loud.
+    if (depthSensors.length > 1) {
+      log.warn(
+        'Verfahren defines %d sensors with role "depth" (%s) — Rohrverlängerung expects exactly one',
+        depthSensors.length, depthSensors.join(', '),
+      );
+    }
+  }
+  return roleCache.get(sensorKey.toLowerCase()) ?? null;
 }
 
 /**
@@ -172,6 +203,7 @@ export function setActiveVerfahren(verfahren: string): void {
   setMeta(ACTIVE_VERFAHREN_KEY, verfahren);
   activeVerfahren = verfahren;
   metaCache = null;
+  roleCache = null;
   log.info('Verfahren set to %s', verfahren);
 }
 
@@ -182,6 +214,7 @@ export function setActiveVerfahren(verfahren: string): void {
 export function clearVerfahrenCache(): void {
   activeVerfahren = undefined;
   metaCache = null;
+  roleCache = null;
 }
 
 export interface StreamSensor {

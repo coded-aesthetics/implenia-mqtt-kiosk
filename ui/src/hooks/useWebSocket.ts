@@ -6,12 +6,33 @@ export interface SensorReading {
   receivedAt: number;
 }
 
+/**
+ * Rohrverlängerung state. Null when it is not configured for this machine, or
+ * when nothing is being recorded.
+ */
+export interface RohrwechselStatus {
+  phase: 'bohren' | 'rohrwechsel';
+  /** Bohrrohre in the ground. 1 while the first one is being drilled. */
+  pipeCount: number;
+  /** Metres currently added to the rig's reading. Always 0 on an absolute rig. */
+  offset: number;
+  /** German, user-facing. Set when the last Rohrwechsel did not add up. */
+  warning: string | null;
+  implausibleChanges: number;
+  phaseSince: number | null;
+}
+
+/** What the rig is doing. Only `bohren` treats a closed Klemmbacke as a pipe change. */
+export type OperatingMode = 'bohren' | 'verpressen';
+
 export interface RecordingState {
   active: boolean;
   sessionId: number | null;
   elementName: string | null;
   startedAt: number | null;
   readingCount: number;
+  rohrwechsel: RohrwechselStatus | null;
+  operatingMode: OperatingMode | null;
 }
 
 export interface UploadProgress {
@@ -47,6 +68,8 @@ const INITIAL_RECORDING: RecordingState = {
   elementName: null,
   startedAt: null,
   readingCount: 0,
+  rohrwechsel: null,
+  operatingMode: null,
 };
 
 export function useWebSocket() {
@@ -122,6 +145,8 @@ export function useWebSocket() {
                 elementName: msg.elementName,
                 startedAt: msg.startedAt,
                 readingCount: msg.readingCount,
+                rohrwechsel: msg.rohrwechsel ?? null,
+                operatingMode: msg.operatingMode ?? null,
               },
             }));
             break;
@@ -133,6 +158,22 @@ export function useWebSocket() {
                 ...prev.recordingState,
                 readingCount: msg.readingCount,
               },
+            }));
+            break;
+
+          // Pushed on every phase change, and once on connect so a screen
+          // that loads mid-Rohrwechsel does not claim the rig is drilling.
+          case 'rohrwechsel':
+            setState((prev) => ({
+              ...prev,
+              recordingState: { ...prev.recordingState, rohrwechsel: msg.status ?? null },
+            }));
+            break;
+
+          case 'operating-mode':
+            setState((prev) => ({
+              ...prev,
+              recordingState: { ...prev.recordingState, operatingMode: msg.mode ?? null },
             }));
             break;
 

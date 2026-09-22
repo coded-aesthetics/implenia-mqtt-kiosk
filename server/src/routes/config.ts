@@ -18,6 +18,16 @@ import {
   setMqttSettings,
 } from '../mqtt-config.js';
 import { getActiveVerfahren, loadSensorCsv } from '../sensor-meta.js';
+import {
+  DEFAULT_CLAMP_TOPIC, getRohrwechselConfig, setRohrwechselConfig, validateRohrwechsel,
+} from '../rohrwechsel-config.js';
+import { DEPTH_MODES } from '../rohrwechsel.js';
+import {
+  applyCalibration, clearCalibrationCache, getCalibrationMap, validateCalibration,
+  tareOffset, NEUTRAL,
+} from '../calibration.js';
+import { getCalibrations, setCalibration, deleteCalibration } from '../db.js';
+import { parsePayload } from '../parse-payload.js';
 import { clearResolverCache, loadTopicMap, getResolverContext, resolveSensorKey } from '../topic-resolver.js';
 import {
   TRANSPORTS, getTransport, isTransportConfigured, isValidTransport, setTransport,
@@ -28,6 +38,26 @@ import { clearVerfahrenCache } from '../sensor-meta.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('config');
+
+/**
+ * The last raw value per sensor, resolved exactly the way the live path
+ * resolves an incoming topic. Used by the calibration screen and by taring, so
+ * both see the same number the recording would see.
+ */
+function liveRawBySensor(): Map<string, { topic: string; raw: number | null }> {
+  const ctx = getResolverContext();
+  const latest = new Map<string, { topic: string; raw: number | null }>();
+  for (const t of getObservedTopics(Date.now() - 5 * 60_000)) {
+    const key = resolveSensorKey(t.topic, ctx);
+    if (key) {
+      latest.set(key.toLowerCase(), {
+        topic: t.topic,
+        raw: parsePayload(t.lastPayload).valueNumeric,
+      });
+    }
+  }
+  return latest;
+}
 
 export function registerConfigRoutes(app: FastifyInstance): void {
   app.get('/api/config', async (_request, reply) => {
@@ -201,6 +231,7 @@ export function registerConfigRoutes(app: FastifyInstance): void {
     clearVerfahrenCache();
     clearTransportCache();
     clearResolverCache();
+    clearCalibrationCache();
     deviceSource.clearMappingCache();
     ingestion.setSource(DataIngestion.sourceFor(getTransport()));
     // setSource is a no-op when the transport is unchanged (the common case),
@@ -282,6 +313,183 @@ export function registerConfigRoutes(app: FastifyInstance): void {
       const windowMs = Number(request.query.since ?? '') || 5 * 60_000;
       const topics = getObservedTopics(Date.now() - windowMs);
       return { windowMs, count: topics.length, topics };
+    },
+  );
+
+  // ── Rohrverlängerung ────────────────────────────────────────────────────
+
+  /**
+   * Klemmbacke handling. Off until a topic is configured — a rig without a
+   * clamp signal must keep behaving exactly as it did before this existed.
+   */
+  app.get('/api/config/rohrwechsel', async () => {
+    const cfg = getRohrwechselConfig();
+    return {
+      ...cfg,
+      defaultClampTopic: DEFAULT_CLAMP_TOPIC,
+      depthModes: Object.entries(DEPTH_MODES).map(([key, label]) => ({ key, label })),
+    };
+  });
+
+  app.put<{
+    Body: {
+      clampTopic?: string | null;
+      depthMode?: string;
+      depthScale?: number;
+      pipeLength?: number;
+      closeThreshold?: number;
+      openThreshold?: number;
+      tolerance?: number;
+    };
+  }>('/api/config/rohrwechsel', async (request, reply) => {
+    const result = validateRohrwechsel(request.body ?? {});
+    if (!result.ok) return reply.status(400).send({ error: result.error });
+
+    setRohrwechselConfig(result.value);
+    // A threshold typed while an element is being drilled has to apply to that
+    // element, not the next one.
+    ingestion.refreshRohrwechselConfig();
+
+    log.info(
+      'Rohrverlängerung updated: topic=%s, Tiefe=%s, Rohrlänge=%s m',
+      result.value.clampTopic ?? '(aus)', result.value.depthMode, result.value.pipeLength,
+    );
+    return reply.send({ ...result.value, enabled: result.value.clampTopic !== null });
+  });
+
+  // ── Sensor calibration ──────────────────────────────────────────────────
+
+  /**
+   * Every float sensor of this Verfahren with its scale and offset, and what
+   * it is reading right now — raw and calibrated.
+   *
+   * The live value is what makes this usable: a technician sets a factor by
+   * comparing the kiosk against the display on the rig, not by arithmetic.
+   */
+  app.get('/api/config/calibration', async () => {
+    const verfahren = getActiveVerfahren();
+    const rows = verfahren ? loadSensorCsv(verfahren) ?? [] : [];
+    const stored = getCalibrationMap();
+    const latest = liveRawBySensor();
+
+    const sensors = rows
+      .filter((r) => r.type.trim() === 'Double')
+      .map((r) => {
+        const key = r.name.toLowerCase();
+        const cal = stored.get(key) ?? NEUTRAL;
+        const live = latest.get(key);
+        const raw = live?.raw ?? null;
+        return {
+          name: r.name,
+          unit: r.unit,
+          source: r.source,
+          scale: cal.scale,
+          offset: cal.offset,
+          topic: live?.topic ?? null,
+          raw,
+          calibrated: raw === null ? null : applyCalibration(raw, cal),
+        };
+      });
+
+    return { verfahren, sensors, calibrated: getCalibrations().length };
+  });
+
+  app.put<{ Body: { sensorName?: string; scale?: unknown; offset?: unknown } }>(
+    '/api/config/calibration',
+    async (request, reply) => {
+      const sensorName = request.body?.sensorName?.trim();
+      if (!sensorName) {
+        return reply.status(400).send({ error: 'Es wurde kein Sensor angegeben.' });
+      }
+
+      const verfahren = getActiveVerfahren();
+      if (!verfahren) {
+        return reply.status(409).send({
+          error: 'Es ist noch kein Verfahren eingerichtet. Bitte zuerst die Einrichtung abschließen.',
+        });
+      }
+      // A typo here would silently calibrate nothing at all.
+      const known = (loadSensorCsv(verfahren) ?? []).some((r) => r.name === sensorName);
+      if (!known) {
+        return reply.status(400).send({
+          error: `„${sensorName}" ist kein Sensor dieses Verfahrens. Bitte einen Sensor aus der Liste wählen.`,
+        });
+      }
+
+      const result = validateCalibration(request.body?.scale, request.body?.offset);
+      if (!result.ok) return reply.status(400).send({ error: result.error });
+
+      setCalibration(sensorName, result.value.scale, result.value.offset);
+      // No TTL on the cache: a calibration changes recorded measurements, so
+      // it has to take effect on the very next reading.
+      clearCalibrationCache();
+      log.info(
+        'Calibration for %s set to ×%s %s%s',
+        sensorName, result.value.scale,
+        result.value.offset >= 0 ? '+' : '', result.value.offset,
+      );
+      return reply.send({ sensorName, ...result.value });
+    },
+  );
+
+  /**
+   * Zero a sensor: store the offset that cancels whatever it is reading right
+   * now (`-(rohwert × Faktor)`).
+   *
+   * The raw value is read here rather than taken from the request, so what
+   * gets cancelled is the reading at the moment of the tap and not whatever
+   * the screen last polled up to a few seconds earlier. The factor may come
+   * from the form — a technician typically sets the factor and zeroes in one
+   * go, before saving — and falls back to the stored one.
+   */
+  app.post<{ Params: { sensorName: string }; Body: { scale?: unknown } }>(
+    '/api/config/calibration/:sensorName/tare',
+    async (request, reply) => {
+      const sensorName = request.params.sensorName.trim();
+
+      const verfahren = getActiveVerfahren();
+      if (!verfahren) {
+        return reply.status(409).send({
+          error: 'Es ist noch kein Verfahren eingerichtet. Bitte zuerst die Einrichtung abschließen.',
+        });
+      }
+      const known = (loadSensorCsv(verfahren) ?? []).some((r) => r.name === sensorName);
+      if (!known) {
+        return reply.status(400).send({
+          error: `„${sensorName}" ist kein Sensor dieses Verfahrens. Bitte einen Sensor aus der Liste wählen.`,
+        });
+      }
+
+      const stored = getCalibrationMap().get(sensorName.toLowerCase()) ?? NEUTRAL;
+      const scale = request.body?.scale === undefined
+        ? stored.scale
+        : Number(typeof request.body.scale === 'string'
+          ? request.body.scale.replace(',', '.')
+          : request.body.scale);
+
+      const live = liveRawBySensor().get(sensorName.toLowerCase());
+      const result = tareOffset(live?.raw ?? null, scale);
+      if (!result.ok) return reply.status(409).send({ error: result.error });
+
+      setCalibration(sensorName, scale, result.offset);
+      clearCalibrationCache();
+      log.info(
+        'Calibration for %s tared: raw=%s, scale=%s, offset=%s',
+        sensorName, live?.raw, scale, result.offset,
+      );
+      return reply.send({
+        sensorName, scale, offset: result.offset, raw: live?.raw ?? null, topic: live?.topic ?? null,
+      });
+    },
+  );
+
+  app.delete<{ Params: { sensorName: string } }>(
+    '/api/config/calibration/:sensorName',
+    async (request, reply) => {
+      deleteCalibration(request.params.sensorName);
+      clearCalibrationCache();
+      log.info('Calibration removed for %s', request.params.sensorName);
+      return reply.send({ ok: true });
     },
   );
 

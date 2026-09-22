@@ -19,7 +19,18 @@ export interface SessionStats {
   uploaded: number;
   failed: number;
   pending: number;
+  /** Readings recorded during a Rohrwechsel. Kept locally, never uploaded. */
+  clipped: number;
 }
+
+/**
+ * Upload status of a reading recorded while the Klemmbacke was closed.
+ *
+ * A terminal state, like 'uploaded': the upload query only picks up 'pending',
+ * so these never reach the Implenia API. The rows stay in the database — the
+ * measurements are not lost, they are just not drilling data.
+ */
+export const CLIPPED_STATUS = 'clipped';
 
 export interface SessionUploadGroup {
   sensorId: string;
@@ -32,6 +43,16 @@ export interface SessionReadingRow {
   valueNumeric: number | null;
   valueText: string | null;
   receivedAt: number;
+}
+
+/** Options for a recorded reading beyond its value. All optional. */
+export interface SessionReadingOptions {
+  /** The uncorrected value, when `valueNumeric` carries a corrected one. */
+  valueRaw?: number | null;
+  /** Which drilling phase this reading was taken in. */
+  phase?: 'bohren' | 'rohrwechsel';
+  /** Record it, but keep it out of every upload and export. */
+  clipped?: boolean;
 }
 
 export interface BufferRow {
@@ -130,6 +151,13 @@ db.exec(`
     created_at  INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS sensor_calibration (
+    sensor_name TEXT    PRIMARY KEY,
+    scale       REAL    NOT NULL DEFAULT 1,
+    offset      REAL    NOT NULL DEFAULT 0,
+    updated_at  INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS sensor_mappings (
     device_id   INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
     value_index INTEGER NOT NULL CHECK(value_index >= 0 AND value_index < 15),
@@ -137,6 +165,52 @@ db.exec(`
     PRIMARY KEY (device_id, value_index)
   );
 `);
+
+// --- Additive migrations ---
+//
+// Columns added after the first release. They live here, ahead of every
+// prepared statement, because a statement naming a column that has not been
+// added yet throws at import time — which on a kiosk means a boot loop.
+{
+  const sessionCols = db.prepare('PRAGMA table_info(recording_sessions)').all() as { name: string }[];
+  const has = (name: string): boolean => sessionCols.some((c) => c.name === name);
+
+  // A session that has been exported to USB counts as "safe" for the reset
+  // guard, even if it was never uploaded.
+  if (!has('exported_at')) {
+    db.exec('ALTER TABLE recording_sessions ADD COLUMN exported_at INTEGER');
+  }
+  // Rohrverlängerung bookkeeping (see rohrwechsel.ts), persisted on every
+  // phase change so a PM2 restart mid-element does not lose which phase the
+  // rig is in or how many Bohrrohre are down.
+  if (!has('drill_state')) {
+    db.exec('ALTER TABLE recording_sessions ADD COLUMN drill_state TEXT');
+  }
+  // Which operation the rig is performing. Rohrwechsel clipping only applies
+  // while drilling — during Verpressen the Klemmbacke holds the string and is
+  // closed most of the time, so clipping on it would discard the grouting data.
+  if (!has('operating_mode')) {
+    db.exec("ALTER TABLE recording_sessions ADD COLUMN operating_mode TEXT NOT NULL DEFAULT 'bohren'");
+  }
+}
+
+{
+  const readingCols = db.prepare('PRAGMA table_info(session_readings)').all() as { name: string }[];
+  const has = (name: string): boolean => readingCols.some((c) => c.name === name);
+
+  // Which drilling phase a reading was taken in.
+  if (!has('phase')) {
+    db.exec("ALTER TABLE session_readings ADD COLUMN phase TEXT NOT NULL DEFAULT 'bohren'");
+  }
+  // On a rig that publishes the Schlittenweg rather than an absolute depth,
+  // `value_numeric` carries the corrected depth so upload and export need no
+  // knowledge of the correction, and `value_raw` keeps the reading exactly as
+  // it arrived — which is what makes a wrong offset reconstructable instead of
+  // lost. Null whenever nothing was corrected.
+  if (!has('value_raw')) {
+    db.exec('ALTER TABLE session_readings ADD COLUMN value_raw REAL');
+  }
+}
 
 // --- Prepared statements ---
 
@@ -176,15 +250,21 @@ const getSessionByIdStmt = db.prepare(
 
 // Session readings
 const insertSessionReadingStmt = db.prepare(
-  'INSERT INTO session_readings (session_id, topic, sensor_id, sensor_type, value_numeric, value_text, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  `INSERT INTO session_readings
+     (session_id, topic, sensor_id, sensor_type, value_numeric, value_text, received_at,
+      phase, upload_status, value_raw)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 );
 const getSessionReadingCountStmt = db.prepare(
   'SELECT COUNT(*) as count FROM session_readings WHERE session_id = ?'
 );
+// Clipped readings are excluded deliberately: the USB export is the offline
+// counterpart of the batch upload, and both must hand implenia-web the same
+// drilling data. Rohrwechsel readings stay on the kiosk.
 const getAllSessionReadingsStmt = db.prepare(`
   SELECT topic, value_numeric, value_text, received_at
   FROM session_readings
-  WHERE session_id = ?
+  WHERE session_id = ? AND upload_status != 'clipped'
   ORDER BY received_at ASC
 `);
 
@@ -211,15 +291,6 @@ const sessionStatsStmt = db.prepare(`
 `);
 
 // Meta
-// Added after the fact: a session that has been exported to USB counts as
-// "safe" for the reset guard, even if it was never uploaded.
-{
-  const cols = db.prepare('PRAGMA table_info(recording_sessions)').all() as { name: string }[];
-  if (!cols.some((c) => c.name === 'exported_at')) {
-    db.exec('ALTER TABLE recording_sessions ADD COLUMN exported_at INTEGER');
-  }
-}
-
 const getMetaStmt = db.prepare('SELECT value FROM meta WHERE key = ?');
 const setMetaStmt = db.prepare(
   'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
@@ -321,6 +392,80 @@ export function getSessions(): Session[] {
   return getSessionsStmt.all() as Session[];
 }
 
+const getDrillStateStmt = db.prepare(
+  'SELECT drill_state FROM recording_sessions WHERE id = ?'
+);
+const setDrillStateStmt = db.prepare(
+  'UPDATE recording_sessions SET drill_state = ? WHERE id = ?'
+);
+
+/**
+ * The persisted Rohrverlängerung state of a session, as raw JSON.
+ *
+ * Written on every phase change rather than every reading — those are the only
+ * moments it moves at all.
+ */
+export function getDrillState(sessionId: number): string | null {
+  const row = getDrillStateStmt.get(sessionId) as { drill_state: string | null } | undefined;
+  return row?.drill_state ?? null;
+}
+
+export function setDrillState(sessionId: number, json: string): void {
+  setDrillStateStmt.run(json, sessionId);
+}
+
+const getOperatingModeStmt = db.prepare(
+  'SELECT operating_mode FROM recording_sessions WHERE id = ?'
+);
+const setOperatingModeStmt = db.prepare(
+  'UPDATE recording_sessions SET operating_mode = ? WHERE id = ?'
+);
+
+export function getOperatingMode(sessionId: number): string | null {
+  const row = getOperatingModeStmt.get(sessionId) as { operating_mode: string } | undefined;
+  return row?.operating_mode ?? null;
+}
+
+export function setOperatingModeRow(sessionId: number, mode: string): void {
+  setOperatingModeStmt.run(mode, sessionId);
+}
+
+// --- Sensor calibration ---
+
+export interface CalibrationRow {
+  sensorName: string;
+  scale: number;
+  offset: number;
+}
+
+const getCalibrationsStmt = db.prepare(
+  'SELECT sensor_name, scale, offset FROM sensor_calibration ORDER BY sensor_name'
+);
+const setCalibrationStmt = db.prepare(
+  `INSERT INTO sensor_calibration (sensor_name, scale, offset, updated_at) VALUES (?, ?, ?, ?)
+   ON CONFLICT(sensor_name) DO UPDATE SET
+     scale = excluded.scale, offset = excluded.offset, updated_at = excluded.updated_at`
+);
+const deleteCalibrationStmt = db.prepare(
+  'DELETE FROM sensor_calibration WHERE sensor_name = ?'
+);
+
+/** Every sensor with a calibration stored. Sensors absent from this are neutral. */
+export function getCalibrations(): CalibrationRow[] {
+  const rows = getCalibrationsStmt.all() as {
+    sensor_name: string; scale: number; offset: number;
+  }[];
+  return rows.map((r) => ({ sensorName: r.sensor_name, scale: r.scale, offset: r.offset }));
+}
+
+export function setCalibration(sensorName: string, scale: number, offset: number): void {
+  setCalibrationStmt.run(sensorName.toLowerCase(), scale, offset, Date.now());
+}
+
+export function deleteCalibration(sensorName: string): void {
+  deleteCalibrationStmt.run(sensorName.toLowerCase());
+}
+
 // --- Session reading functions ---
 
 export function insertSessionReading(
@@ -330,8 +475,20 @@ export function insertSessionReading(
   sensorType: string | null,
   valueNumeric: number | null,
   valueText: string | null,
+  options: SessionReadingOptions = {},
 ): void {
-  insertSessionReadingStmt.run(sessionId, topic, sensorId, sensorType, valueNumeric, valueText, Date.now());
+  insertSessionReadingStmt.run(
+    sessionId,
+    topic,
+    sensorId,
+    sensorType,
+    valueNumeric,
+    valueText,
+    Date.now(),
+    options.phase ?? 'bohren',
+    options.clipped ? CLIPPED_STATUS : 'pending',
+    options.valueRaw ?? null,
+  );
 }
 
 export function getSessionReadingCount(sessionId: number): number {
@@ -339,7 +496,49 @@ export function getSessionReadingCount(sessionId: number): number {
   return row.count;
 }
 
-/** All readings for a session, regardless of upload status — used for export. */
+export interface DetailedReadingRow extends SessionReadingRow {
+  /** The uncorrected value, when the stored one was corrected. */
+  valueRaw: number | null;
+  phase: string;
+  uploadStatus: string;
+}
+
+const getDetailedReadingsStmt = db.prepare(`
+  SELECT topic, value_numeric, value_raw, value_text, phase, upload_status, received_at
+  FROM session_readings
+  WHERE session_id = ?
+  ORDER BY received_at DESC, id DESC
+  LIMIT ?
+`);
+
+/**
+ * Readings with their raw values and drilling phase, newest first —
+ * *including* the clipped ones, which no other read path returns.
+ *
+ * This is the diagnostic view: it answers "why is half the drilling data
+ * missing from the upload" and "why does the kiosk think the hole is this
+ * deep" without anyone driving to the site.
+ */
+export function getSessionReadingsDetailed(sessionId: number, limit = 500): DetailedReadingRow[] {
+  const rows = getDetailedReadingsStmt.all(sessionId, limit) as {
+    topic: string; value_numeric: number | null; value_raw: number | null;
+    value_text: string | null; phase: string; upload_status: string; received_at: number;
+  }[];
+  return rows.map((r) => ({
+    topic: r.topic,
+    valueNumeric: r.value_numeric,
+    valueRaw: r.value_raw,
+    valueText: r.value_text,
+    phase: r.phase,
+    uploadStatus: r.upload_status,
+    receivedAt: r.received_at,
+  }));
+}
+
+/**
+ * All readings for a session that belong in the exported file — clipped ones
+ * excluded, see getAllSessionReadingsStmt.
+ */
 export function getAllSessionReadings(sessionId: number): SessionReadingRow[] {
   const rows = getAllSessionReadingsStmt.all(sessionId) as {
     topic: string; value_numeric: number | null; value_text: string | null; received_at: number;
@@ -390,12 +589,13 @@ export function resetFailedReadings(sessionId: number): void {
 
 export function getSessionStats(sessionId: number): SessionStats {
   const rows = sessionStatsStmt.all(sessionId) as { upload_status: string; count: number }[];
-  const stats: SessionStats = { total: 0, uploaded: 0, failed: 0, pending: 0 };
+  const stats: SessionStats = { total: 0, uploaded: 0, failed: 0, pending: 0, clipped: 0 };
   for (const row of rows) {
     stats.total += row.count;
     if (row.upload_status === 'uploaded') stats.uploaded = row.count;
     else if (row.upload_status === 'failed') stats.failed = row.count;
     else if (row.upload_status === 'pending') stats.pending = row.count;
+    else if (row.upload_status === CLIPPED_STATUS) stats.clipped = row.count;
   }
   return stats;
 }
@@ -572,7 +772,7 @@ const unsafeSummaryStmt = db.prepare(`
   SELECT COUNT(DISTINCT s.id) AS sessions, COUNT(r.id) AS readings
   FROM recording_sessions s
   JOIN session_readings r ON r.session_id = s.id
-  WHERE s.exported_at IS NULL AND r.upload_status != 'uploaded'
+  WHERE s.exported_at IS NULL AND r.upload_status NOT IN ('uploaded', 'clipped')
 `);
 
 export interface UnsafeDataSummary {
@@ -586,7 +786,8 @@ export interface UnsafeDataSummary {
  *
  * Exported counts as safe deliberately — otherwise a kiosk with no
  * connectivity could never be reset, which is the dead end the guard exists
- * to prevent.
+ * to prevent. Clipped readings count as safe for the same reason: they are
+ * never uploaded and never exported, so they would block a reset forever.
  */
 export function getUnsafeDataSummary(): UnsafeDataSummary {
   return unsafeSummaryStmt.get() as UnsafeDataSummary;
@@ -608,6 +809,7 @@ export function resetKiosk(): void {
     db.prepare('DELETE FROM sensor_mappings').run();
     db.prepare('DELETE FROM devices').run();
     db.prepare('DELETE FROM topic_overrides').run();
+    db.prepare('DELETE FROM sensor_calibration').run();
     db.prepare(
       `DELETE FROM meta WHERE key NOT IN (${RESET_PRESERVED_META.map(() => '?').join(',')})`
     ).run(...RESET_PRESERVED_META);

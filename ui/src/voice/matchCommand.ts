@@ -1,4 +1,5 @@
 import { elementNameVariants } from './elementNameVariants';
+import type { Route } from '../hooks/useHashRouter';
 
 export interface VoiceCommand {
   id: string;
@@ -10,7 +11,9 @@ export interface VoiceCommand {
 }
 
 export interface VoiceContext {
-  route: { page: 'home' | 'config' | 'element' | 'comments' | 'setup' | 'sensors'; params: Record<string, string> };
+  // Taken from the router rather than restated, so adding a screen cannot
+  // leave the voice commands describing a set of pages that no longer exists.
+  route: Pick<Route, 'page' | 'params'>;
   recordingState: {
     active: boolean;
     sessionId: number | null;

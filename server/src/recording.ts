@@ -1,6 +1,7 @@
 import { fetchImplenia } from './implenia-api.js';
 import { fetchHerstellenSensors, type SensorDefs } from './herstellen-sensors.js';
-import { ingestion, type SensorMapEntry } from './ingestion.js';
+import { ingestion, type OperatingMode, type SensorMapEntry } from './ingestion.js';
+import type { DrillStatus } from './rohrwechsel.js';
 import { createLogger, onLogEntry, type LogEntry } from './logger.js';
 import { config } from './config.js';
 import {
@@ -45,6 +46,14 @@ export interface RecordingState {
   elementName: string | null;
   startedAt: number | null;
   readingCount: number;
+  /**
+   * Rohrverlängerung state, or null when it is not configured or nothing is
+   * being recorded. The WebSocket pushes changes; this is what a screen that
+   * has just loaded starts from.
+   */
+  rohrwechsel: DrillStatus | null;
+  /** What the rig is doing. Null when nothing is being recorded. */
+  operatingMode: OperatingMode | null;
 }
 
 export interface UploadProgress {
@@ -230,6 +239,8 @@ export function getRecordingState(): RecordingState {
       elementName: active.element_name,
       startedAt: active.started_at,
       readingCount: getSessionReadingCount(active.id),
+      rohrwechsel: ingestion.drillStatus,
+      operatingMode: ingestion.operatingMode,
     };
   }
 
@@ -244,9 +255,14 @@ export function getRecordingState(): RecordingState {
         elementName: recent.element_name,
         startedAt: recent.started_at,
         readingCount: count,
+        rohrwechsel: null,
+        operatingMode: null,
       };
     }
   }
 
-  return { active: false, sessionId: null, elementName: null, startedAt: null, readingCount: 0 };
+  return {
+    active: false, sessionId: null, elementName: null, startedAt: null,
+    readingCount: 0, rohrwechsel: null, operatingMode: null,
+  };
 }

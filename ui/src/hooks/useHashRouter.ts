@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 export interface Route {
-  page: 'home' | 'config' | 'element' | 'comments' | 'setup' | 'sensors';
+  page: 'home' | 'config' | 'element' | 'comments' | 'setup' | 'sensors' | 'calibration';
   params: Record<string, string>;
   query: Record<string, string>;
 }
@@ -33,6 +33,12 @@ export function parseRoute(hash: string): Route {
   // needs the whole display, not a card inside the settings page.
   if (path === 'sensors') {
     return { page: 'sensors', params: {}, query };
+  }
+
+  // Calibration is its own screen for the same reason: one row per sensor with
+  // live values needs the whole display.
+  if (path === 'kalibrierung') {
+    return { page: 'calibration', params: {}, query };
   }
 
   // The setup wizard is a route, not a conditional overlay. Its step lives in

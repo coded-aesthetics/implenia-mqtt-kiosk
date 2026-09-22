@@ -13,6 +13,7 @@ import { VoiceFeedbackOverlay } from './components/VoiceFeedbackOverlay';
 import { CommentQueuePage } from './components/CommentQueuePage';
 import { SetupWizard } from './components/SetupWizard';
 import { TopicAssignment } from './components/TopicAssignment';
+import { CalibrationPage } from './components/CalibrationPage';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
@@ -113,6 +114,11 @@ export function App() {
       pageTitle = 'Sensorzuordnung';
       break;
     }
+    case 'calibration': {
+      content = <CalibrationPage />;
+      pageTitle = 'Kalibrierung';
+      break;
+    }
     case 'comments': {
       content = (
         <CommentQueuePage
@@ -175,7 +181,7 @@ export function App() {
       />
       <main style={{
         ...styles.main,
-        ...(route.page === 'element' || route.page === 'sensors'
+        ...(route.page === 'element' || route.page === 'sensors' || route.page === 'calibration'
           ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const }
           : {}),
       }}>
