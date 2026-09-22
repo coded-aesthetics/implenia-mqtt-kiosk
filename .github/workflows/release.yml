@@ -76,8 +76,14 @@ jobs:
       - name: Create release archive
         run: |
           mkdir -p release-bundle/server/dist
+          mkdir -p release-bundle/server/assets
           mkdir -p release-bundle/ui/dist
           cp -r server/dist/* release-bundle/server/dist/
+          # Runtime data the server reads from disk: the sensor CSVs and the
+          # shipped topic maps (topic-resolver.ts resolves them relative to
+          # dist/). Without these the kiosk silently resolves no topics and
+          # rejects every sensor name on the assignment screen.
+          cp -r server/assets/* release-bundle/server/assets/
           cp server/package.json release-bundle/server/
           cp -r ui/dist/* release-bundle/ui/dist/
           cp package.json release-bundle/

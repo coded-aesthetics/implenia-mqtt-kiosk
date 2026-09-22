@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
+import { config } from './config.js';
 
 // --- Types ---
 
@@ -56,7 +57,12 @@ export interface MappingRow {
 
 // --- Init ---
 
-const DB_PATH = path.join(process.cwd(), 'kiosk.db');
+const DB_PATH = config.DB_PATH ?? path.join(process.cwd(), 'kiosk.db');
+
+/** Which database this process opened. Lets tests refuse to run on a real one. */
+export function databasePath(): string {
+  return DB_PATH;
+}
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
@@ -109,6 +115,19 @@ db.exec(`
     port  TEXT,
     baud  INTEGER NOT NULL DEFAULT 9600,
     type  TEXT    NOT NULL DEFAULT 'elvis'
+  );
+
+  CREATE TABLE IF NOT EXISTS session_exports (
+    session_id  INTEGER NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+    stream      TEXT    NOT NULL,
+    exported_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, stream)
+  );
+
+  CREATE TABLE IF NOT EXISTS topic_overrides (
+    topic       TEXT    PRIMARY KEY,
+    sensor_name TEXT    NOT NULL,
+    created_at  INTEGER NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS sensor_mappings (
@@ -192,6 +211,15 @@ const sessionStatsStmt = db.prepare(`
 `);
 
 // Meta
+// Added after the fact: a session that has been exported to USB counts as
+// "safe" for the reset guard, even if it was never uploaded.
+{
+  const cols = db.prepare('PRAGMA table_info(recording_sessions)').all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'exported_at')) {
+    db.exec('ALTER TABLE recording_sessions ADD COLUMN exported_at INTEGER');
+  }
+}
+
 const getMetaStmt = db.prepare('SELECT value FROM meta WHERE key = ?');
 const setMetaStmt = db.prepare(
   'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
@@ -206,6 +234,56 @@ export function insertBuffer(topic: string, payload: string): void {
 
 export function pruneBuffer(maxAgeMs = 86_400_000): void {
   pruneBufferStmt.run(Date.now() - maxAgeMs);
+}
+
+/**
+ * Drop the live buffer. Only for when its contents stop meaning anything —
+ * a changed broker, a reset. Recorded measurements live in session_readings
+ * and are untouched by this.
+ */
+export function clearBuffer(): void {
+  db.prepare('DELETE FROM mqtt_buffer').run();
+}
+
+/**
+ * Distinct topics observed since `since`, with their most recent payload.
+ *
+ * Every message is written to mqtt_buffer before any sensor mapping is
+ * attempted, so this sees topics the kiosk cannot yet match to a sensor —
+ * which is exactly what the setup wizard needs to show.
+ */
+const getObservedTopicsStmt = db.prepare(`
+  SELECT b.topic,
+         b.payload      AS last_payload,
+         b.received_at  AS last_seen,
+         c.n            AS count
+  FROM mqtt_buffer b
+  JOIN (
+    SELECT topic, MAX(id) AS max_id, COUNT(*) AS n
+    FROM mqtt_buffer
+    WHERE received_at >= ?
+    GROUP BY topic
+  ) c ON c.max_id = b.id
+  ORDER BY b.topic
+`);
+
+export interface ObservedTopic {
+  topic: string;
+  lastPayload: string;
+  lastSeen: number;
+  count: number;
+}
+
+export function getObservedTopics(since: number): ObservedTopic[] {
+  const rows = getObservedTopicsStmt.all(since) as {
+    topic: string; last_payload: string; last_seen: number; count: number;
+  }[];
+  return rows.map((r) => ({
+    topic: r.topic,
+    lastPayload: r.last_payload,
+    lastSeen: r.last_seen,
+    count: r.count,
+  }));
 }
 
 export function getBufferRange(from: number, to: number): BufferRow[] {
@@ -372,6 +450,49 @@ export function deleteDevice(id: number): void {
 
 // --- Sensor mapping functions ---
 
+// Topic overrides: technician-assigned MQTT topic → sensor name
+const getTopicOverridesStmt = db.prepare(
+  'SELECT topic, sensor_name, created_at FROM topic_overrides ORDER BY topic'
+);
+const setTopicOverrideStmt = db.prepare(
+  `INSERT INTO topic_overrides (topic, sensor_name, created_at) VALUES (?, ?, ?)
+   ON CONFLICT(topic) DO UPDATE SET sensor_name = excluded.sensor_name`
+);
+const deleteTopicOverrideStmt = db.prepare('DELETE FROM topic_overrides WHERE topic = ?');
+const deleteOverridesForSensorStmt = db.prepare(
+  'DELETE FROM topic_overrides WHERE sensor_name = ?'
+);
+
+export interface TopicOverride {
+  topic: string;
+  sensorName: string;
+  createdAt: number;
+}
+
+export function getTopicOverrides(): TopicOverride[] {
+  const rows = getTopicOverridesStmt.all() as {
+    topic: string; sensor_name: string; created_at: number;
+  }[];
+  return rows.map((r) => ({ topic: r.topic, sensorName: r.sensor_name, createdAt: r.created_at }));
+}
+
+/**
+ * Bind a topic to a sensor. A sensor can only be bound once — binding it to a
+ * new topic releases the old one, so two topics can never feed the same sensor
+ * and silently interleave.
+ */
+export function setTopicOverride(topic: string, sensorName: string): void {
+  const tx = db.transaction(() => {
+    deleteOverridesForSensorStmt.run(sensorName);
+    setTopicOverrideStmt.run(topic, sensorName, Date.now());
+  });
+  tx();
+}
+
+export function deleteTopicOverride(topic: string): void {
+  deleteTopicOverrideStmt.run(topic);
+}
+
 const getDeviceMappingsStmt = db.prepare(
   'SELECT * FROM sensor_mappings WHERE device_id = ? ORDER BY value_index'
 );
@@ -408,4 +529,88 @@ export function setDeviceMappings(
 
 export function close(): void {
   db.close();
+}
+
+// --- Reset ---
+
+const markSessionExportedStmt = db.prepare(
+  'UPDATE recording_sessions SET exported_at = ? WHERE id = ?'
+);
+
+/**
+ * Record that a session's data left the kiosk as a file — *all* of it.
+ *
+ * A session exports one file per stream, so this may only be called once every
+ * stream that has data has been written. Setting it after a single stream
+ * would tell the reset guard that the other streams' readings are safe to
+ * delete when nothing has saved them. Callers go through markStreamExported()
+ * and let getUnexportedStreams() decide.
+ */
+export function markSessionExported(sessionId: number): void {
+  markSessionExportedStmt.run(Date.now(), sessionId);
+}
+
+const markStreamExportedStmt = db.prepare(
+  `INSERT INTO session_exports (session_id, stream, exported_at) VALUES (?, ?, ?)
+   ON CONFLICT(session_id, stream) DO UPDATE SET exported_at = excluded.exported_at`
+);
+const getExportedStreamsStmt = db.prepare(
+  'SELECT stream FROM session_exports WHERE session_id = ?'
+);
+
+/** Record that one stream of a session was written to a file. */
+export function markStreamExported(sessionId: number, stream: string): void {
+  markStreamExportedStmt.run(sessionId, stream, Date.now());
+}
+
+/** Streams of this session that have already been written to a file. */
+export function getExportedStreams(sessionId: number): string[] {
+  return (getExportedStreamsStmt.all(sessionId) as { stream: string }[]).map((r) => r.stream);
+}
+
+const unsafeSummaryStmt = db.prepare(`
+  SELECT COUNT(DISTINCT s.id) AS sessions, COUNT(r.id) AS readings
+  FROM recording_sessions s
+  JOIN session_readings r ON r.session_id = s.id
+  WHERE s.exported_at IS NULL AND r.upload_status != 'uploaded'
+`);
+
+export interface UnsafeDataSummary {
+  sessions: number;
+  readings: number;
+}
+
+/**
+ * Recorded data that exists only on this kiosk: not uploaded, and not
+ * exported to a file either. The reset guard refuses while this is non-zero.
+ *
+ * Exported counts as safe deliberately — otherwise a kiosk with no
+ * connectivity could never be reset, which is the dead end the guard exists
+ * to prevent.
+ */
+export function getUnsafeDataSummary(): UnsafeDataSummary {
+  return unsafeSummaryStmt.get() as UnsafeDataSummary;
+}
+
+/** meta keys that survive a reset: the site's credentials, not this machine's setup. */
+const RESET_PRESERVED_META = ['implenia_api_key', 'implenia_api_url'];
+
+/**
+ * Wipe this machine's setup and its recorded data, leaving the API
+ * credentials in place. Callers must check getUnsafeDataSummary() first.
+ */
+export function resetKiosk(): void {
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM session_readings').run();
+    db.prepare('DELETE FROM session_exports').run();
+    db.prepare('DELETE FROM recording_sessions').run();
+    db.prepare('DELETE FROM mqtt_buffer').run();
+    db.prepare('DELETE FROM sensor_mappings').run();
+    db.prepare('DELETE FROM devices').run();
+    db.prepare('DELETE FROM topic_overrides').run();
+    db.prepare(
+      `DELETE FROM meta WHERE key NOT IN (${RESET_PRESERVED_META.map(() => '?').join(',')})`
+    ).run(...RESET_PRESERVED_META);
+  });
+  tx();
 }

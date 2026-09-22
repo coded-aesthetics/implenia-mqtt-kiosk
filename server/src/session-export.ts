@@ -1,5 +1,8 @@
 import ExcelJS from 'exceljs';
-import { getSessionById, getAllSessionReadings, type SessionReadingRow } from './db.js';
+import {
+  getSessionById, getAllSessionReadings, markSessionExported,
+  markStreamExported, getExportedStreams, type SessionReadingRow,
+} from './db.js';
 import { getStreamSensors, getAvailableStreams, STREAM_LABELS } from './sensor-meta.js';
 
 /**
@@ -168,13 +171,40 @@ export function getSessionExportStreams(sessionId: number): StreamExportOption[]
 }
 
 /**
+ * Record that one stream's file was written, and decide whether the session as
+ * a whole now counts as exported.
+ *
+ * The reset guard reads `exported_at` as "every reading of this session has
+ * been saved somewhere", but a session exports one file per stream. Marking
+ * the session after the first file would hand the remaining streams' readings
+ * to the next reset — never uploaded, never written anywhere. So the session
+ * is only marked once no stream that has data is still missing.
+ *
+ * Returns the streams still waiting to be exported, for logging and for the UI.
+ */
+export function recordStreamExport(
+  sessionId: number,
+  stream: ExportableStream,
+): { remaining: string[] } {
+  markStreamExported(sessionId, stream);
+  const exported = new Set(getExportedStreams(sessionId));
+  const remaining = getSessionExportStreams(sessionId)
+    .filter((o) => !exported.has(o.stream))
+    .map((o) => o.stream);
+  if (remaining.length === 0) {
+    markSessionExported(sessionId);
+  }
+  return { remaining };
+}
+
+/**
  * Build the xlsx workbook buffer for a completed session's stream.
  * Throws if the session does not exist or the stream is not exportable.
  */
 export async function buildSessionExport(
   sessionId: number,
   stream: ExportableStream,
-): Promise<{ buffer: Buffer; filename: string }> {
+): Promise<{ buffer: Buffer; filename: string; dataRows: number }> {
   const session = getSessionById(sessionId);
   if (!session) {
     throw new Error(`Sitzung ${sessionId} nicht gefunden`);
@@ -194,5 +224,12 @@ export async function buildSessionExport(
   }
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-  return { buffer, filename: exportFilename(session.element_name, stream) };
+  // Row count excludes the header. A stream the verfahren does not define
+  // produces a header-only file — which must not count as data having been
+  // saved anywhere.
+  return {
+    buffer,
+    filename: exportFilename(session.element_name, stream),
+    dataRows: Math.max(rows.length - 1, 0),
+  };
 }

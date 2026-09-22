@@ -14,6 +14,20 @@ DataSource (MQTT | Serial | Simulator)
 
 Data intake is abstracted behind a `DataSource` interface. Each source emits `SensorReading` events. The `DataIngestion` layer routes readings to SQLite, WebSocket broadcast, and session recording — source-agnostic.
 
+**One transport is active at a time**, chosen by `meta.transport` (`mqtt` or `serial`) and swapped at runtime via `ingestion.setSource()`:
+
+- **MQTT** (`mqttSource`) — one broker, one subscription, topics resolved to sensors
+- **Serial** (`deviceSource`) — wraps `deviceManager`, turning each device frame into readings using the channel mappings (`device_id`, `value_index`) → sensor name, emitted as `device/<id>/<sensor>`
+
+Both converge on the same `SensorReading` shape before anything is buffered, recorded or uploaded. `deviceManager` is owned by the serial source, so an MQTT kiosk does not also poll USB ports. Raw `device-frame` messages are still broadcast separately, because the channel picker needs values by index.
+
+```
+GET /api/config/transport   → { transport, label, configured, available }
+PUT /api/config/transport   → { transport } — swaps the live source, no restart
+```
+
+The transport is **write-once**, like the Verfahren. A rig's wiring does not change mid-project, and a wrong choice announces itself within minutes — no data arrives at all — at a point where resetting costs nothing because nothing has been recorded yet. Changing it requires a reset.
+
 ## Prerequisites
 
 - **Node.js** >= 20
@@ -43,14 +57,15 @@ The UI dev server runs on `http://localhost:5173` and proxies API/WS requests to
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `MQTT_BROKER_URL` | Yes | — | MQTT broker URL (e.g. `mqtt://192.168.1.50:1883`) |
-| `MQTT_TOPICS` | Yes | — | Comma-separated MQTT topics |
+| `MQTT_BROKER_URL` | No | — | MQTT broker URL. Pre-seed only — a value stored by the setup wizard wins. Without either, the MQTT source stays disconnected |
+| `MQTT_TOPICS` | No | — | Comma-separated subscription filters. Pre-seed only — see `MQTT_BROKER_URL` |
 | `IMPLENIA_API_URL` | No | — | Implenia REST API base URL (also configurable in UI) |
 | `IMPLENIA_API_KEY` | No | — | Bearer token for the API (also configurable in UI) |
-| `GITHUB_OWNER` | Yes | — | GitHub org/user for update checks |
-| `GITHUB_REPO` | Yes | — | GitHub repo name for update checks |
+| `GITHUB_OWNER` | No | — | GitHub org/user for update checks. Baked into the release image; without it GitHub polling is skipped and USB updates still work |
+| `GITHUB_REPO` | No | — | GitHub repo name for update checks. See `GITHUB_OWNER` |
 | `GITHUB_TOKEN` | No | — | Token for private repo access |
 | `UPDATE_CHECK_INTERVAL_MS` | No | `3500000` | Update check interval (ms) |
+| `DB_PATH` | No | `<cwd>/kiosk.db` | SQLite database path. `:memory:` for an ephemeral DB. `server/vitest.config.ts` forces this for every test — db.ts opens its connection at import, so setting it inside a test file is too late and a destructive test would hit the real kiosk.db |
 | `PORT` | No | `3000` | HTTP server port |
 | `NODE_ENV` | No | `production` | `development` / `production` / `test` |
 | `CONNECTIVITY_PROBE_HOST` | No | `8.8.8.8` | DNS host for connectivity checks |
@@ -58,6 +73,8 @@ The UI dev server runs on `http://localhost:5173` and proxies API/WS requests to
 | `USB_UPDATE_PATHS` | No | `/media` | Comma-separated dirs to scan for USB update bundles |
 | `LOG_SENSOR_UPLOAD` | No | `false` | Upload log entries as string sensor readings |
 | `LOG_SENSOR_LEVEL` | No | `warn` | Minimum level for sensor-uploaded logs |
+
+**No variable is required to boot.** A machine with no `.env` at all starts, serves the UI and answers `GET /api/verfahren` — that is what lets the setup wizard run on a fresh industry PC. Missing values degrade the affected feature (MQTT stays disconnected, GitHub update checks are skipped) and are logged as warnings. A *malformed* value (e.g. an unparseable URL) is still a hard startup failure.
 
 ## Logging
 
@@ -99,6 +116,109 @@ Sensor definitions live as CSV files in `server/assets/sensors/` (copied from `.
 ```
 
 The server exposes these via `GET /api/verfahren/:type/sensors` (optional `?source=mqtt` filter).
+
+Each Verfahren's process, sensor semantics and kiosk-side requirements are documented in [`docs/verfahren/`](docs/verfahren/README.md) — start there when working on a new machine type.
+
+The Verfahren a machine is set up for is stored in the database (`meta.active_verfahren`) and drives every `Priorität` / `Rolle` / unit lookup:
+
+```
+GET  /api/verfahren             → all selectable Verfahren
+GET  /api/verfahren/active      → { verfahren, label }; null until set up
+PUT  /api/verfahren/active      → { verfahren } — write-once, 409 if already set
+```
+
+**Write-once by design.** Recorded sessions, serial channel mappings and stream-export columns are all interpreted through the active Verfahren, so switching it under existing data would silently reinterpret that data. Changing it requires a full reset. Until it is set, sensor metadata enrichment is skipped — the live view still works, just without CSV-derived priorities, roles and units.
+
+
+### First-start setup
+
+Until a Verfahren is set, `App` renders `SetupWizard` instead of the whole app — not as a modal over it, but in place of it. The gate is checked before any routing, so there is no way into the app around it. If the state cannot be determined (server unreachable), the UI says so and retries rather than assuming "not set up" and showing the wizard by mistake.
+
+The wizard is **service-personnel UI** and is deliberately exempt from the "no modals or multi-step flows" rule in `CLAUDE.md`, which is written for the worker-facing screens. Glove-sized tap targets, contrast, German text and the 1024x768 budget still apply. Each step commits its own setting as it completes, so an interrupted setup resumes instead of starting over.
+
+
+Steps: **Verfahren** → **Datenquelle** (MQTT or serial) → the branch for that choice → summary. The step counter reflects the branch, so it does not promise a step that will not appear. The MQTT branch uses the same `MqttSettings` component as the config page, so the two cannot drift; the serial branch lists devices with live connection state and sends the technician to the settings for channel mapping, which needs the machine running to be doable at all.
+
+The config page mirrors the choice: with `transport = mqtt` it shows MQTT settings, with `serial` the device list and channel mapping. Switching there swaps the live data source immediately, no restart.
+
+### Reset
+
+```
+GET  /api/config/reset   → { allowed, unsafe: { sessions, readings }, preserves }
+POST /api/config/reset   → 409 while data is unsafe, otherwise wipes and clears caches
+```
+
+**Clears:** Verfahren, transport, MQTT settings, devices, channel mappings, topic overrides, recorded sessions and readings, export records, the buffer, the imported shift assignment. The UI additionally clears the voice comment queue, which lives in `localStorage` and is therefore out of the server's reach — and, for the same reason, blocks the reset itself while comments are still unsent: the server's guard cannot see them, so a kiosk that was offline all shift would otherwise report "nothing unsaved" and discard a shift of dictation.
+
+**Keeps:** the API key and server address — the site's credentials, not this machine's setup, and re-entering a token on a touchscreen is miserable.
+
+**Refuses — does not warn — while recorded data exists only on this kiosk.** "Safe" means uploaded *or* exported to a file: if only uploading counted, a kiosk with no connectivity could never be reset, which is the dead end the guard exists to prevent. An export only counts when the file actually contained readings; a Verfahren with no streams defined produces a header-only file, and treating that as saved would discard data nobody ever got off the machine.
+
+A session exports **one file per stream**, so it only counts as exported once every stream that has data has been written (`session_exports` tracks them individually, `recordStreamExport()` decides). Marking the session after the first file would hand the remaining streams' readings to the next reset — never uploaded, never saved anywhere.
+
+Because the reset clears the in-memory caches (`clearVerfahrenCache`, `clearTransportCache`, `clearResolverCache`, `clearMappingCache`) and cycles the data source, it needs no restart — unlike `scripts/reset-setup.sh`. The source is cycled, not just re-selected: `setSource()` is a no-op when the transport is unchanged, which is the common case, and the MQTT client would otherwise hold the previous site's connection and subscription straight through the reset.
+
+It also detaches any running recording first (`abortRecording()`). The ingestion layer holds the session id in memory, and with `foreign_keys = ON` a reading arriving after the session row is deleted throws inside the data source's synchronous handler — uncaught, taking the process with it.
+
+### Resetting the setup
+
+```bash
+./scripts/reset-setup.sh                      # asks first
+./scripts/reset-setup.sh --yes                # no prompt
+./scripts/reset-setup.sh --with-data          # also deletes recordings
+DB_PATH=/path/to/kiosk.db ./scripts/reset-setup.sh
+```
+
+Clears the active Verfahren, the transport choice, the MQTT settings and the topic overrides, so the wizard runs again. **Keeps** recorded sessions and readings, serial devices and channel mappings, and the API key. Restart the server afterwards — the Verfahren and transport are cached in memory.
+
+It warns when keeping data would orphan it: sessions recorded under the Verfahren being cleared would later export against a *different* Verfahren's column contract.
+
+`--with-data` also deletes recorded sessions and readings, the buffer, devices and channel mappings — the escape hatch for data that will never upload, since the in-app reset refuses while readings are neither uploaded nor exported. It always asks separately and `--yes` does not cover it; you type `DELETE DATA` to confirm, or pass `--force`.
+
+This is a development and service helper, not the kiosk's reset feature. The in-app reset still has to refuse to run while un-uploaded readings exist and confirm by tap; this script does neither, which is why it is not reachable from the UI. Since the Verfahren is write-once, this is currently the only way to choose a different one.
+
+### MQTT settings
+
+Broker address and subscription filter live in `meta` (`mqtt_broker_url`, `mqtt_topics`), collected by the wizard. The env vars are a pre-seed for a prepared image; the stored value wins, matching how `IMPLENIA_API_URL` already behaves.
+
+```
+GET  /api/config/mqtt          → current settings, defaults, connection state
+POST /api/config/mqtt/test     → { brokerUrl } — try it without saving
+PUT  /api/config/mqtt          → { brokerUrl, topics } — save and reconnect
+GET  /api/config/mqtt/topics   → topics actually observed (default: last 5 min)
+```
+
+`normalizeBrokerUrl()` accepts what a technician would type — `192.168.2.1`, `192.168.2.1:1884`, or a full URL — and fills in the scheme and default port. This matters because a malformed broker URL is still a hard startup failure, so it is validated before anything is written.
+
+The wizard defaults to **`mqtt://192.168.2.1:1883`**, the Implenia MQTT box's default address, and to the **`#`** filter. The wide filter is deliberate: on a new machine the topic naming is unknown, and a narrow filter makes unmatched topics invisible rather than visible-but-unassigned.
+
+Saving calls `ingestion.restartSource()`, which cycles the data source in place. The broker URL is read in `start()` rather than frozen at import, so changing it needs no process restart.
+
+`GET /api/config/mqtt/topics` reads `mqtt_buffer`, which is written before any sensor mapping is attempted — so it shows topics the kiosk cannot match to a sensor. That is the foundation for the sensor assignment screen.
+
+### Topic assignment
+
+An MQTT reading reaches its sensor by resolving the topic to a sensor name, in this order (`server/src/topic-resolver.ts`):
+
+1. **`topic_overrides`** — wired on site, highest priority
+2. **`server/assets/topic-maps/<verfahren>.json`** — shipped with the release
+3. **The topic's last segment equals the sensor name** — the no-configuration case
+
+```
+GET    /api/config/topic-overrides          → expected sensors, what feeds each, and how it was bound
+PUT    /api/config/topic-overrides          → { topic, sensorName }
+DELETE /api/config/topic-overrides/:topic
+```
+
+The **Sensorzuordnung** screen at `#/sensors` (reached from the config page under the MQTT transport) drives this. It mirrors the serial `ChannelPicker`'s two-step shape — pick a sensor, then pick its source — because it is the same task: the sensor list shows what is bound and what is not, and the source list shows every observed topic with its live value and age. It is built for the case where nothing auto-matches, since a box's topic names may not resemble the sensor names at all — the live values are how you tell opaque channels apart, by watching which one moves when the machine moves. Sensors that already resolve by name are shown as `passt automatisch` rather than unassigned, so nobody rebinds what already works.
+
+Overrides win so a stale shipped map can never override a human decision. `PUT` rejects a sensor name that does not exist for the active Verfahren — a typo there would otherwise drop that sensor's data at upload time with no error anywhere. Binding a sensor releases its previous topic, so two topics can never feed one sensor and interleave.
+
+Overrides are keyed by the **full topic** the technician saw, so an override does not leak to a different prefix; shipped-map keys may be either a full topic or a bare last segment, and prefix-free keys survive a site changing its topic prefix.
+
+**Why an unresolved topic matters.** It is still buffered and broadcast live, but stored with a null `sensor_id` — and `getSessionUploadGroups` filters those out. So the data appears on screen, the upload reports success, and nothing is ever sent. This resolution chain, and the assignment screen on top of it, exist to make that visible.
+
+This is deliberately *not* in the sensor CSV: implenia-web and implenia-machine-backend never see MQTT topics, and it is unrelated to the CSV's `Alias` column, which carries a sensor's legacy name on the platform.
 
 ## Session Data Export
 
@@ -176,6 +296,8 @@ git push origin v1.1.0
 ```
 
 GitHub Actions builds, packages, and publishes the release automatically. Never manually bump `package.json` versions — CI stamps them from the git tag.
+
+The bundle contains `server/dist/`, `server/assets/`, `ui/dist/`, both `package.json` files and `.env.example`. `server/assets/` is not optional: the server reads the sensor CSVs and topic maps from disk at runtime (`__dirname/../assets/...`), so leaving them out ships a kiosk that resolves no topics and rejects every sensor name on the assignment screen — silently, because a missing topic map is a normal state.
 
 ## Project Structure
 

@@ -38,11 +38,65 @@ export function useConfig(): ConfigState {
   });
 
   const refetch = useCallback(() => {
-    setState((s) => ({ ...s, loading: true }));
+    // `loading` means "nothing to show yet", not "a request is in flight".
+    // Flipping it on every refetch is what let a background refresh blank a
+    // screen someone was using — see setupGate.ts.
+    setState((s) => ({ ...s, loading: s.apiUrl === null && !s.hasApiKey }));
     fetch('/api/config')
       .then((r) => r.json())
       .then((data) => setState({ hasApiKey: data.hasApiKey, apiUrl: data.apiUrl, apiUrlSource: data.apiUrlSource, loading: false }))
       .catch(() => setState((s) => ({ ...s, loading: false })));
+  }, []);
+
+  useEffect(() => { refetch(); }, [refetch]);
+
+  return { ...state, refetch };
+}
+
+// --- Setup: active Verfahren ---
+
+export interface ActiveVerfahrenState {
+  /** null = this machine has not been set up yet. */
+  verfahren: string | null;
+  label: string | null;
+  /** True until the first answer arrives — do not show the wizard before then. */
+  loading: boolean;
+  /** Set when the server could not be reached at all (state unknown). */
+  error: string | null;
+  refetch: () => void;
+}
+
+/**
+ * The Verfahren this kiosk was set up for. Drives the first-start gate in App:
+ * while `verfahren` is null the setup wizard replaces the whole app.
+ */
+export function useActiveVerfahren(): ActiveVerfahrenState {
+  const [state, setState] = useState<{
+    verfahren: string | null;
+    label: string | null;
+    loading: boolean;
+    error: string | null;
+  }>({ verfahren: null, label: null, loading: true, error: null });
+
+  const refetch = useCallback(() => {
+    // Only "no answer yet" blanks the UI; a refresh keeps the current value.
+    setState((s) => ({ ...s, loading: s.verfahren === null && s.error === null }));
+    fetch('/api/verfahren/active')
+      .then(async (r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        const data = (await r.json()) as { verfahren: string | null; label: string | null };
+        setState({ verfahren: data.verfahren, label: data.label, loading: false, error: null });
+      })
+      .catch(() => {
+        // Unknown, not "unconfigured" — never show the wizard because of a
+        // transient failure.
+        setState({
+          verfahren: null,
+          label: null,
+          loading: false,
+          error: 'Die Anwendung ist nicht erreichbar. Bitte die Seite neu laden.',
+        });
+      });
   }, []);
 
   useEffect(() => { refetch(); }, [refetch]);
@@ -92,7 +146,9 @@ export function useShiftAssignment(hasApiKey: boolean): ShiftAssignmentState {
 
   const fetchShift = useCallback(() => {
     const id = ++fetchIdRef.current;
-    setState((s) => ({ ...s, loading: true, error: null, notFound: false }));
+    // Keep the element list on screen while refreshing: a worker looking at it
+    // must not have it replaced by "wird geladen..." mid-shift.
+    setState((s) => ({ ...s, loading: s.data === null, error: null, notFound: false }));
     fetch('/api/shift-assignment')
       .then(async (r) => {
         if (id !== fetchIdRef.current) return;

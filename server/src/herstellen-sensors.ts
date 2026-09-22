@@ -27,13 +27,39 @@ export interface SensorDefs {
 /** The sensor type keys we support. */
 const SENSOR_KEYS = ['sensors_float', 'sensors_int', 'sensors_string', 'sensors_geo'] as const;
 
+/** Sources the kiosk itself produces a value for, and must therefore upload. */
+const RECORDABLE_SOURCES = new Set(['mqtt', 'kiosk', 'user']);
+
+/**
+ * Should this sensor be part of the recording session's sensor map?
+ *
+ * `user` belongs here even though nothing arrives over the wire for it: the
+ * worker enters it on the touchscreen. Injektionsbohren's `Status` is the
+ * case that matters — it drives every phase-segmented KPI, the protocol and
+ * the "produced" check in implenia-web. Leaving `user` out meant a Status
+ * reading was stored with a null sensor_id and silently never uploaded.
+ *
+ * `server` stays out: those values are computed by the platform after upload.
+ */
+export function isRecordableSensor(
+  sensor: { id: string; meta?: SensorMeta | null },
+  vorgabenIds: ReadonlySet<string>,
+): boolean {
+  if (sensor.meta != null && sensor.meta.source != null) {
+    return RECORDABLE_SOURCES.has(sensor.meta.source);
+  }
+  // Legacy fallback (pre-migration devices, no meta): everything that is not
+  // a vorgaben sensor.
+  return !vorgabenIds.has(sensor.id);
+}
+
 /**
  * Compute herstellen (production) sensors for an element.
  *
  * Two modes, chosen per-sensor based on whether `meta` is present:
  *
- * — Meta-aware (new devices): include sensors where meta.source is "mqtt" or
- *   "kiosk". These are sensors the kiosk can display in the live view.
+ * — Meta-aware (new devices): include sensors the kiosk produces a value for
+ *   (see isRecordableSensor).
  *
  * — Legacy fallback (pre-migration devices): meta is null/absent. Fall back to
  *   the original strategy: herstellen = allSensors − vorgabenSensors.
@@ -64,7 +90,6 @@ export async function fetchHerstellenSensors(elementName: string): Promise<Senso
     }
   }
 
-  const LIVE_SOURCES = new Set(['mqtt', 'kiosk']);
   const csvMeta = getSensorMetaLookup();
 
   const result: SensorDefs = {};
@@ -81,11 +106,7 @@ export async function fetchHerstellenSensors(elementName: string): Promise<Senso
         if (!s.unit && csv.unit) s.unit = csv.unit;
       }
 
-      if (s.meta != null && s.meta.source != null) {
-        return LIVE_SOURCES.has(s.meta.source);
-      }
-      // Legacy fallback: include if not a vorgaben sensor.
-      return !vorgabenIds.has(s.id);
+      return isRecordableSensor(s, vorgabenIds);
     });
     if (filtered.length > 0) {
       result[key] = filtered;

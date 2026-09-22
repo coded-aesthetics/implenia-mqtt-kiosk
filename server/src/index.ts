@@ -18,7 +18,6 @@ import { registerDeviceRoutes } from './routes/devices.js';
 import { ensureLogSensor } from './recording.js';
 import { registerLogRoutes } from './routes/logs.js';
 import { registerVerfahrenRoutes } from './routes/verfahren.js';
-import { deviceManager } from './device-manager.js';
 import { registerTranscribeRoutes } from './routes/transcribe.js';
 import { isWhisperAvailable } from './whisper.js';
 import { close as closeDb } from './db.js';
@@ -57,10 +56,11 @@ async function start(): Promise<void> {
     return reply.sendFile('index.html');
   });
 
-  // Start services
+  // Start services. The data source is chosen by the configured transport and
+  // started by ingestion — deviceManager is owned by the serial source, not
+  // started unconditionally, so an MQTT kiosk does not also poll USB ports.
   connectivity.start();
   ingestion.start();
-  deviceManager.start();
   updater.start();
   ensureLogSensor().catch(() => {});
   isWhisperAvailable();
@@ -75,7 +75,6 @@ async function shutdown(signal: string): Promise<void> {
   log.info('Received %s, shutting down...', signal);
   updater.stop();
   stopWebSocket();
-  deviceManager.stop();
   ingestion.stop();
   connectivity.stop();
   await app.close();

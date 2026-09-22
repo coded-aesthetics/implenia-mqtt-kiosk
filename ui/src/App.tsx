@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useHashRouter, navigate } from './hooks/useHashRouter';
-import { useConfig, useShiftAssignment } from './hooks/useImplenia';
+import { useConfig, useShiftAssignment, useActiveVerfahren } from './hooks/useImplenia';
 import { useVoiceCommands } from './hooks/useVoiceCommands';
 import { Header } from './components/Header';
 import { UpdateBanner } from './components/UpdateBanner';
@@ -11,6 +11,9 @@ import { ShiftAssignment } from './components/ShiftAssignment';
 import { ElementDetail } from './components/ElementDetail';
 import { VoiceFeedbackOverlay } from './components/VoiceFeedbackOverlay';
 import { CommentQueuePage } from './components/CommentQueuePage';
+import { SetupWizard } from './components/SetupWizard';
+import { TopicAssignment } from './components/TopicAssignment';
+import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
 
@@ -19,6 +22,7 @@ export function App() {
     useWebSocket();
   const route = useHashRouter();
   const config = useConfig();
+  const setup = useActiveVerfahren();
   const shift = useShiftAssignment(config.hasApiKey);
   const { importShift, clearImport } = shift;
 
@@ -41,6 +45,21 @@ export function App() {
     [shift.data],
   );
 
+  // The wizard is a route, so its visibility cannot be knocked out by the
+  // state it writes. An unconfigured kiosk is redirected into it; from there
+  // the URL is what decides, until the wizard navigates away itself.
+  const gate = {
+    onSetupRoute: route.page === 'setup',
+    settled: !setup.loading,
+    hasError: setup.error !== null,
+    verfahren: setup.verfahren,
+  };
+  const screen = resolveScreen(gate);
+
+  useEffect(() => {
+    if (needsSetupRedirect(gate)) navigate('setup');
+  }, [gate.onSetupRoute, gate.settled, gate.hasError, gate.verfahren]);
+
   // Comment queue (background whisper transcription + API posting)
   const commentQueue = useCommentQueue();
 
@@ -53,6 +72,26 @@ export function App() {
     navigate,
     enqueueComment: commentQueue.enqueue,
   });
+
+  // ── First-start gate ──────────────────────────────────────────────────
+  // The Verfahren decides how every sensor is interpreted, so nothing else can
+  // be shown until it is set. Deliberately checked before any other routing.
+  if (screen === 'setup') {
+    return (
+      <SetupWizard
+        step={route.params.step ?? 'verfahren'}
+        onFinish={() => { setup.refetch(); navigate(''); }}
+        hasApiKey={config.hasApiKey}
+      />
+    );
+  }
+  if (screen === 'error') {
+    // State unknown (server unreachable) — never assume "not set up".
+    return <div style={styles.gate}>{setup.error}</div>;
+  }
+  if (screen === 'checking') {
+    return <div style={styles.gate}>Einrichtung wird geprüft...</div>;
+  }
 
   let content: React.ReactNode;
   let pageTitle: string | undefined;
@@ -67,6 +106,11 @@ export function App() {
         />
       );
       pageTitle = 'Einstellungen';
+      break;
+    }
+    case 'sensors': {
+      content = <TopicAssignment />;
+      pageTitle = 'Sensorzuordnung';
       break;
     }
     case 'comments': {
@@ -131,7 +175,9 @@ export function App() {
       />
       <main style={{
         ...styles.main,
-        ...(route.page === 'element' ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const } : {}),
+        ...(route.page === 'element' || route.page === 'sensors'
+          ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const }
+          : {}),
       }}>
         {content}
       </main>
@@ -159,5 +205,17 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     overflow: 'auto',
     minHeight: 0,
+  },
+  gate: {
+    height: '100vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 'var(--space-xl)',
+    textAlign: 'center',
+    backgroundColor: 'var(--surface-1)',
+    color: 'var(--text-primary)',
+    fontFamily: 'var(--font-body)',
+    fontSize: 'var(--font-md)',
   },
 };

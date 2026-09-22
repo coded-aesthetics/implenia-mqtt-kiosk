@@ -1,8 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ConfigState } from '../hooks/useImplenia';
 import type { DeviceFrame } from '../hooks/useWebSocket';
 import { UpdateUpload } from './UpdateUpload';
+import { navigate } from '../hooks/useHashRouter';
+import { MqttSettings } from './MqttSettings';
 import { DeviceConfig } from './DeviceConfig';
+import { pendingCommentCount, clearCommentQueue } from '../hooks/useCommentQueue';
 
 interface Props {
   config: ConfigState;
@@ -59,6 +62,82 @@ function CardOverlay({ overlay, onDismiss }: { overlay: OverlayState; onDismiss:
 }
 
 export function ConfigPage({ config, devMode, deviceFrames }: Props) {
+  // Which data-source section to show. Mirrors the wizard's transport choice.
+  const [transport, setTransport] = useState<'mqtt' | 'serial' | null>(null);
+  const [transportConfigured, setTransportConfigured] = useState(true);
+
+  const loadTransport = useCallback(() => {
+    fetch('/api/config/transport')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return;
+        setTransport(d.transport);
+        setTransportConfigured(d.configured);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { loadTransport(); }, [loadTransport]);
+
+  // ── Reset ──
+  const [resetState, setResetState] = useState<{
+    allowed: boolean; unsafe: { sessions: number; readings: number };
+  } | null>(null);
+  const [resetPending, setResetPending] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  // Queued voice comments never reach the server, so the server-side guard
+  // cannot count them. Checked here, alongside it.
+  const [pendingComments, setPendingComments] = useState(0);
+
+  const loadResetState = useCallback(() => {
+    setPendingComments(pendingCommentCount());
+    fetch('/api/config/reset')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setResetState(d); })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { loadResetState(); }, [loadResetState]);
+
+  // The queue lives in another component's state, so nothing tells this card
+  // when the last comment goes out. Without this the block would stay up until
+  // a reload — a dead end in a screen whose whole job is getting unstuck.
+  useEffect(() => {
+    const id = setInterval(() => setPendingComments(pendingCommentCount()), 3000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function doReset() {
+    setResetError(null);
+    // Re-check right before the destructive call: a comment may have been
+    // dictated since the page loaded.
+    const queued = pendingCommentCount();
+    if (queued > 0) {
+      setPendingComments(queued);
+      setResetPending(false);
+      return;
+    }
+    try {
+      const res = await fetch('/api/config/reset', { method: 'POST' });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setResetError(body.error ?? 'Zurücksetzen fehlgeschlagen.');
+        setResetPending(false);
+        loadResetState();
+        return;
+      }
+      // Voice comments live in localStorage, so the server reset cannot clear
+      // them — they would otherwise survive into the new configuration. The
+      // guard above has already established that none are unsent.
+      clearCommentQueue();
+      window.location.hash = '#/setup';
+      window.location.reload();
+    } catch {
+      setResetError('Die Anwendung ist nicht erreichbar. Bitte erneut versuchen.');
+      setResetPending(false);
+    }
+  }
+
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [keyOverlay, setKeyOverlay] = useState<OverlayState | null>(null);
@@ -302,13 +381,108 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
       {/* Software Update card */}
       <UpdateUpload />
 
-      {/* Device config + sensor mapping */}
-      <DeviceConfig
-        devMode={devMode}
-        deviceFrames={deviceFrames}
-        pendingDeleteId={pendingDeleteDeviceId}
-        onPendingDelete={(id) => { setPendingDeleteDeviceId(id); if (id !== null) setPendingDeleteKey(false); }}
-      />
+      {/* Data source: the transport decides what this section is */}
+      <div style={styles.cardWrapper}>
+        <div style={styles.card}>
+          <div style={styles.statusRow}>
+            <span style={styles.label}>Datenquelle</span>
+            {!transportConfigured && (
+              <span style={{ ...styles.statusBadge, backgroundColor: '#e65100' }}>
+                Nicht gewählt
+              </span>
+            )}
+          </div>
+          <div style={styles.settledValue}>
+            {transport === 'serial' ? 'Serielle Verbindung (USB)' : 'MQTT-Box'}
+          </div>
+          <div style={styles.envHint}>
+            {transportConfigured
+              ? 'Bei der Einrichtung festgelegt. Eine Änderung erfordert ein Zurücksetzen der Software.'
+              : 'Es wurde noch keine Datenquelle gewählt. Angezeigt wird die Voreinstellung MQTT-Box.'}
+          </div>
+        </div>
+      </div>
+
+      {transport === 'mqtt' && (
+        <>
+          <div style={styles.cardWrapper}>
+            <div style={styles.card}>
+              <div style={styles.statusRow}>
+                <span style={styles.label}>MQTT-Einstellungen</span>
+              </div>
+              <MqttSettings />
+            </div>
+          </div>
+
+          <div style={styles.cardWrapper}>
+            <div style={styles.card}>
+              <div style={styles.statusRow}>
+                <span style={styles.label}>Sensorzuordnung</span>
+              </div>
+              <div style={styles.envHint}>
+                Welches Topic welchen Sensor liefert. Die Zuordnung gelingt am
+                einfachsten, während die Maschine läuft — dann sind die Werte an
+                ihrer Bewegung zu erkennen.
+              </div>
+              <button onClick={() => navigate('sensors')} style={styles.presetButtonActive}>
+                Sensorzuordnung öffnen
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {transport === 'serial' && (
+        <DeviceConfig
+          devMode={devMode}
+          deviceFrames={deviceFrames}
+          pendingDeleteId={pendingDeleteDeviceId}
+          onPendingDelete={(id) => { setPendingDeleteDeviceId(id); if (id !== null) setPendingDeleteKey(false); }}
+        />
+      )}
+
+      {/* Reset — last, because it is the destructive one */}
+      <div style={styles.cardWrapper}>
+        <div style={styles.card}>
+          <div style={styles.statusRow}>
+            <span style={styles.label}>Software zurücksetzen</span>
+          </div>
+
+          <div style={styles.envHint}>
+            Löscht Verfahren, Datenquelle, Geräte, Kanal- und Topic-Zuordnungen
+            sowie alle aufgezeichneten Daten. API-Schlüssel und Server-Adresse
+            bleiben erhalten. Danach startet die Einrichtung neu.
+          </div>
+
+          {resetState && !resetState.allowed && (
+            <div style={styles.blockedNotice}>
+              Zurücksetzen ist gesperrt: {resetState.unsafe.readings} Messwerte aus{' '}
+              {resetState.unsafe.sessions} Aufzeichnung(en) sind weder hochgeladen
+              noch exportiert. Bitte zuerst hochladen oder als Datei exportieren.
+            </div>
+          )}
+
+          {pendingComments > 0 && (
+            <div style={styles.blockedNotice}>
+              Zurücksetzen ist gesperrt: {pendingComments} Kommentar(e) sind noch
+              nicht gesendet und würden gelöscht. Bitte die Kommentare oben in
+              der Leiste senden oder löschen.
+            </div>
+          )}
+
+          {resetError && <div style={styles.blockedNotice}>{resetError}</div>}
+
+          {resetState?.allowed && pendingComments === 0 && (
+            <button
+              onClick={() => { if (resetPending) doReset(); else setResetPending(true); }}
+              onBlur={() => setResetPending(false)}
+              style={resetPending ? styles.dangerButtonConfirm : styles.dangerButton}
+            >
+              {resetPending ? 'Wirklich zurücksetzen?' : 'Zurücksetzen'}
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* API URL card */}
       <div style={styles.cardWrapper}>
@@ -597,6 +771,50 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     minHeight: 'var(--tap-sm)',
     fontFamily: 'inherit',
+  },
+  settledValue: {
+    fontSize: 'var(--font-md)',
+    fontWeight: 700,
+    color: 'var(--text-primary)',
+    padding: 'var(--space-sm) 0 var(--space-md)',
+  },
+  blockedNotice: {
+    fontSize: 'var(--font-base)',
+    lineHeight: 1.5,
+    color: 'var(--text-primary)',
+    padding: 'var(--space-md)',
+    marginBottom: 'var(--space-md)',
+    backgroundColor: 'var(--surface-0)',
+    borderRadius: 'var(--radius-md)',
+    borderLeft: '3px solid var(--color-warning)',
+  },
+  // House pattern for destructive actions: default state is muted with danger
+  // text, the pending state is solid danger. No confirmation dialog.
+  dangerButton: {
+    minHeight: 'var(--tap-min)',
+    width: '100%',
+    padding: '0 var(--space-lg)',
+    fontSize: 'var(--font-md)',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    color: 'var(--color-danger)',
+    backgroundColor: 'var(--surface-3)',
+    border: '2px solid var(--color-danger)',
+    borderRadius: 'var(--radius-md)',
+    cursor: 'pointer',
+  },
+  dangerButtonConfirm: {
+    minHeight: 'var(--tap-min)',
+    width: '100%',
+    padding: '0 var(--space-lg)',
+    fontSize: 'var(--font-md)',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    color: '#ffffff',
+    backgroundColor: 'var(--color-danger)',
+    border: '2px solid var(--color-danger)',
+    borderRadius: 'var(--radius-md)',
+    cursor: 'pointer',
   },
   envHint: {
     fontSize: 'var(--font-sm)',

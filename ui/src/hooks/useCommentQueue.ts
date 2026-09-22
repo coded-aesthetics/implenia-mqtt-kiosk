@@ -97,6 +97,22 @@ async function postComment(elementName: string, text: string): Promise<void> {
   }
 }
 
+/**
+ * Comments that have not reached the server yet.
+ *
+ * The reset guard needs this: queued comments live only in this browser's
+ * localStorage, so the server's "is anything unsent" check cannot see them and
+ * a reset would throw away a shift's worth of dictation without a word.
+ */
+export function pendingCommentCount(): number {
+  return loadQueue().filter((c) => c.status !== 'sent').length;
+}
+
+/** Drop the queue. Only the reset path does this. */
+export function clearCommentQueue(): void {
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* private mode */ }
+}
+
 // ── Hook ────────────────────────────────────────────────────────────────────
 
 export function useCommentQueue() {

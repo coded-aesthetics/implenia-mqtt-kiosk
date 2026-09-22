@@ -1,6 +1,6 @@
 import mqtt from 'mqtt';
 import { DataSource } from './data-source.js';
-import { config } from './config.js';
+import { getMqttSettings } from './mqtt-config.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('mqtt');
@@ -18,16 +18,25 @@ class MqttSource extends DataSource {
   }
 
   start(): void {
-    const topics = config.MQTT_TOPICS.split(',').map((t) => t.trim());
+    // Settings come from the setup wizard (meta table), falling back to env.
+    // Not configured yet (fresh machine) → stay disconnected and let the rest
+    // of the kiosk boot; the UI already handles a disconnected source.
+    const { brokerUrl, topics: topicFilter } = getMqttSettings();
+    if (!brokerUrl || !topicFilter) {
+      log.warn('MQTT is not configured (broker URL and/or topics missing) — source stays disconnected');
+      return;
+    }
 
-    this.client = mqtt.connect(config.MQTT_BROKER_URL, {
+    const topics = topicFilter.split(',').map((t) => t.trim()).filter(Boolean);
+
+    this.client = mqtt.connect(brokerUrl, {
       reconnectPeriod: 5000,
       connectTimeout: 10000,
     });
 
     this.client.on('connect', () => {
       this._connected = true;
-      log.info('Connected to %s', config.MQTT_BROKER_URL);
+      log.info('Connected to %s', brokerUrl);
 
       for (const topic of topics) {
         this.client!.subscribe(topic, (err) => {
