@@ -43,6 +43,12 @@ function formatValue(raw: string): string {
   return formatNumber(n);
 }
 
+/**
+ * Deliberately not commentTimeAgo() or date-fns: both collapse everything
+ * under a minute into one phrase, and seconds are the entire signal here.
+ * This answers "is this topic publishing right now?", which is how a
+ * technician tells a live topic from a dead one.
+ */
 function secondsAgo(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (s < 2) return 'gerade eben';
