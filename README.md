@@ -144,7 +144,7 @@ The config page mirrors the choice: with `transport = mqtt` it shows MQTT settin
 ### Reset
 
 ```
-GET  /api/config/reset   → { allowed, unsafe: { sessions, readings }, preserves }
+GET  /api/config/reset   → { allowed, unsafe: { sessions, readings, clipped }, preserves }
 POST /api/config/reset   → 409 while data is unsafe, otherwise wipes and clears caches
 ```
 
@@ -153,6 +153,8 @@ POST /api/config/reset   → 409 while data is unsafe, otherwise wipes and clear
 **Keeps:** the API key and server address — the site's credentials, not this machine's setup, and re-entering a token on a touchscreen is miserable.
 
 **Refuses — does not warn — while recorded data exists only on this kiosk.** "Safe" means uploaded *or* exported to a file: if only uploading counted, a kiosk with no connectivity could never be reset, which is the dead end the guard exists to prevent. An export only counts when the file actually contained readings; a Verfahren with no streams defined produces a header-only file, and treating that as saved would discard data nobody ever got off the machine.
+
+Clipped Rohrwechsel readings are the one exception, and they are reported rather than counted: they can never be uploaded or exported, so blocking on them would refuse forever — but the reset deletes them, so the screen says how many are about to go and points at the release action on the recording bar.
 
 A session exports **one file per stream**, so it only counts as exported once every stream that has data has been written (`session_exports` tracks them individually, `recordStreamExport()` decides). Marking the session after the first file would hand the remaining streams' readings to the next reset — never uploaded, never saved anywhere.
 
@@ -233,6 +235,8 @@ Everything the rig publishes during that window is real but is not drilling: Dre
 - **Closed** (≥ `closeThreshold`) → `phase = 'rohrwechsel'`, and every reading until the clamp opens is clipped.
 - **Open** (< `openThreshold`) → back to `bohren`, and the pipe count goes up.
 
+**Nothing is clipped until the clamp has been seen open at least once.** The thresholds are a guess until a rig proves them, and the only rig anybody has captured publishes its Klemmdruck between 1609 and 5558 — against the 100 / 50 defaults, *every* reading counts as closed. Without that arming condition the first message would latch the phase and never release it, and a whole shift would be held back from both the upload and the exported file. Instead nothing is clipped, and after five minutes of a clamp that has never read "open" the recording bar says so in German, stating explicitly that the recording is intact.
+
 **Clipping only applies while drilling.** A closed Klemmbacke means a pipe change during Bohren, but during Verpressen it is simply holding the pipe string steady — on the G08 reference capture it is closed for **81% of the grouting phase**, against 43% while drilling. Clipping on the clamp alone would discard most of the grouting data, which is exactly the data Injektionsbohren exists to record. So the recording carries an operating mode, and the worker switches it on the recording bar, mirroring the screen switch they already make on the rig's own UI:
 
 ```
@@ -241,12 +245,17 @@ PUT /api/recording/mode   → { mode: 'bohren' | 'verpressen' }
 
 It is persisted on the session, so a restart mid-element does not silently resume clipping a grouting phase.
 
-Two thresholds with a dead band between them, because the clamp is hydraulic (around 180 bar closed, near 0 open) and a single threshold would flap on sensor noise — clipping half the drilling data.
+Two thresholds with a dead band between them, because the clamp is hydraulic and a single threshold would flap on sensor noise — clipping half the drilling data. **The unit is whatever the box publishes:** some send bar, the G08 box sends a raw four-digit number, so neither the UI nor the error messages claim one. The config card shows the live value, and the thresholds are set by watching the clamp open and close once.
 
-**Nothing is discarded.** Clipped readings are stored with `phase = 'rohrwechsel'` and `upload_status = 'clipped'` — a terminal status the upload query and the export both skip, so implenia-web receives only drilling data, matching how clipping has always been done machine-side. Values are never rewritten; the phase records what a reading is *worth*, not what it says. Clipped rows are also exempt from the reset guard, which would otherwise refuse forever on any rig that changes pipes.
+The operating mode reaches the state machine itself, not just the clipping decision at the end: during Verpressen the phase is still tracked — so clipping resumes correctly the moment the worker switches back — but no pipe is counted, no depth is frozen and no offset is rebuilt. Each of those would otherwise be *uploaded*, since nothing is clipped while grouting.
+
+**Nothing is discarded.** Clipped readings are stored with `phase = 'rohrwechsel'` and `upload_status = 'clipped'` — a status the upload query and the export both skip, so implenia-web receives only drilling data, matching how clipping has always been done machine-side. Values are never rewritten; the phase records what a reading is *worth*, not what it says. Clipped rows do not block the reset guard, which would otherwise refuse forever on any rig that changes pipes; the reset screen reports them instead, because the reset deletes them.
+
+**And clipping is reversible.** A threshold set slightly wrong clips readings that were drilling data after all, and those are otherwise unreachable — in no upload, in no exported file, and gone on the next reset. The recording bar offers to release them once the session has ended (tap to confirm), which moves them back to `pending`; the phase stays on the row, so what was released is still visible afterwards.
 
 ```
-GET /api/recording/sessions/:id/readings?limit=500   → phase and upload status per reading, clipped ones included
+GET  /api/recording/sessions/:id/readings?limit=500   → phase and upload status per reading, clipped ones included
+POST /api/recording/sessions/:id/unclip               → { released } — clipped readings back into the upload queue
 ```
 
 ### How the rig reports depth
@@ -275,9 +284,11 @@ A wrong choice announces itself within one pipe: the per-pipe check below sees a
 
 **Per-pipe check.** Depth readings (found by CSV `Rolle` = `depth`, not by name) are observed for one purpose: between two Rohrwechsel, about one `Rohrlänge` should have been drilled. A deviation beyond the tolerance is reported in German on the recording bar and logged — and a change with *no* drilling in between names the likely cause, a pressure threshold sitting inside the clamp's normal range. That is how a mis-set threshold announces itself instead of silently clipping drilling data. The first change of a session is not checked: there is no baseline, and recording may have started with pipes already in the ground.
 
-The phase and pipe count are persisted to `recording_sessions.drill_state` on every phase change, so a PM2 restart mid-element (a crash, an auto-update) does not record the rest of the pipe change as drilling data.
+The phase and pipe count are persisted to `recording_sessions.drill_state` on every phase change, so a restart mid-element does not record the rest of the pipe change as drilling data. Note that this only takes effect once something re-attaches the session: `ingestion.startRecording()` restores the state, but nothing calls it on boot today, so a PM2 restart still ends recording.
 
-**Off until configured.** Handling is enabled only once a Klemmbacke topic is set; a rig without that signal behaves exactly as before — nothing clipped, everything uploaded. The topic is matched on its full name or its last segment, so `machine/Klemmbacke` (MQTT) and `device/1/Klemmbacke` (serial) share one setting.
+**Off until configured.** Handling is enabled only once a Klemmbacke topic is set; a rig without that signal behaves exactly as before — nothing clipped, everything uploaded. The topic is matched on its full name or its last segment, so `Bohrgeraet/Klemmdruck` (MQTT) and `device/1/Klemmdruck` (serial) share one setting. The screen prefills `Bohrgeraet/Klemmdruck`, which is what the G08 capture shows — a starting point, not a convention: topic names differ per box and have to be wired on site.
+
+Switching the feature **off** is never refused. The screen submits every field alongside the off switch, and with no clamp topic none of those numbers do anything — so a field left in a bad state falls back to what is stored rather than blocking the one action that makes a misbehaving feature stop.
 
 ```
 GET /api/config/rohrwechsel   → { clampTopic, enabled, depthMode, pipeLength, closeThreshold, openThreshold, tolerance }
@@ -305,7 +316,9 @@ DELETE /api/config/calibration/:sensorName       → back to neutral
 
 The **Kalibrierung** screen at `#/kalibrierung` (from the config page) shows one row per sensor with the raw value and the corrected value side by side, updating live — a factor gets set by comparing the kiosk against the display on the rig, not by arithmetic.
 
-**Nullen** covers the most common correction in one tap: a pressure or load channel that idles at a non-zero value gets the offset that cancels it (`versatz = -(rohwert × faktor)`, so the *scaled* value goes to zero, not the raw one). The server reads the live value itself at the moment of the tap rather than taking the one the screen last polled, and answers with the offset it stored. It refuses — in German, with what to do about it — when nothing is arriving for that sensor. The machine has to be at rest when it is tapped: whatever the sensor reads at that moment becomes the new zero.
+**Nullen** covers the most common correction in one tap: a pressure or load channel that idles at a non-zero value gets the offset that cancels it (`versatz = -(rohwert × faktor)`, so the *scaled* value goes to zero, not the raw one). The server reads the live value itself at the moment of the tap rather than taking the one the screen last polled, and answers with the offset it stored. The machine has to be at rest when it is tapped: whatever the sensor reads at that moment becomes the new zero.
+
+It refuses — in German, with what to do about it — when nothing is arriving for that sensor, **and when the last value is more than ten seconds old**. The observation buffer keeps the last reading for minutes, so a broker that dropped out four minutes ago still shows a number; zeroing against it would write that stale value into every measurement from then on. The screen marks such a value as *Rohwert (alt)* and greys the button out rather than letting the technician tap into the refusal.
 
 `value_numeric` stores the corrected value, so upload and export need no knowledge of the correction; `value_raw` keeps the reading as it arrived, so a wrong factor can be undone instead of having destroyed the measurement. The Klemmbacke pressure is deliberately **not** calibrated — its thresholds are set by watching what the clamp actually publishes, and a calibration meant for a sensor of the same name must not move them underneath the technician.
 

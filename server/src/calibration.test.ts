@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyCalibration, isNeutral, validateCalibration, tareOffset, NEUTRAL,
+  TARE_MAX_AGE_MS,
 } from './calibration.js';
 
 describe('linear calibration', () => {
@@ -76,6 +77,24 @@ describe('calibration validation', () => {
 });
 
 describe('taring a sensor', () => {
+  it('refuses a reading that is no longer current', () => {
+    // The observation buffer keeps the last value for minutes, so a broker
+    // that dropped out four minutes ago still shows a number on the screen.
+    // Zeroing against it writes that stale value into every measurement the
+    // rig records from then on.
+    const result = tareOffset(3.4, 1, 4 * 60_000);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('240 Sekunden alt');
+    expect(result.error).toContain('erneut nullen');
+  });
+
+  it('accepts a reading that just arrived', () => {
+    expect(tareOffset(3.4, 1, 0).ok).toBe(true);
+    expect(tareOffset(3.4, 1, TARE_MAX_AGE_MS).ok).toBe(true);
+    expect(tareOffset(3.4, 1, TARE_MAX_AGE_MS + 1).ok).toBe(false);
+  });
+
   it('cancels the current reading', () => {
     const result = tareOffset(3.4, 1);
     expect(result.ok).toBe(true);

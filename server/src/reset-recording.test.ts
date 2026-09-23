@@ -105,6 +105,6 @@ describe('reset while recording', () => {
     source.emitReading('sensors/x', '1.5');
 
     expect(db.getSessions()).toHaveLength(0);
-    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0 });
+    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0, clipped: 0 });
   });
 });

@@ -78,7 +78,7 @@ describe('recordStreamExport', () => {
     const { remaining } = exp.recordStreamExport(id, 'ivl');
 
     expect(remaining).toEqual([]);
-    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0 });
+    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0, clipped: 0 });
   });
 
   it('marks a single-stream session safe on its only export', () => {
@@ -86,7 +86,7 @@ describe('recordStreamExport', () => {
     db.insertSessionReading(id, `device/1/${HDI_SENSOR}`, 'sensor-hdi', 'float', 12.5, null);
 
     expect(exp.recordStreamExport(id, 'hdi').remaining).toEqual([]);
-    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0 });
+    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0, clipped: 0 });
   });
 
   it('is idempotent — re-exporting the same stream does not unlock the rest', () => {

@@ -43,16 +43,30 @@ const log = createLogger('config');
  * The last raw value per sensor, resolved exactly the way the live path
  * resolves an incoming topic. Used by the calibration screen and by taring, so
  * both see the same number the recording would see.
+ *
+ * `ageMs` travels with each value and is the point of the window being five
+ * minutes rather than five seconds: the screen should keep showing the last
+ * reading when the broker hiccups, clearly marked as old, while taring against
+ * one has to be refused. Only the caller knows which of the two it is.
  */
-function liveRawBySensor(): Map<string, { topic: string; raw: number | null }> {
+interface LiveRaw {
+  topic: string;
+  raw: number | null;
+  /** How long ago this value arrived. */
+  ageMs: number;
+}
+
+function liveRawBySensor(): Map<string, LiveRaw> {
   const ctx = getResolverContext();
-  const latest = new Map<string, { topic: string; raw: number | null }>();
-  for (const t of getObservedTopics(Date.now() - 5 * 60_000)) {
+  const now = Date.now();
+  const latest = new Map<string, LiveRaw>();
+  for (const t of getObservedTopics(now - 5 * 60_000)) {
     const key = resolveSensorKey(t.topic, ctx);
     if (key) {
       latest.set(key.toLowerCase(), {
         topic: t.topic,
         raw: parsePayload(t.lastPayload).valueNumeric,
+        ageMs: Math.max(0, now - t.lastSeen),
       });
     }
   }
@@ -335,7 +349,6 @@ export function registerConfigRoutes(app: FastifyInstance): void {
     Body: {
       clampTopic?: string | null;
       depthMode?: string;
-      depthScale?: number;
       pipeLength?: number;
       closeThreshold?: number;
       openThreshold?: number;
@@ -387,6 +400,9 @@ export function registerConfigRoutes(app: FastifyInstance): void {
           offset: cal.offset,
           topic: live?.topic ?? null,
           raw,
+          // So the screen can mark a value as old instead of presenting a
+          // four-minute-old reading as what the sensor is doing right now.
+          rawAgeMs: raw === null ? null : live?.ageMs ?? null,
           calibrated: raw === null ? null : applyCalibration(raw, cal),
         };
       });
@@ -468,7 +484,7 @@ export function registerConfigRoutes(app: FastifyInstance): void {
           : request.body.scale);
 
       const live = liveRawBySensor().get(sensorName.toLowerCase());
-      const result = tareOffset(live?.raw ?? null, scale);
+      const result = tareOffset(live?.raw ?? null, scale, live?.ageMs ?? null);
       if (!result.ok) return reply.status(409).send({ error: result.error });
 
       setCalibration(sensorName, scale, result.offset);

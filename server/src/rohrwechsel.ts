@@ -94,8 +94,32 @@ export interface DrillState {
   lastDepth: number | null;
   /** True depth when the previous Rohrwechsel began. The baseline for the check. */
   depthAtLastChange: number | null;
+  /**
+   * Whether the Klemmbacke has ever been seen *open*.
+   *
+   * The arming condition. Thresholds are a guess until a rig proves them: the
+   * G08 capture publishes `Bohrgeraet/Klemmdruck` in the range 1609 … 5558,
+   * nowhere near the 100/50 the defaults suggest, and against those defaults
+   * every reading counts as "closed". Without this, the first message would
+   * start a Rohrwechsel that never ends, and a whole shift would be clipped
+   * out of the upload and the export. So nothing is clipped until the clamp
+   * has been observed on both sides of the two thresholds at least once.
+   */
+  clampSeenOpen: boolean;
+  /** When the first Klemmbacke reading arrived. Null before any did. */
+  clampSince: number | null;
   /** German, user-facing. Null while the last Rohrwechsel looked plausible. */
   warning: string | null;
+  /**
+   * When the current warning was raised.
+   *
+   * A warning outlives the Rohrwechsel that caused it on purpose — the worker
+   * is handling a pipe while it is up, and only afterwards can they go into
+   * the settings. But a red banner that simply stays there is noise, so the
+   * screen lets it be tapped away, and this is what tells a freshly raised
+   * warning apart from the one that was already acknowledged.
+   */
+  warningSince: number | null;
   /** Rohrwechsel that did not add up. */
   implausibleChanges: number;
   /** When the current phase started. Null before the first transition. */
@@ -121,7 +145,10 @@ export function initialDrillState(): DrillState {
     lastRaw: null,
     lastDepth: null,
     depthAtLastChange: null,
+    clampSeenOpen: false,
+    clampSince: null,
     warning: null,
+    warningSince: null,
     implausibleChanges: 0,
     phaseSince: null,
   };
@@ -133,6 +160,27 @@ function formatMeters(value: number): string {
     maximumFractionDigits: 2,
   });
 }
+
+/**
+ * How long the Klemmbacke may read "closed" without ever reading "open"
+ * before the kiosk says the thresholds do not fit this rig.
+ *
+ * Long enough that a recording started mid-Rohrwechsel does not trigger it —
+ * a pipe change takes a minute or two — and short enough that a technician
+ * setting the machine up finds out within the first hole.
+ */
+export const THRESHOLD_WARNING_AFTER_MS = 5 * 60_000;
+
+/**
+ * Shown when the Klemmbacke has read "zu" from the first message on and never
+ * once read "offen". Says explicitly that nothing is being hidden, so the
+ * worker knows the recording is intact and can keep going.
+ */
+export const THRESHOLD_WARNING =
+  'Die Klemmbacke meldet durchgehend „zu" und war noch nie offen. Die Schwellwerte ' +
+  'passen vermutlich nicht zu diesem Gerät. Es wird nichts ausgeblendet — alle ' +
+  'Messwerte werden aufgezeichnet und hochgeladen. Bitte in den Einstellungen unter ' +
+  '„Rohrverlängerung" den aktuellen Wert ablesen und die Schwellen danach setzen.';
 
 export type DrillTransition = 'rohrwechsel-start' | 'rohrwechsel-ende' | null;
 
@@ -147,79 +195,125 @@ export interface ClampResult {
  * Closing starts the clipping window and checks the depth drilled since the
  * last change. Opening ends it, counts the new pipe, and — in `inkrementell` —
  * rebuilds the offset from where the carriage actually ended up.
+ *
+ * `drilling` is what the rig is doing, and it changes what a closed clamp
+ * *means*. While grouting it holds the string steady for most of the phase
+ * (81% of it on the G08 capture) and no Bohrrohr is being added: the phase is
+ * still tracked, so clipping resumes correctly the moment the worker switches
+ * back to Bohren, but nothing is counted, no depth is corrected and nothing is
+ * called implausible — there is no pipe to check.
  */
 export function applyClampPressure(
   state: DrillState,
   pressure: number,
   settings: RohrwechselSettings,
   now: number,
+  drilling = true,
 ): ClampResult {
   if (!Number.isFinite(pressure)) return { state, transition: null };
 
-  if (state.phase === 'bohren') {
-    if (pressure < settings.closeThreshold) return { state, transition: null };
+  const seen: DrillState = {
+    ...state,
+    clampSince: state.clampSince ?? now,
+    clampSeenOpen: state.clampSeenOpen || pressure < settings.openThreshold,
+  };
+
+  if (seen.phase === 'bohren') {
+    if (pressure < settings.closeThreshold) return { state: seen, transition: null };
+
+    // Not armed yet: this clamp has never been seen open, so "closed" may
+    // simply be what every reading looks like against thresholds meant for a
+    // different rig. Clipping on that would swallow the entire session, so
+    // hold off and — once it is clear this is not just a recording that began
+    // mid-Rohrwechsel — say so.
+    if (!seen.clampSeenOpen) {
+      const stuck =
+        seen.clampSince !== null && now - seen.clampSince >= THRESHOLD_WARNING_AFTER_MS;
+      if (!stuck || seen.warning === THRESHOLD_WARNING) return { state: seen, transition: null };
+      return {
+        state: { ...seen, warning: THRESHOLD_WARNING, warningSince: now },
+        transition: null,
+      };
+    }
 
     // Only from the second change onwards. The first has no baseline —
     // recording may have started with pipes already in the ground, and a
     // warning about that would be noise, not information.
     const drilled =
-      state.depthAtLastChange !== null && state.lastDepth !== null
-        ? state.lastDepth - state.depthAtLastChange
+      drilling && seen.depthAtLastChange !== null && seen.lastDepth !== null
+        ? seen.lastDepth - seen.depthAtLastChange
         : null;
     const warning = drilled === null ? null : describeDrilled(drilled, settings);
 
     return {
       state: {
-        ...state,
+        ...seen,
         phase: 'rohrwechsel',
         phaseSince: now,
-        depthAtLastChange: state.lastDepth ?? state.depthAtLastChange,
+        // Cleared while grouting: a baseline taken before or during Verpressen
+        // says nothing about the next pipe, and checking against it would
+        // report a Rohrwechsel as implausible for no reason.
+        depthAtLastChange: drilling ? (seen.lastDepth ?? seen.depthAtLastChange) : null,
         warning,
-        implausibleChanges: state.implausibleChanges + (warning ? 1 : 0),
+        warningSince: warning ? now : null,
+        implausibleChanges: seen.implausibleChanges + (warning ? 1 : 0),
       },
       transition: 'rohrwechsel-start',
     };
   }
 
-  if (pressure >= settings.openThreshold) return { state, transition: null };
+  if (pressure >= settings.openThreshold) return { state: seen, transition: null };
 
   const reopened: DrillState = {
-    ...state,
+    ...seen,
     phase: 'bohren',
     phaseSince: now,
-    pipeCount: state.pipeCount + 1,
+    // Carried across the transition deliberately: the worker was busy with a
+    // Bohrrohr while it was up, and going into the settings is something they
+    // can only do once the pipe is in. `warningSince` bounds it — the screen
+    // lets an acknowledged warning be tapped away.
+    warning: seen.warning,
+    warningSince: seen.warningSince,
+    pipeCount: drilling ? seen.pipeCount + 1 : seen.pipeCount,
   };
 
-  if (settings.depthMode !== 'inkrementell' || state.lastRaw === null) {
+  // No Bohrrohr was added: while grouting the clamp cycles to *remove* pipe,
+  // so rebuilding the offset from the carriage would push the depth the wrong
+  // way with every cycle — and those depths are uploaded, because nothing is
+  // clipped during Verpressen.
+  if (!drilling) return { state: reopened, transition: 'rohrwechsel-ende' };
+
+  if (settings.depthMode !== 'inkrementell' || seen.lastRaw === null) {
     return { state: reopened, transition: 'rohrwechsel-ende' };
   }
 
   // The clamp has opened: the new pipe is in and the string is coupled again.
   // The bit never moved, so wherever the carriage sits now must map to the
   // depth we froze.
-  const newOffset = state.holeDepth - state.lastRaw;
+  const newOffset = seen.holeDepth - seen.lastRaw;
 
   // A Rohrverlängerung can only ever push the offset up. A step of zero or
   // less means this was not one — most likely the string being pulled back
   // out, which cycles the clamp the same way. Keeping the old offset lets the
   // depth follow the carriage back up, which is roughly right, instead of
   // inventing a jump.
-  if (newOffset <= state.offset) {
+  if (newOffset <= seen.offset) {
     return {
       state: {
         ...reopened,
-        pipeCount: state.pipeCount,
-        implausibleChanges: state.implausibleChanges + 1,
+        pipeCount: seen.pipeCount,
+        implausibleChanges: seen.implausibleChanges + 1,
         warning:
           'Klemmbacke war zu, aber es wurde kein neues Bohrrohr erkannt. Die Bohrtiefe ' +
           'läuft unverändert weiter — bitte die angezeigte Tiefe prüfen.',
+        warningSince: now,
       },
       transition: 'rohrwechsel-ende',
     };
   }
 
   return {
-    state: { ...reopened, offset: newOffset, lastDepth: state.holeDepth },
+    state: { ...reopened, offset: newOffset, lastDepth: seen.holeDepth },
     transition: 'rohrwechsel-ende',
   };
 }
@@ -278,16 +372,22 @@ export interface DepthResult {
  * plus the accumulated offset, and during a Rohrwechsel it is the frozen hole
  * bottom — the carriage is travelling up the mast and its position is not a
  * depth at all.
+ *
+ * Freezing is the one thing that must not happen while `drilling` is false:
+ * during Verpressen the string is being pulled *out*, so the depth genuinely
+ * changes while the clamp is closed, and holding it at the hole bottom would
+ * upload a flat line for the whole grouting phase.
  */
 export function observeDepth(
   state: DrillState,
   raw: number,
   settings: RohrwechselSettings,
+  drilling = true,
 ): DepthResult {
   if (!Number.isFinite(raw)) return { state, depth: state.lastDepth };
 
   if (settings.depthMode === 'inkrementell') {
-    if (state.phase === 'rohrwechsel') {
+    if (drilling && state.phase === 'rohrwechsel') {
       return { state: { ...state, lastRaw: raw }, depth: state.holeDepth };
     }
     const depth = raw + state.offset;
@@ -325,6 +425,8 @@ export interface DrillStatus {
   /** Metres currently added to the rig's reading. Always 0 in `absolut`. */
   offset: number;
   warning: string | null;
+  /** When `warning` was raised, so the screen can tell a new one from a known one. */
+  warningSince: number | null;
   implausibleChanges: number;
   phaseSince: number | null;
 }
@@ -335,6 +437,7 @@ export function toStatus(state: DrillState): DrillStatus {
     pipeCount: state.pipeCount,
     offset: state.offset,
     warning: state.warning,
+    warningSince: state.warningSince,
     implausibleChanges: state.implausibleChanges,
     phaseSince: state.phaseSince,
   };
@@ -370,6 +473,9 @@ export function parseDrillState(json: string | null | undefined): DrillState | n
     lastRaw: numOrNull(p.lastRaw),
     lastDepth: numOrNull(p.lastDepth),
     depthAtLastChange: numOrNull(p.depthAtLastChange),
+    clampSeenOpen: p.clampSeenOpen === true,
+    clampSince: numOrNull(p.clampSince),
+    warningSince: numOrNull(p.warningSince),
     implausibleChanges: num(p.implausibleChanges, 0),
   };
 }

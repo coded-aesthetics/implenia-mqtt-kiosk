@@ -64,13 +64,15 @@ function roundValue(value: number): number {
 /**
  * A payload as a number, or NaN when it does not carry one.
  *
- * Not `Number(payload)`: that turns an empty payload into 0, and a rig
- * publishing a blank Klemmbacke value would read as "clamp wide open" — which
- * is exactly the wrong direction to guess in.
+ * Deliberately the same parse the recording path uses, so the two can never
+ * disagree about what a payload is: a value `parsePayload` reads as a number
+ * but this one rejected would be recorded uncalibrated and would silently stop
+ * the Klemmbacke from ever being detected. A blank payload stays NaN rather
+ * than becoming 0 — a rig publishing nothing must not read as "clamp wide
+ * open", which is exactly the wrong direction to guess in.
  */
 function numericPayload(payload: string): number {
-  const trimmed = payload.trim();
-  return trimmed === '' ? NaN : Number(trimmed);
+  return parsePayload(payload).valueNumeric ?? NaN;
 }
 
 export class DataIngestion extends EventEmitter {
@@ -139,20 +141,32 @@ export class DataIngestion extends EventEmitter {
     if (!session || !session.rohrwechsel.enabled) return asRecorded;
 
     const cfg = session.rohrwechsel;
+    // What the rig is doing decides what a closed Klemmbacke means, so it has
+    // to reach the state machine itself — not just the clipping decision at
+    // the end. During Verpressen the clamp holds the string for most of the
+    // phase, and a machine that took each of those cycles for a Rohrwechsel
+    // would freeze the depth, walk the offset up and upload the result.
+    const drilling = session.operatingMode === 'bohren';
 
     if (isClampTopic(reading.topic, cfg.clampTopic)) {
       // Deliberately the raw value: the thresholds are set by watching what
       // the clamp actually publishes, so a calibration meant for a sensor of
       // the same name must not move them underneath the technician.
+      const before = session.drill;
       const { state, transition } = applyClampPressure(
-        session.drill, raw, cfg, reading.receivedAt,
+        before, raw, cfg, reading.receivedAt, drilling,
       );
       session.drill = state;
 
-      if (transition) {
+      // A warning can also be raised without a phase change — the thresholds
+      // not fitting the rig is exactly that case — and it is the one the
+      // worker most needs to see, so it gets pushed just the same.
+      if (transition || state.warning !== before.warning) {
         // Persisted here and nowhere else: a phase change is the only moment
         // this state moves, and a restart that loses it mid-Rohrwechsel would
-        // record the rest of the pipe change as drilling data.
+        // record the rest of the pipe change as drilling data. It is only
+        // picked back up once something re-attaches the session — see
+        // startRecording(), which nothing calls on boot today.
         try {
           setDrillState(session.id, JSON.stringify(state));
         } catch (err) {
@@ -163,9 +177,11 @@ export class DataIngestion extends EventEmitter {
             'Rohrwechsel started at %s m (Rohr %d)',
             state.lastDepth?.toFixed(2) ?? 'unbekannt', state.pipeCount,
           );
-          if (state.warning) log.warn('Rohrwechsel implausible: %s', state.warning);
-        } else {
+        } else if (transition === 'rohrwechsel-ende') {
           log.info('Rohrwechsel finished — drilling Rohr %d', state.pipeCount);
+        }
+        if (state.warning && state.warning !== before.warning) {
+          log.warn('Rohrwechsel: %s', state.warning);
         }
         this.emit('rohrwechsel', { transition, status: toStatus(state) });
       }
@@ -174,7 +190,7 @@ export class DataIngestion extends EventEmitter {
     }
 
     if (key && getSensorRole(key) === 'depth' && Number.isFinite(raw)) {
-      const { state, depth } = observeDepth(session.drill, calibrated, cfg);
+      const { state, depth } = observeDepth(session.drill, calibrated, cfg, drilling);
       session.drill = state;
 
       if (depth !== null) {

@@ -82,7 +82,7 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
 
   // ── Reset ──
   const [resetState, setResetState] = useState<{
-    allowed: boolean; unsafe: { sessions: number; readings: number };
+    allowed: boolean; unsafe: { sessions: number; readings: number; clipped: number };
   } | null>(null);
   const [resetPending, setResetPending] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
@@ -488,6 +488,18 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
               Zurücksetzen ist gesperrt: {resetState.unsafe.readings} Messwerte aus{' '}
               {resetState.unsafe.sessions} Aufzeichnung(en) sind weder hochgeladen
               noch exportiert. Bitte zuerst hochladen oder als Datei exportieren.
+            </div>
+          )}
+
+          {/* Clipped readings do not block — they can never be uploaded or
+              exported, so they would block forever — but the reset deletes
+              them, and saying nothing here is how a mis-clipped shift is lost. */}
+          {resetState && resetState.allowed && resetState.unsafe.clipped > 0 && (
+            <div style={styles.blockedNotice}>
+              Achtung: {resetState.unsafe.clipped} Messwerte wurden als Rohrwechsel
+              ausgeblendet und werden mit zurückgesetzt. Falls der Schwellwert der
+              Klemmbacke falsch eingestellt war, lassen sie sich vorher in der
+              Aufzeichnungs-Leiste freigeben und hochladen.
             </div>
           )}
 

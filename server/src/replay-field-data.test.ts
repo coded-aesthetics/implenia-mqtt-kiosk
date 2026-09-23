@@ -294,3 +294,32 @@ describe('replaying the switch from Bohren to Verpressen', () => {
     expect(Math.min(...clamp)).toBeGreaterThan(3500);
   });
 });
+
+describe('the kiosk defaults against this rig', () => {
+  // The defaults are 100 / 50, which read like bar. This rig publishes its
+  // Klemmdruck between 1609 and 5558 — every reading is above both. Whatever
+  // the defaults do here, a technician who taps „Ein" and saves without
+  // changing them gets it.
+  it('never clips, because the clamp is never seen open', () => {
+    const messages = loadFixture('g8-rohrwechsel.txt');
+    let state = initialDrillState();
+    let clippedReadings = 0;
+
+    for (const m of messages) {
+      if (m.topic === CLAMP_TOPIC && m.payload !== 'nan') {
+        state = applyClampPressure(
+          state, Number(m.payload), DEFAULT_SETTINGS, m.offsetMs,
+        ).state;
+      }
+      if (state.phase === 'rohrwechsel') clippedReadings++;
+    }
+
+    // Without the arming condition the first message would latch the phase and
+    // never release it: 5307 readings clipped, a whole element neither
+    // uploadable nor exportable, and a reset guard that calls it safe.
+    expect(state.clampSeenOpen).toBe(false);
+    expect(clippedReadings).toBe(0);
+    expect(state.phase).toBe('bohren');
+    expect(state.pipeCount).toBe(1);
+  });
+});

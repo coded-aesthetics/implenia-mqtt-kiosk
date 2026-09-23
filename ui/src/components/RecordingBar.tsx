@@ -26,6 +26,12 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
   const [lastUploadResult, setLastUploadResult] = useState<'uploaded' | 'partial' | null>(null);
   const [emptyWarning, setEmptyWarning] = useState(false);
   const [exportOptions, setExportOptions] = useState<ExportOption[]>([]);
+  // Which warning the worker has tapped away, by the time it was raised. A
+  // warning outlives the Rohrwechsel it describes — settings can only be
+  // opened once the pipe is in — but it must not sit there in red forever.
+  const [ackedWarning, setAckedWarning] = useState<number | null>(null);
+  const [unclipPending, setUnclipPending] = useState(false);
+  const [unclipped, setUnclipped] = useState<number | null>(null);
   // Bumped after a download so the ✓ marks appear without a page reload.
   const [exportTick, setExportTick] = useState(0);
 
@@ -44,6 +50,9 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     if (recordingState.active) {
       setLastUploadResult(null);
       setEmptyWarning(false);
+      setUnclipPending(false);
+      setUnclipped(null);
+      setAckedWarning(null);
     }
   }, [recordingState.active]);
 
@@ -169,6 +178,31 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     setTimeout(() => setExportTick((n) => n + 1), 1500);
   }
 
+  /**
+   * Put the readings held back as a Rohrwechsel back in the upload queue.
+   *
+   * The recovery path for a Klemmbacke threshold set wrong: those readings are
+   * in no upload and in no exported file, and a reset would delete them.
+   */
+  async function unclip() {
+    if (!recordingState.sessionId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/recording/sessions/${recordingState.sessionId}/unclip`, {
+        method: 'POST',
+      });
+      const data = (await res.json()) as { released?: number; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `Fehler ${res.status}`);
+      setUnclipped(data.released ?? 0);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setUnclipPending(false);
+      setLoading(false);
+    }
+  }
+
   async function upload() {
     if (!recordingState.sessionId) return;
     setLoading(true);
@@ -203,10 +237,17 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
         </div>
       )}
 
-      {recordingState.active && rohrwechsel?.warning && (
-        <div style={styles.rohrwechselWarning}>
+      {/* Gated on Bohren for the same reason as the banner above: during
+          Verpressen the Klemmbacke holds the string rather than changing a
+          pipe, so nothing it does says anything about the last Rohrwechsel. */}
+      {recordingState.active && operatingMode === 'bohren' && rohrwechsel?.warning
+        && rohrwechsel.warningSince !== ackedWarning && (
+        <div
+          style={styles.rohrwechselWarning}
+          onClick={() => setAckedWarning(rohrwechsel.warningSince ?? null)}
+        >
           <span style={styles.warningIcon}>!</span>
-          <span>{rohrwechsel.warning}</span>
+          <span>{rohrwechsel.warning} (Tippen zum Ausblenden)</span>
         </div>
       )}
 
@@ -293,6 +334,22 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
               Noch nicht exportiert:{' '}
               {exportOptions.filter((o) => !o.exported).map((o) => o.label).join(', ')}
             </span>
+          )}
+          {unclipped !== null && (
+            <span style={styles.count}>
+              {unclipped} Messwerte freigegeben — jetzt hochladen
+            </span>
+          )}
+          {unclipped === null && recordingState.clippedCount > 0 && (
+            <button
+              style={unclipPending ? styles.unclipButtonConfirm : styles.unclipButton}
+              onClick={() => { if (unclipPending) unclip(); else setUnclipPending(true); }}
+              disabled={loading}
+            >
+              {unclipPending
+                ? 'Wirklich freigeben?'
+                : `${recordingState.clippedCount} Messwerte vom Rohrwechsel freigeben`}
+            </button>
           )}
         </div>
       )}
@@ -393,6 +450,32 @@ const styles: Record<string, React.CSSProperties> = {
   },
   uploadButton: {
     backgroundColor: '#388e3c',
+    color: '#ffffff',
+  },
+  unclipButton: {
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '1.1rem',
+    fontWeight: 700,
+    cursor: 'pointer',
+    padding: '0.75rem 2rem',
+    minHeight: '52px',
+    minWidth: '180px',
+    textAlign: 'center',
+    backgroundColor: '#2a2a4a',
+    color: '#ffb74d',
+  },
+  unclipButtonConfirm: {
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '1.1rem',
+    fontWeight: 700,
+    cursor: 'pointer',
+    padding: '0.75rem 2rem',
+    minHeight: '52px',
+    minWidth: '180px',
+    textAlign: 'center',
+    backgroundColor: '#ef6c00',
     color: '#ffffff',
   },
   exportButton: {

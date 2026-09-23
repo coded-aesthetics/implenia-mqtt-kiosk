@@ -44,7 +44,7 @@ function sessionWith(pendingCount: number, uploadedCount = 0): number {
 
 describe('getUnsafeDataSummary', () => {
   it('reports nothing on a fresh kiosk', () => {
-    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0 });
+    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0, clipped: 0 });
   });
 
   it('counts recorded-but-not-uploaded readings', () => {
@@ -56,7 +56,7 @@ describe('getUnsafeDataSummary', () => {
     // The offline case: no connectivity all shift, data taken off by USB.
     const id = sessionWith(2);
     db.markSessionExported(id);
-    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0 });
+    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0, clipped: 0 });
   });
 
   it('counts each unsafe session separately', () => {
@@ -73,7 +73,7 @@ describe('getUnsafeDataSummary', () => {
 
   it('is satisfied once every reading in the session is uploaded', () => {
     sessionWith(0, 2);
-    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0 });
+    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0, clipped: 0 });
   });
 });
 
@@ -96,7 +96,7 @@ describe('resetKiosk', () => {
     expect(db.getDeviceMappings(deviceId)).toHaveLength(0);
     expect(db.getTopicOverrides()).toHaveLength(0);
     expect(db.getSessions()).toHaveLength(0);
-    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0 });
+    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0, clipped: 0 });
   });
 
   it('keeps the API credentials, which belong to the site not the machine', () => {
@@ -125,6 +125,6 @@ describe('the export escape hatch', () => {
     expect(db.getUnsafeDataSummary()).toMatchObject({ readings: 3 });
 
     db.markSessionExported(id);
-    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0 });
+    expect(db.getUnsafeDataSummary()).toEqual({ sessions: 0, readings: 0, clipped: 0 });
   });
 });
