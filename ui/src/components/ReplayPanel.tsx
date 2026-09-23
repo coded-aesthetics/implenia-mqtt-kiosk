@@ -17,6 +17,7 @@ interface ReplayState {
 interface Props {
   state: ReplayState;
   loading: boolean;
+  error: string | null;
   onPlay: () => void;
   onPause: () => void;
   onStop: () => void;
@@ -47,7 +48,7 @@ function basename(filePath: string): string {
 type PanelMode = 'input' | 'transport';
 
 export function ReplayPanel({
-  state, loading, onPlay, onPause, onStop, onSetSpeed, onSeek, onLoad,
+  state, loading, error, onPlay, onPause, onStop, onSetSpeed, onSeek, onLoad,
 }: Props) {
   const [fileInput, setFileInput] = useState('');
   // Drive mode from server state — once a file is loaded, show transport.
@@ -87,6 +88,7 @@ export function ReplayPanel({
 
   // ── Badge: reflects actual state ───────────────────────────────────
   const badgeInfo = (() => {
+    if (error) return { label: 'FEHLER', color: '#f44336' };
     if (loading) return { label: 'LADEN...', color: '#e65100' };
     if (state.fastForwarding) return { label: 'SEEK', color: '#e65100' };
     if (state.playing) return { label: 'PLAY', color: '#4caf50' };
@@ -130,6 +132,9 @@ export function ReplayPanel({
             >
               ✕
             </button>
+          )}
+          {error && (
+            <span style={styles.errorText}>{error}</span>
           )}
         </div>
       </div>
@@ -444,5 +449,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: 'var(--font-mono)',
     minHeight: '44px',
     boxSizing: 'border-box' as const,
+  },
+  errorText: {
+    fontSize: '0.9rem',
+    color: '#f44336',
+    flexShrink: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
   },
 };

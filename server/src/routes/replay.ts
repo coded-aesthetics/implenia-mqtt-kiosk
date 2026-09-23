@@ -76,9 +76,13 @@ export function registerReplayRoutes(app: FastifyInstance): void {
       return reply.status(400).send({ error: 'file is required' });
     }
 
+    // The server runs from server/, but dump files live at the project root
+    // (e.g. assets/bohrung_g8_marktbreit_mqtt.txt). Resolve relative to the
+    // project root so the user doesn't have to type "../".
+    const projectRoot = path.resolve(process.cwd(), '..');
     const resolved = path.isAbsolute(filePath)
       ? filePath
-      : path.resolve(process.cwd(), filePath);
+      : path.resolve(projectRoot, filePath);
 
     if (!fs.existsSync(resolved)) {
       return reply.status(404).send({ error: `File not found: ${resolved}` });

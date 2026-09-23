@@ -61,6 +61,7 @@ function toState(d: Record<string, unknown>): ReplayState {
 export function useReplay(enabled: boolean) {
   const [state, setState] = useState<ReplayState>(EMPTY);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Background poll — keeps position/readingCount current during playback.
@@ -84,14 +85,24 @@ export function useReplay(enabled: boolean) {
 
   const load = useCallback(async (file: string) => {
     setLoading(true);
+    setError(null);
     try {
-      await post('/api/replay/load', { file });
+      const res = await fetch('/api/replay/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        setError((body as { error?: string }).error ?? `HTTP ${res.status}`);
+        return;
+      }
       // /load returns { messages, durationMs, file } — not the full state.
       // Fetch the full state so file/totalMessages/etc. are all set.
       const full = await fetch('/api/replay/state').then((r) => r.json());
       setState(toState(full as Record<string, unknown>));
     } catch {
-      // Server returned an error (bad path, etc.) — poll will catch up.
+      setError('Server nicht erreichbar');
     } finally {
       setLoading(false);
     }
@@ -130,6 +141,7 @@ export function useReplay(enabled: boolean) {
   return {
     state,
     loading,
+    error,
     load,
     play,
     pause,

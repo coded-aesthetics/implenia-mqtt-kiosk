@@ -197,6 +197,7 @@ export function App() {
         <ReplayPanel
           state={replay.state}
           loading={replay.loading}
+          error={replay.error}
           onPlay={replay.play}
           onPause={replay.pause}
           onStop={replay.stop}
