@@ -284,7 +284,19 @@ A wrong choice announces itself within one pipe: the per-pipe check below sees a
 
 **Per-pipe check.** Depth readings (found by CSV `Rolle` = `depth`, not by name) are observed for one purpose: between two Rohrwechsel, about one `Rohrlänge` should have been drilled. A deviation beyond the tolerance is reported in German on the recording bar and logged — and a change with *no* drilling in between names the likely cause, a pressure threshold sitting inside the clamp's normal range. That is how a mis-set threshold announces itself instead of silently clipping drilling data. The first change of a session is not checked: there is no baseline, and recording may have started with pipes already in the ground.
 
-The phase and pipe count are persisted to `recording_sessions.drill_state` on every phase change, so a restart mid-element does not record the rest of the pipe change as drilling data. Note that this only takes effect once something re-attaches the session: `ingestion.startRecording()` restores the state, but nothing calls it on boot today, so a PM2 restart still ends recording.
+The phase and pipe count are persisted to `recording_sessions.drill_state` on every phase change, so a restart mid-element does not record the rest of the pipe change as drilling data. `resumeRecording()` picks it back up on boot — see below.
+
+### Surviving a restart
+
+PM2 restarts the kiosk mid-element — on a crash, on a power cut, and when an update is installed. The session row stays open across that, so **the recording has to be re-attached on boot or it silently stops**: `insertBuffer()` and the WebSocket broadcast both run *before* the recording check in `onReading`, which means the bar keeps reading "Aufzeichnung läuft" and the live tiles keep ticking while `insertSessionReading` is never called. The worker sees a healthy screen and uploads an element missing everything after the restart.
+
+`resumeRecording()` runs at boot, before the data source starts emitting, and re-attaches the open session:
+
+- The sensor map is rebuilt from `recording_sessions.sensor_map`, **not** re-fetched from the Implenia API — the API is exactly what is unavailable on a site that has lost connectivity, and a resume that depended on it would fail where it is needed most.
+- `startRecording()` restores the Rohrwechsel phase and pipe count from `drill_state`, so clipping survives the restart too.
+- A damaged sensor map does not abort the resume. Readings are kept without a sensor id — not uploadable, but exportable and fixable — because recording nothing at all for the rest of the element is the worse outcome.
+
+Only the seconds the process is actually down are lost, and that gap is unavoidable. `POST /api/update` therefore **refuses while a recording is active** (409, naming the element), and the update banner says the install waits until the recording is finished rather than offering a button that punches a hole into the running element.
 
 **Off until configured.** Handling is enabled only once a Klemmbacke topic is set; a rig without that signal behaves exactly as before — nothing clipped, everything uploaded. The topic is matched on its full name or its last segment, so `Bohrgeraet/Klemmdruck` (MQTT) and `device/1/Klemmdruck` (serial) share one setting. The screen prefills `Bohrgeraet/Klemmdruck`, which is what the G08 capture shows — a starting point, not a convention: topic names differ per box and have to be wired on site.
 
@@ -396,12 +408,13 @@ chrome.exe --kiosk --app=http://localhost:3000 --disable-infobars --noerrdialogs
 ## How Updates Work
 
 1. The server checks GitHub Releases hourly (configurable via `UPDATE_CHECK_INTERVAL_MS`)
-2. If a newer semver tag is found, it downloads the `.tar.gz` asset
-3. SHA256 checksum is verified against `checksum.sha256`
-4. The archive is extracted to a staging directory
-5. A health check runs against the new version
-6. PM2 graceful reload is triggered
-7. The UI service worker detects the new build
+2. If a newer semver tag is found, it is recorded as pending and the UI shows a banner. **The poll only detects — it never installs.** Applying is a deliberate tap on "Installieren & neustarten" (`POST /api/update`), so a restart never arrives unannounced in the middle of a shift
+3. The route refuses while an element is being recorded, because applying restarts the process
+4. On apply, the `.tar.gz` asset is downloaded and its SHA256 verified against `checksum.sha256`
+5. The archive is extracted to a staging directory
+6. A health check runs against the new version
+7. PM2 graceful reload is triggered; an open recording session is re-attached on boot
+8. The UI service worker detects the new build
 
 **USB updates**: the server also scans `USB_UPDATE_PATHS` for `.tar.gz` bundles. Upload manually via the config UI.
 
