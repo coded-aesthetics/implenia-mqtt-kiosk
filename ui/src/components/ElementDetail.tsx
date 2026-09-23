@@ -5,6 +5,7 @@ import type { SensorReading } from '../hooks/useWebSocket';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import type { Schicht } from '@coded-aesthetics/din4023/profile';
 import type { QueuedComment } from '../hooks/useCommentQueue';
+import { formatNumber, isNoValue } from '../utils/format';
 
 export type ViewTab = 'messwerte' | 'vorgabe' | 'kommentare';
 
@@ -20,6 +21,15 @@ interface Props {
   onCommentRetry: (id: string) => void;
 }
 
+/**
+ * Stringify a vorgabe value WITHOUT locale formatting.
+ *
+ * Deliberately not formatNumber(): the strings this builds go into
+ * `allEntries`, which buildSchichten() and extractCoordinates() parse back
+ * with parseFloat/parseInt. German formatting here would turn 1234.5 into
+ * "1.234,50" and parse back as 1.234 — silently wrecking the geology profile.
+ * Format at the point of display instead, never here.
+ */
 function formatValue(v: unknown): string {
   if (v === null || v === undefined) return '–';
   if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '–';
@@ -104,16 +114,14 @@ function buildSchichten(
 /** Parse a raw MQTT payload (plain number or text, not JSON). */
 function parseRawPayload(payload: string): string {
   const trimmed = payload.trim();
-  if (!trimmed || trimmed === 'null' || trimmed === 'NaN' || trimmed === 'Infinity' || trimmed === '-Infinity' || trimmed === '""') {
-    return '–';
-  }
+  // isNoValue covers '', 'NaN', '±Infinity' and 'null'; '""' is an empty JSON
+  // string, which only ever arrives over MQTT.
+  if (isNoValue(trimmed) || trimmed === '""') return '–';
 
-  // Try to parse as number for German formatting
   const num = parseFloat(trimmed);
-  if (Number.isFinite(num)) {
-    return num.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
+  if (Number.isFinite(num)) return formatNumber(num);
 
+  // Not a number: show the text. A string sensor has nothing else to show.
   return trimmed;
 }
 

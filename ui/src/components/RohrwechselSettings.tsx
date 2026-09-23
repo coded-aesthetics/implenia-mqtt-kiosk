@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { formatNumber } from '../utils/format';
 
 /**
  * Rohrverlängerung settings.
@@ -34,13 +35,6 @@ interface ObservedTopic {
 }
 
 const PIPE_PRESETS = [2, 3];
-
-function formatNumber(value: number, digits = 2): string {
-  return value.toLocaleString('de-DE', {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
 
 /** Mirrors the server's isClampTopic: full topic, or last segment. */
 function matchesClampTopic(topic: string, clampTopic: string): boolean {

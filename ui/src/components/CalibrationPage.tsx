@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { formatNumber } from '../utils/format';
 
 /**
  * Per-sensor linear calibration: `wert = rohwert × Faktor + Versatz`.
@@ -41,11 +42,7 @@ function isStale(s: Sensor): boolean {
 }
 
 function formatValue(v: number | null, digits = 2): string {
-  if (v === null) return '—';
-  return v.toLocaleString('de-DE', {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
+  return v === null ? '–' : formatNumber(v, digits);
 }
 
 /** German decimal comma in, JS number out. */

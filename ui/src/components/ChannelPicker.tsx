@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { DeviceFrame } from '../hooks/useWebSocket';
+import { formatNumber } from '../utils/format';
 
 interface Device {
   id: number;
@@ -328,7 +329,7 @@ export function ChannelPicker({ devices, deviceFrames, mappings, onClose, onMapp
                     >
                       <span style={styles.channelIndex}>Kanal {i}</span>
                       <span style={styles.channelValue}>
-                        {value !== undefined ? value.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '–'}
+                        {value !== undefined ? formatNumber(value) : '–'}
                       </span>
                       {isCurrentSensor && (
                         <span style={styles.channelCurrent}>● Zugeordnet</span>

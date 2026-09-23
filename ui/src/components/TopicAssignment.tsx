@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { navigate } from '../hooks/useHashRouter';
+import { formatNumber } from '../utils/format';
 
 /**
  * Bind MQTT topics to sensors — the MQTT counterpart to ChannelPicker, and
@@ -33,10 +34,12 @@ const BOUND_LABEL: Record<SensorRow['boundBy'], string> = {
   none: '',
 };
 
+/** A payload that is not a number is shown as-is — that text is often the
+ *  only thing identifying an opaque topic. */
 function formatValue(raw: string): string {
   const n = Number.parseFloat(raw);
   if (!Number.isFinite(n)) return raw || '–';
-  return n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return formatNumber(n);
 }
 
 function secondsAgo(ts: number): string {
