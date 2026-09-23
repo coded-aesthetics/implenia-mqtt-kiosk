@@ -60,3 +60,33 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+
+/* ── Replay panel: range slider thumb ─────────────────────────── */
+/* Dev-only — the replay timeline needs a visible thumb over its
+   custom track, which inline styles cannot target. */
+.replay-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #b39ddb;
+  border: 2px solid #7c4dff;
+  cursor: pointer;
+  margin-top: 0;
+}
+.replay-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #b39ddb;
+  border: 2px solid #7c4dff;
+  cursor: pointer;
+}
+.replay-slider::-webkit-slider-runnable-track {
+  height: 8px;
+  background: transparent;
+}
+.replay-slider::-moz-range-track {
+  height: 8px;
+  background: transparent;
+}
