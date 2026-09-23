@@ -86,12 +86,15 @@ export function ReplayPanel({
     if (fileInput.trim()) onLoad(fileInput.trim());
   };
 
+  const finished = state.file && !state.playing && state.position >= state.totalMessages && state.totalMessages > 0;
+
   // ── Badge: reflects actual state ───────────────────────────────────
   const badgeInfo = (() => {
     if (error) return { label: 'FEHLER', color: '#f44336' };
     if (loading) return { label: 'LADEN...', color: '#e65100' };
     if (state.fastForwarding) return { label: 'SEEK', color: '#e65100' };
     if (state.playing) return { label: 'PLAY', color: '#4caf50' };
+    if (finished) return { label: 'FERTIG', color: '#e6a700' };
     if (state.file && state.position > 0) return { label: 'PAUSE', color: '#7c4dff' };
     if (state.file) return { label: 'BEREIT', color: '#7c4dff' };
     return { label: 'REPLAY', color: '#555' };

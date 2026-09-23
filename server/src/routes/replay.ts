@@ -185,10 +185,11 @@ export function registerReplayRoutes(app: FastifyInstance): void {
     });
   });
 
-  /** Stop playback and end the session. */
+  /** Stop playback, end the session, and reset to the beginning. */
   app.post('/api/replay/stop', async (_request, reply) => {
     replaySource.stop();
     endReplaySession();
+    replaySource.reset();
     broadcastMessage({
       type: 'recording-state', active: false, sessionId: null, elementName: null,
     });
