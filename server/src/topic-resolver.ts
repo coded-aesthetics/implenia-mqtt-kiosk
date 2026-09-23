@@ -44,7 +44,7 @@ export interface ResolverContext {
 }
 
 /** Build the lookup order `resolveSensorKey` expects from CSV rows. */
-export function sensorNameIndex(rows: { name: string }[]): string[] {
+export function sensorNameIndex(rows: readonly { name: string }[]): string[] {
   const names = new Set<string>();
   for (const row of rows) {
     const name = row.name.trim().toLowerCase();
