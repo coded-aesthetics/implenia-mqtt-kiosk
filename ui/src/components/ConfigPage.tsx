@@ -6,7 +6,10 @@ import { navigate } from '../hooks/useHashRouter';
 import { MqttSettings } from './MqttSettings';
 import { RohrwechselSettings } from './RohrwechselSettings';
 import { DeviceConfig } from './DeviceConfig';
-import { pendingCommentCount, clearCommentQueue } from '../hooks/useCommentQueue';
+import { CardOverlay, type OverlayState } from './CardOverlay';
+import { ResetCard } from './ResetCard';
+import { VoiceCard } from './VoiceCard';
+import { configStyles as styles } from './configStyles';
 
 interface Props {
   config: ConfigState;
@@ -27,40 +30,7 @@ function resolveUrlPreset(url: string | null | undefined): string {
   return 'custom';
 }
 
-interface OverlayState {
-  type: 'success' | 'error';
-  title: string;
-  detail?: string;
-}
 
-function CardOverlay({ overlay, onDismiss }: { overlay: OverlayState; onDismiss: () => void }) {
-  const dismissRef = useRef(onDismiss);
-  dismissRef.current = onDismiss;
-
-  useEffect(() => {
-    if (overlay.type === 'success') {
-      const id = setTimeout(() => dismissRef.current(), 2500);
-      return () => clearTimeout(id);
-    }
-  }, [overlay.type]);
-
-  const isError = overlay.type === 'error';
-
-  return (
-    <div
-      style={{
-        ...overlayStyles.backdrop,
-        backgroundColor: isError ? 'rgba(183, 28, 28, 0.95)' : 'rgba(27, 94, 32, 0.95)',
-      }}
-      onClick={(e) => { e.stopPropagation(); onDismiss(); }}
-    >
-      <div style={overlayStyles.icon}>{isError ? '✕' : '✓'}</div>
-      <div style={overlayStyles.title}>{overlay.title}</div>
-      {overlay.detail && <div style={overlayStyles.detail}>{overlay.detail}</div>}
-      {isError && <div style={overlayStyles.dismissHint}>Antippen zum Schließen</div>}
-    </div>
-  );
-}
 
 export function ConfigPage({ config, devMode, deviceFrames }: Props) {
   // Which data-source section to show. Mirrors the wizard's transport choice.
@@ -80,73 +50,6 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
 
   useEffect(() => { loadTransport(); }, [loadTransport]);
 
-  // ── Reset ──
-  const [resetState, setResetState] = useState<{
-    allowed: boolean; unsafe: { sessions: number; readings: number; clipped: number };
-  } | null>(null);
-  const [resetPending, setResetPending] = useState(false);
-  const [resetError, setResetError] = useState<string | null>(null);
-  // Queued voice comments never reach the server, so the server-side guard
-  // cannot count them. Checked here, alongside it.
-  const [pendingComments, setPendingComments] = useState(0);
-
-  const loadResetState = useCallback(() => {
-    setPendingComments(pendingCommentCount());
-    fetch('/api/config/reset')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d) setResetState(d); })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => { loadResetState(); }, [loadResetState]);
-
-  // The queue lives in another component's state, so nothing tells this card
-  // when the last comment goes out. Without this the block would stay up until
-  // a reload — a dead end in a screen whose whole job is getting unstuck.
-  useEffect(() => {
-    const id = setInterval(() => setPendingComments(pendingCommentCount()), 3000);
-    return () => clearInterval(id);
-  }, []);
-
-  async function doReset() {
-    setResetError(null);
-    // Re-check right before the destructive call: a comment may have been
-    // dictated since the page loaded.
-    const queued = pendingCommentCount();
-    if (queued > 0) {
-      setPendingComments(queued);
-      setResetPending(false);
-      return;
-    }
-    try {
-      const res = await fetch('/api/config/reset', { method: 'POST' });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setResetError(body.error ?? 'Zurücksetzen fehlgeschlagen.');
-        setResetPending(false);
-        loadResetState();
-        return;
-      }
-      // Voice comments live in localStorage, so the server reset cannot clear
-      // them — they would otherwise survive into the new configuration. The
-      // guard above has already established that none are unsent.
-      clearCommentQueue();
-      window.location.hash = '#/setup';
-      window.location.reload();
-    } catch {
-      setResetError('Die Anwendung ist nicht erreichbar. Bitte erneut versuchen.');
-      setResetPending(false);
-    }
-  }
-
-  const [apiKey, setApiKey] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [keyOverlay, setKeyOverlay] = useState<OverlayState | null>(null);
-  const [pendingDeleteKey, setPendingDeleteKey] = useState(false);
-  const [pendingDeleteDeviceId, setPendingDeleteDeviceId] = useState<number | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // API URL section
   const [urlPreset, setUrlPreset] = useState('');
   const [apiUrl, setApiUrl] = useState('');
   const [urlSaving, setUrlSaving] = useState(false);
@@ -180,33 +83,12 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
     }
   }
 
-  // Voice feature toggle
-  const [voiceEnabled, setVoiceEnabled] = useState(
-    () => localStorage.getItem('voiceEnabled') === 'true', // opt-in: off until explicitly enabled
-  );
-
-  function toggleVoice() {
-    const next = !voiceEnabled;
-    setVoiceEnabled(next);
-    localStorage.setItem('voiceEnabled', String(next));
-    window.dispatchEvent(new Event('voiceEnabledChanged'));
-    // Auto-disable wake word if voice is disabled
-    if (!next && magicWord) {
-      toggleMagicWord();
-    }
-  }
-
-  // Magic word setting
-  const [magicWord, setMagicWord] = useState(
-    () => localStorage.getItem('magicWordEnabled') === 'true',
-  );
-
-  function toggleMagicWord() {
-    const next = !magicWord;
-    setMagicWord(next);
-    localStorage.setItem('magicWordEnabled', String(next));
-    window.dispatchEvent(new Event('magicWordChanged'));
-  }
+  const [apiKey, setApiKey] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [keyOverlay, setKeyOverlay] = useState<OverlayState | null>(null);
+  const [pendingDeleteKey, setPendingDeleteKey] = useState(false);
+  const [pendingDeleteDeviceId, setPendingDeleteDeviceId] = useState<number | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   async function handleSave() {
     const key = apiKey.trim();
@@ -470,60 +352,7 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
         </div>
       </div>
 
-      {/* Reset — last, because it is the destructive one */}
-      <div style={styles.cardWrapper}>
-        <div style={styles.card}>
-          <div style={styles.statusRow}>
-            <span style={styles.label}>Software zurücksetzen</span>
-          </div>
-
-          <div style={styles.envHint}>
-            Löscht Verfahren, Datenquelle, Geräte, Kanal- und Topic-Zuordnungen
-            sowie alle aufgezeichneten Daten. API-Schlüssel und Server-Adresse
-            bleiben erhalten. Danach startet die Einrichtung neu.
-          </div>
-
-          {resetState && !resetState.allowed && (
-            <div style={styles.blockedNotice}>
-              Zurücksetzen ist gesperrt: {resetState.unsafe.readings} Messwerte aus{' '}
-              {resetState.unsafe.sessions} Aufzeichnung(en) sind weder hochgeladen
-              noch exportiert. Bitte zuerst hochladen oder als Datei exportieren.
-            </div>
-          )}
-
-          {/* Clipped readings do not block — they can never be uploaded or
-              exported, so they would block forever — but the reset deletes
-              them, and saying nothing here is how a mis-clipped shift is lost. */}
-          {resetState && resetState.allowed && resetState.unsafe.clipped > 0 && (
-            <div style={styles.blockedNotice}>
-              Achtung: {resetState.unsafe.clipped} Messwerte wurden als Rohrwechsel
-              ausgeblendet und werden mit zurückgesetzt. Falls der Schwellwert der
-              Klemmbacke falsch eingestellt war, lassen sie sich vorher in der
-              Aufzeichnungs-Leiste freigeben und hochladen.
-            </div>
-          )}
-
-          {pendingComments > 0 && (
-            <div style={styles.blockedNotice}>
-              Zurücksetzen ist gesperrt: {pendingComments} Kommentar(e) sind noch
-              nicht gesendet und würden gelöscht. Bitte die Kommentare oben in
-              der Leiste senden oder löschen.
-            </div>
-          )}
-
-          {resetError && <div style={styles.blockedNotice}>{resetError}</div>}
-
-          {resetState?.allowed && pendingComments === 0 && (
-            <button
-              onClick={() => { if (resetPending) doReset(); else setResetPending(true); }}
-              onBlur={() => setResetPending(false)}
-              style={resetPending ? styles.dangerButtonConfirm : styles.dangerButton}
-            >
-              {resetPending ? 'Wirklich zurücksetzen?' : 'Zurücksetzen'}
-            </button>
-          )}
-        </div>
-      </div>
+      <ResetCard />
 
       {/* API URL card */}
       <div style={styles.cardWrapper}>
@@ -602,57 +431,7 @@ export function ConfigPage({ config, devMode, deviceFrames }: Props) {
         {urlOverlay && <CardOverlay overlay={urlOverlay} onDismiss={() => setUrlOverlay(null)} />}
       </div>
 
-      {/* Voice feature card */}
-      <div style={styles.card}>
-        <div style={styles.statusRow}>
-          <span style={styles.label}>Sprachsteuerung (experimentell)</span>
-        </div>
-        <button
-          onClick={toggleVoice}
-          style={{
-            ...styles.toggleButton,
-            backgroundColor: voiceEnabled ? '#1b5e20' : '#2a2a4a',
-          }}
-        >
-          <span style={{
-            ...styles.toggleKnob,
-            transform: voiceEnabled ? 'translateX(32px)' : 'translateX(0)',
-          }} />
-        </button>
-        <div style={styles.toggleLabel}>
-          {voiceEnabled ? 'Aktiviert' : 'Deaktiviert'}
-        </div>
-        <div style={styles.envHint}>
-          Mikrofon-Taste für Push-to-Talk oder Aktivwort-Modus.
-        </div>
-
-        {/* Wake word sub-setting (only shown when voice is enabled) */}
-        {voiceEnabled && (
-          <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #2a3f5f' }}>
-            <div style={styles.statusRow}>
-              <span style={{ ...styles.label, fontSize: '1rem' }}>Aktivwort-Modus</span>
-            </div>
-            <button
-              onClick={toggleMagicWord}
-              style={{
-                ...styles.toggleButton,
-                backgroundColor: magicWord ? '#1b5e20' : '#2a2a4a',
-              }}
-            >
-              <span style={{
-                ...styles.toggleKnob,
-                transform: magicWord ? 'translateX(32px)' : 'translateX(0)',
-              }} />
-            </button>
-            <div style={styles.toggleLabel}>
-              {magicWord ? 'Aktiviert' : 'Deaktiviert'}
-            </div>
-            <div style={styles.envHint}>
-              Sagen Sie &quot;Computer&quot; gefolgt von einem Befehl. Das Mikrofon bleibt dauerhaft aktiv.
-            </div>
-          </div>
-        )}
-      </div>
+      <VoiceCard />
     </div>
   );
 }
@@ -667,230 +446,4 @@ function deriveKeyErrorDetail(apiError: string | undefined): string {
   return apiError ?? 'Verbindungstest fehlgeschlagen';
 }
 
-const overlayStyles: Record<string, React.CSSProperties> = {
-  backdrop: {
-    position: 'absolute',
-    inset: 0,
-    borderRadius: 'var(--radius-lg)',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 'var(--space-sm)',
-    padding: 'var(--space-lg)',
-    zIndex: 1,
-  },
-  icon: {
-    fontSize: '4rem',
-    fontWeight: 700,
-    color: '#fff',
-    lineHeight: 1,
-  },
-  title: {
-    fontSize: 'var(--font-md)',
-    fontWeight: 700,
-    color: '#fff',
-    textAlign: 'center',
-  },
-  detail: {
-    fontSize: 'var(--font-base)',
-    color: 'rgba(255, 255, 255, 0.9)',
-    textAlign: 'center',
-    lineHeight: 1.4,
-    maxWidth: '90%',
-  },
-  dismissHint: {
-    fontSize: 'var(--font-sm)',
-    color: 'rgba(255, 255, 255, 0.6)',
-    marginTop: 'var(--space-sm)',
-  },
-};
 
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(440px, 1fr))',
-    alignItems: 'start',
-    gap: 'var(--space-lg)',
-    padding: 'var(--space-xl)',
-    boxSizing: 'border-box' as const,
-  },
-  cardWrapper: {
-    position: 'relative',
-  },
-  card: {
-    backgroundColor: 'var(--surface-2)',
-    borderRadius: 'var(--radius-lg)',
-    padding: 'var(--space-lg)',
-  },
-  statusRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 'var(--space-lg)',
-  },
-  label: {
-    fontSize: 'var(--font-base)',
-    color: 'var(--text-secondary)',
-    fontWeight: 600,
-  },
-  statusBadge: {
-    fontSize: 'var(--font-sm)',
-    color: 'var(--text-primary)',
-    padding: '4px 12px',
-    borderRadius: 'var(--radius-lg)',
-    fontWeight: 600,
-  },
-  input: {
-    width: '100%',
-    padding: 'var(--space-md)',
-    fontSize: 'var(--font-base)',
-    backgroundColor: 'var(--surface-0)',
-    border: '2px solid var(--border)',
-    borderRadius: 'var(--radius-md)',
-    color: 'var(--text-primary)',
-    outline: 'none',
-    boxSizing: 'border-box' as const,
-    minHeight: '56px',
-  },
-  buttonRow: {
-    display: 'flex',
-    gap: 'var(--space-md)',
-    marginTop: 'var(--space-md)',
-    flexWrap: 'wrap' as const,
-  },
-  button: {
-    padding: '0.75rem 1.5rem',
-    fontSize: 'var(--font-base)',
-    fontWeight: 600,
-    border: 'none',
-    borderRadius: 'var(--radius-md)',
-    cursor: 'pointer',
-    minHeight: '56px',
-    minWidth: 'var(--tap-min)',
-  },
-  saveButton: {
-    backgroundColor: 'var(--color-accent)',
-    color: 'var(--text-primary)',
-    flex: 1,
-  },
-  deleteButton: {
-    backgroundColor: 'var(--surface-3)',
-    color: 'var(--color-danger)',
-  },
-  deleteButtonConfirm: {
-    backgroundColor: 'var(--color-danger)',
-    color: '#fff',
-  },
-  presetRow: {
-    display: 'flex',
-    gap: '2px',
-    borderRadius: 'var(--radius-md)',
-    overflow: 'hidden',
-    marginBottom: 'var(--space-md)',
-  },
-  presetButton: {
-    flex: 1,
-    padding: 'var(--space-md)',
-    fontSize: 'var(--font-base)',
-    fontWeight: 600,
-    backgroundColor: 'var(--surface-0)',
-    color: 'var(--text-muted)',
-    border: 'none',
-    cursor: 'pointer',
-    minHeight: 'var(--tap-sm)',
-    fontFamily: 'inherit',
-  },
-  presetButtonActive: {
-    flex: 1,
-    padding: 'var(--space-md)',
-    fontSize: 'var(--font-base)',
-    fontWeight: 600,
-    backgroundColor: 'var(--color-accent)',
-    color: 'var(--text-primary)',
-    border: 'none',
-    cursor: 'pointer',
-    minHeight: 'var(--tap-sm)',
-    fontFamily: 'inherit',
-  },
-  settledValue: {
-    fontSize: 'var(--font-md)',
-    fontWeight: 700,
-    color: 'var(--text-primary)',
-    padding: 'var(--space-sm) 0 var(--space-md)',
-  },
-  blockedNotice: {
-    fontSize: 'var(--font-base)',
-    lineHeight: 1.5,
-    color: 'var(--text-primary)',
-    padding: 'var(--space-md)',
-    marginBottom: 'var(--space-md)',
-    backgroundColor: 'var(--surface-0)',
-    borderRadius: 'var(--radius-md)',
-    borderLeft: '3px solid var(--color-warning)',
-  },
-  // House pattern for destructive actions: default state is muted with danger
-  // text, the pending state is solid danger. No confirmation dialog.
-  dangerButton: {
-    minHeight: 'var(--tap-min)',
-    width: '100%',
-    padding: '0 var(--space-lg)',
-    fontSize: 'var(--font-md)',
-    fontWeight: 700,
-    fontFamily: 'inherit',
-    color: 'var(--color-danger)',
-    backgroundColor: 'var(--surface-3)',
-    border: '2px solid var(--color-danger)',
-    borderRadius: 'var(--radius-md)',
-    cursor: 'pointer',
-  },
-  dangerButtonConfirm: {
-    minHeight: 'var(--tap-min)',
-    width: '100%',
-    padding: '0 var(--space-lg)',
-    fontSize: 'var(--font-md)',
-    fontWeight: 700,
-    fontFamily: 'inherit',
-    color: '#ffffff',
-    backgroundColor: 'var(--color-danger)',
-    border: '2px solid var(--color-danger)',
-    borderRadius: 'var(--radius-md)',
-    cursor: 'pointer',
-  },
-  envHint: {
-    fontSize: 'var(--font-sm)',
-    color: 'var(--text-muted)',
-    lineHeight: 1.5,
-    marginBottom: 'var(--space-md)',
-    padding: '0.75rem var(--space-md)',
-    backgroundColor: 'var(--surface-0)',
-    borderRadius: 'var(--radius-md)',
-    borderLeft: '3px solid var(--color-accent)',
-  },
-  toggleButton: {
-    position: 'relative' as const,
-    width: '72px',
-    height: '40px',
-    borderRadius: '20px',
-    border: 'none',
-    cursor: 'pointer',
-    transition: 'background-color 0.2s ease',
-    padding: 0,
-    minHeight: '40px',
-  },
-  toggleKnob: {
-    display: 'block',
-    width: '32px',
-    height: '32px',
-    borderRadius: '50%',
-    backgroundColor: '#ffffff',
-    transition: 'transform 0.2s ease',
-    margin: '4px',
-  },
-  toggleLabel: {
-    fontSize: '1rem',
-    color: '#cccccc',
-    marginTop: '0.5rem',
-    marginBottom: '0.75rem',
-  },
-};
