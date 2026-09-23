@@ -12,6 +12,7 @@ import {
   getSessionById,
   getSessionUploadGroups,
   getSessionReadingCount,
+  getSessionStats,
   insertSessionReading,
   markSessionReadingsUploaded,
   markSessionReadingsFailed,
@@ -54,6 +55,11 @@ export interface RecordingState {
   rohrwechsel: DrillStatus | null;
   /** What the rig is doing. Null when nothing is being recorded. */
   operatingMode: OperatingMode | null;
+  /**
+   * Readings held back as a Rohrwechsel. The recording bar offers to release
+   * them, so a threshold set wrong does not cost a shift.
+   */
+  clippedCount: number;
 }
 
 export interface UploadProgress {
@@ -241,6 +247,7 @@ export function getRecordingState(): RecordingState {
       readingCount: getSessionReadingCount(active.id),
       rohrwechsel: ingestion.drillStatus,
       operatingMode: ingestion.operatingMode,
+      clippedCount: getSessionStats(active.id).clipped,
     };
   }
 
@@ -257,12 +264,13 @@ export function getRecordingState(): RecordingState {
         readingCount: count,
         rohrwechsel: null,
         operatingMode: null,
+        clippedCount: getSessionStats(recent.id).clipped,
       };
     }
   }
 
   return {
     active: false, sessionId: null, elementName: null, startedAt: null,
-    readingCount: 0, rohrwechsel: null, operatingMode: null,
+    readingCount: 0, rohrwechsel: null, operatingMode: null, clippedCount: 0,
   };
 }

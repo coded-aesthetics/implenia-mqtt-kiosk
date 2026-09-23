@@ -43,6 +43,17 @@ export type TareResult =
   | { ok: true; offset: number }
   | { ok: false; error: string };
 
+/**
+ * How old the reading being tared against may be.
+ *
+ * Taring cancels *what the sensor is reading now*, so the value has to be now.
+ * The broker dropping out does not empty the observation buffer — the last
+ * value simply stops changing — and cancelling a reading from minutes ago
+ * would write that stale number into every measurement the rig records from
+ * then on. Rigs publish several times a second, so a few seconds is generous.
+ */
+export const TARE_MAX_AGE_MS = 10_000;
+
 export type CalibrationValidation =
   | { ok: true; value: Calibration }
   | { ok: false; error: string };
@@ -90,14 +101,31 @@ export function validateCalibration(scale: unknown, offset: unknown): Calibratio
  * `wert = rohwert × scale + offset`, the reading goes to 0 only for
  * `offset = -(rohwert × scale)`. Rounded to six decimals so the field shows
  * `-3,4` rather than the float noise of the same number.
+ *
+ * `ageMs` is how long ago that reading arrived. A stale one is refused rather
+ * than used — see TARE_MAX_AGE_MS.
  */
-export function tareOffset(raw: number | null | undefined, scale: number): TareResult {
+export function tareOffset(
+  raw: number | null | undefined,
+  scale: number,
+  ageMs?: number | null,
+): TareResult {
   if (raw === null || raw === undefined || !Number.isFinite(raw)) {
     return {
       ok: false,
       error:
         'Für diesen Sensor kommt gerade kein Messwert an. Bitte prüfen, ob dem ' +
         'Sensor ein Topic zugeordnet ist und das Gerät sendet, dann erneut nullen.',
+    };
+  }
+  if (ageMs !== undefined && ageMs !== null && ageMs > TARE_MAX_AGE_MS) {
+    const seconds = Math.round(ageMs / 1000);
+    return {
+      ok: false,
+      error:
+        `Der letzte Messwert für diesen Sensor ist ${seconds} Sekunden alt — ` +
+        'die Verbindung zum Gerät ist vermutlich unterbrochen. Auf einen aktuellen ' +
+        'Wert warten und dann erneut nullen.',
     };
   }
   if (!Number.isFinite(scale) || scale === 0) {

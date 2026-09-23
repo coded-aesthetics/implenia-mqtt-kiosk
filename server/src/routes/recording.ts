@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { beginRecording, endRecording, uploadSession, getRecordingState } from '../recording.js';
 import {
   getSessions, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
+  unclipSessionReadings,
 } from '../db.js';
 import {
   buildSessionExport,
@@ -159,6 +160,29 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       }
       const limit = Math.min(Math.max(Number(request.query.limit) || 500, 1), 5000);
       return reply.send({ sessionId, readings: getSessionReadingsDetailed(sessionId, limit) });
+    },
+  );
+
+  /**
+   * Put the readings this session held back as a Rohrwechsel back in the
+   * upload queue.
+   *
+   * The way out of a wrong Klemmbacke threshold. Clipped readings are in no
+   * upload and in no exported file, and a reset deletes them — so without
+   * this, a threshold typed one digit off costs a shift of measurements that
+   * are sitting right there in the database.
+   */
+  app.post<{ Params: { id: string } }>(
+    '/api/recording/sessions/:id/unclip',
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) {
+        return reply.status(400).send({ error: 'Ungültige Aufzeichnungs-ID.' });
+      }
+      const released = unclipSessionReadings(sessionId);
+      log.info('Session %d: %d clipped readings released for upload', sessionId, released);
+      broadcastMessage({ type: 'recording-state', ...getRecordingState() });
+      return reply.send({ sessionId, released });
     },
   );
 

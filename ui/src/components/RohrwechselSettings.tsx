@@ -19,7 +19,6 @@ interface Config {
   clampTopic: string | null;
   enabled: boolean;
   depthMode: DepthMode;
-  depthScale: number;
   pipeLength: number;
   closeThreshold: number;
   openThreshold: number;
@@ -56,7 +55,6 @@ export function RohrwechselSettings() {
   const [enabled, setEnabled] = useState(false);
   const [clampTopic, setClampTopic] = useState('');
   const [depthMode, setDepthMode] = useState<DepthMode>('absolut');
-  const [depthScale, setDepthScale] = useState('1');
   const [pipeLength, setPipeLength] = useState('2');
   const [closeThreshold, setCloseThreshold] = useState('100');
   const [openThreshold, setOpenThreshold] = useState('50');
@@ -74,7 +72,6 @@ export function RohrwechselSettings() {
         setEnabled(d.enabled);
         setClampTopic(d.clampTopic ?? d.defaultClampTopic);
         setDepthMode(d.depthMode ?? 'absolut');
-        setDepthScale(String(d.depthScale ?? 1));
         setPipeLength(String(d.pipeLength));
         setCloseThreshold(String(d.closeThreshold));
         setOpenThreshold(String(d.openThreshold));
@@ -121,7 +118,6 @@ export function RohrwechselSettings() {
         body: JSON.stringify({
           clampTopic: nextEnabled ? clampTopic : null,
           depthMode,
-          depthScale: Number(depthScale.replace(',', '.')),
           pipeLength: Number(pipeLength.replace(',', '.')),
           closeThreshold: Number(closeThreshold.replace(',', '.')),
           openThreshold: Number(openThreshold.replace(',', '.')),
@@ -190,7 +186,7 @@ export function RohrwechselSettings() {
               <>Kein Wert empfangen. Bitte Topic prüfen — die Maschine muss dabei laufen.</>
             ) : (
               <>
-                Aktuell: <strong>{formatNumber(live)} bar</strong>
+                Aktuell: <strong>{formatNumber(live)}</strong>
                 {clampState === 'zu' && ' — Klemmbacke zu (Rohrwechsel)'}
                 {clampState === 'offen' && ' — Klemmbacke offen (Bohren)'}
                 {clampState === 'dazwischen' && ' — zwischen den Schwellen, unverändert'}
@@ -226,23 +222,13 @@ export function RohrwechselSettings() {
           </div>
 
           {depthMode === 'inkrementell' && (
-            <>
-              <label style={styles.fieldLabel}>
-                Skalierung
-                <input
-                  style={styles.input}
-                  value={depthScale}
-                  inputMode="decimal"
-                  onChange={(e) => edited(setDepthScale)(e.target.value)}
-                />
-              </label>
-              <div style={styles.fieldHint}>
-                Wie viel Bohrloch ein Meter Messwert bedeutet. Der Messgeber sitzt am
-                Vorschub, nicht im Loch — bei 1 werden beide gleichgesetzt. Wenn nach
-                einem Rohrwechsel eine falsche Strecke gemeldet wird, steht der passende
-                Wert in der Meldung.
-              </div>
-            </>
+            <div style={styles.fieldHint}>
+              Der Messgeber sitzt am Vorschub, nicht im Loch — ein Meter Messwert ist
+              deshalb selten ein Meter Bohrloch. Wenn nach einem Rohrwechsel eine
+              falsche Strecke gemeldet wird, steht der passende Faktor in der Meldung;
+              eingetragen wird er unter Einstellungen → Kalibrierung beim Sensor der
+              Bohrtiefe.
+            </div>
           )}
 
           <label style={styles.fieldLabel}>
@@ -275,7 +261,7 @@ export function RohrwechselSettings() {
           </div>
 
           <label style={styles.fieldLabel}>
-            Klemmbacke zu ab (bar)
+            Klemmbacke zu ab
             <input
               style={styles.input}
               value={closeThreshold}
@@ -285,7 +271,7 @@ export function RohrwechselSettings() {
           </label>
 
           <label style={styles.fieldLabel}>
-            Klemmbacke offen unter (bar)
+            Klemmbacke offen unter
             <input
               style={styles.input}
               value={openThreshold}
@@ -295,8 +281,14 @@ export function RohrwechselSettings() {
           </label>
           <div style={styles.fieldHint}>
             Zwei getrennte Schwellen, damit die Erkennung bei Messrauschen nicht
-            hin- und herspringt. Üblich sind etwa 180 bar bei geschlossener und
-            nahezu 0 bar bei offener Klemmbacke.
+            hin- und herspringt. Die Einheit ist die des Geräts — manche Boxen senden
+            bar, andere vierstellige Rohwerte. Deshalb: den Wert oben ablesen, während
+            die Klemmbacke einmal schließt und wieder öffnet, und die Schwellen
+            dazwischen legen.
+          </div>
+          <div style={styles.fieldHint}>
+            Solange die Klemmbacke noch nie unter der Schwelle für „offen" war, wird
+            nichts ausgeblendet — lieber alles aufzeichnen als eine ganze Schicht.
           </div>
 
           <label style={styles.fieldLabel}>

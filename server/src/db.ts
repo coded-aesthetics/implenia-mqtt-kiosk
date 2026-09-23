@@ -26,9 +26,14 @@ export interface SessionStats {
 /**
  * Upload status of a reading recorded while the Klemmbacke was closed.
  *
- * A terminal state, like 'uploaded': the upload query only picks up 'pending',
- * so these never reach the Implenia API. The rows stay in the database — the
- * measurements are not lost, they are just not drilling data.
+ * Kept out of every upload and every export: the upload query only picks up
+ * 'pending', so these never reach the Implenia API. The rows stay in the
+ * database — the measurements are not lost, they are just not drilling data.
+ *
+ * Not terminal, though. A threshold set slightly wrong clips readings that
+ * were drilling data after all, and a worker who cannot undo that has lost a
+ * shift they can neither upload nor export. `unclipSessionReadings` is the way
+ * back, and the recording bar offers it whenever a session has clipped rows.
  */
 export const CLIPPED_STATUS = 'clipped';
 
@@ -587,6 +592,26 @@ export function resetFailedReadings(sessionId: number): void {
     .run(sessionId);
 }
 
+/**
+ * Put every clipped reading of a session back in the queue, and return how
+ * many were freed.
+ *
+ * The escape hatch for a wrong Klemmbacke threshold. Clipping is a judgement
+ * the kiosk made about which readings are drilling data, and when it got that
+ * judgement wrong the readings are otherwise unreachable: not uploaded, not in
+ * the exported file, and deleted by a reset. The phase stays on the row, so
+ * what was released is still visible afterwards.
+ */
+export function unclipSessionReadings(sessionId: number): number {
+  const result = db
+    .prepare(
+      `UPDATE session_readings SET upload_status = 'pending'
+       WHERE session_id = ? AND upload_status = ?`
+    )
+    .run(sessionId, CLIPPED_STATUS);
+  return result.changes;
+}
+
 export function getSessionStats(sessionId: number): SessionStats {
   const rows = sessionStatsStmt.all(sessionId) as { upload_status: string; count: number }[];
   const stats: SessionStats = { total: 0, uploaded: 0, failed: 0, pending: 0, clipped: 0 };
@@ -775,22 +800,39 @@ const unsafeSummaryStmt = db.prepare(`
   WHERE s.exported_at IS NULL AND r.upload_status NOT IN ('uploaded', 'clipped')
 `);
 
+const clippedSummaryStmt = db.prepare(`
+  SELECT COUNT(r.id) AS clipped
+  FROM session_readings r
+  WHERE r.upload_status = 'clipped'
+`);
+
 export interface UnsafeDataSummary {
   sessions: number;
   readings: number;
+  /**
+   * Readings clipped as a Rohrwechsel. They do not block a reset, but the
+   * reset would delete them, so the screen has to say they are there.
+   */
+  clipped: number;
 }
 
 /**
  * Recorded data that exists only on this kiosk: not uploaded, and not
- * exported to a file either. The reset guard refuses while this is non-zero.
+ * exported to a file either. The reset guard refuses while `readings` is
+ * non-zero.
  *
  * Exported counts as safe deliberately — otherwise a kiosk with no
  * connectivity could never be reset, which is the dead end the guard exists
- * to prevent. Clipped readings count as safe for the same reason: they are
- * never uploaded and never exported, so they would block a reset forever.
+ * to prevent. Clipped readings do not block either, for the same reason: they
+ * are never uploaded and never exported, so they would block a reset forever
+ * on any rig that changes pipes. They are reported separately instead, because
+ * a reset destroys them and telling a worker nothing is at risk while a
+ * mis-clipped shift sits in the database is how that shift gets lost.
  */
 export function getUnsafeDataSummary(): UnsafeDataSummary {
-  return unsafeSummaryStmt.get() as UnsafeDataSummary;
+  const unsafe = unsafeSummaryStmt.get() as { sessions: number; readings: number };
+  const { clipped } = clippedSummaryStmt.get() as { clipped: number };
+  return { ...unsafe, clipped };
 }
 
 /** meta keys that survive a reset: the site's credentials, not this machine's setup. */

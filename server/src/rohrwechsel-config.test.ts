@@ -78,8 +78,11 @@ describe('Rohrverlängerung settings', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     // German, and it says why — a technician on site has to act on this.
-    expect(result.error).toContain('Öffnungsdruck');
+    // No unit is claimed: the G08 box publishes the Klemmdruck as a raw
+    // four-digit number, so calling it bar would be a guess.
+    expect(result.error).toContain('offen');
     expect(result.error).toContain('kleiner');
+    expect(result.error).not.toContain('bar');
   });
 
   it('refuses a tolerance that would hide a missed Rohrwechsel', () => {
@@ -102,6 +105,23 @@ describe('Rohrverlängerung settings', () => {
     expect(blank.ok).toBe(false);
     expect(cfg.validateRohrwechsel({ ...valid, clampTopic: null }).ok).toBe(true);
   });
+
+  it('can always be switched off, whatever state the form is in', () => {
+    // The screen sends every field along with the off switch. A technician who
+    // cleared the Toleranz while experimenting, saw the feature misbehave and
+    // tapped „Aus" must not be told to fix the Toleranz first — that is the
+    // one action that makes it stop.
+    const off = cfg.validateRohrwechsel({ ...valid, clampTopic: null, tolerance: 0 });
+    expect(off.ok).toBe(true);
+    if (!off.ok) return;
+    expect(off.value.clampTopic).toBeNull();
+    // ...and the nonsense is not persisted either: what was stored stays.
+    expect(off.value.tolerance).toBe(cfg.getRohrwechselConfig().tolerance);
+  });
+
+  it('still refuses nonsense while the feature is being kept on', () => {
+    expect(cfg.validateRohrwechsel({ ...valid, tolerance: 0 }).ok).toBe(false);
+  });
 });
 
 describe('clamp topic matching', () => {
@@ -121,5 +141,12 @@ describe('clamp topic matching', () => {
 
   it('matches nothing when handling is off', () => {
     expect(cfg.isClampTopic('machine/Klemmbacke', null)).toBe(false);
+  });
+
+  it('prefills a topic the one captured rig actually publishes', () => {
+    // assets/reference/README.md: this box sends Bohrgeraet/Klemmdruck. A
+    // prefill nothing matches arms a feature that then never fires, and the
+    // screen reports it as on.
+    expect(cfg.isClampTopic('Bohrgeraet/Klemmdruck', cfg.DEFAULT_CLAMP_TOPIC)).toBe(true);
   });
 });

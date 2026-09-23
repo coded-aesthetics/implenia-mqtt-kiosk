@@ -170,6 +170,7 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
     const sessionId = db.createSession('A-37', '{}');
     ingestion.startRecording(sessionId, sensorMap());
 
+    publish(CLAMP_TOPIC, '2');     // open: this is what arms the clipping
     publish(DEPTH_TOPIC, '2.0');
     publish(CLAMP_TOPIC, '180');
 
@@ -201,6 +202,7 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
     const sessionId = db.createSession('A-38', '{}');
     ingestion.startRecording(sessionId, sensorMap());
 
+    publish(CLAMP_TOPIC, '2');
     publish(DEPTH_TOPIC, '2.0');
     publish(CLAMP_TOPIC, '180');
     publish(CLAMP_TOPIC, '');     // must not end the Rohrwechsel
@@ -272,6 +274,7 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
     ingestion.startRecording(sessionId, sensorMap());
     ingestion.setOperatingMode('verpressen');
 
+    publish(CLAMP_TOPIC, '2');
     publish(CLAMP_TOPIC, '180');
     publish(RPM_TOPIC, '40');        // kept: grouting
     ingestion.setOperatingMode('bohren');
@@ -283,6 +286,99 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
       .toEqual(['40:pending', '41:clipped']);
   });
 
+  it('gives clipped readings back when the threshold was wrong', () => {
+    const { ingestion } = ingestionMod;
+    enableRohrwechsel();
+
+    const sessionId = db.createSession('A-43', '{}');
+    ingestion.startRecording(sessionId, sensorMap());
+
+    publish(CLAMP_TOPIC, '2');
+    publish(DEPTH_TOPIC, '2.0');
+    publish(CLAMP_TOPIC, '180');
+    publish(RPM_TOPIC, '40');
+    publish(DEPTH_TOPIC, '2.0');
+    ingestion.stopRecording();
+
+    expect(db.getSessionStats(sessionId).clipped).toBe(3);
+    // Clipped readings are in no upload and in no exported file, and a reset
+    // deletes them — so without a way back, a threshold typed one digit off
+    // costs a shift of measurements sitting right there in the database.
+    expect(db.getAllSessionReadings(sessionId).some((r) => r.topic === RPM_TOPIC)).toBe(false);
+
+    expect(db.unclipSessionReadings(sessionId)).toBe(3);
+
+    const stats = db.getSessionStats(sessionId);
+    expect(stats.clipped).toBe(0);
+    expect(stats.pending).toBe(stats.total);
+    expect(db.getAllSessionReadings(sessionId).some((r) => r.topic === RPM_TOPIC)).toBe(true);
+    expect(db.getSessionUploadGroups(sessionId).map((g) => g.sensorId).sort())
+      .toEqual(['s-depth', 's-rpm']);
+
+    // What was released is still recognisable afterwards — the phase stays on
+    // the row, so a diagnosis is still possible.
+    expect(
+      db.getSessionReadingsDetailed(sessionId).some((r) => r.phase === 'rohrwechsel'),
+    ).toBe(true);
+  });
+
+  it('does not freeze the depth while the rig is grouting', () => {
+    const { ingestion } = ingestionMod;
+    rwConfig.setRohrwechselConfig({
+      clampTopic: CLAMP_TOPIC,
+      depthMode: 'inkrementell',
+      pipeLength: 2,
+      closeThreshold: 100,
+      openThreshold: 50,
+      tolerance: 0.3,
+    });
+
+    const sessionId = db.createSession('A-44', '{}');
+    ingestion.startRecording(sessionId, sensorMap());
+    ingestion.setOperatingMode('verpressen');
+
+    publish(CLAMP_TOPIC, '2');
+    publish(DEPTH_TOPIC, '12.0');
+    publish(CLAMP_TOPIC, '180');    // holding the string, as it does all through Verpressen
+    publish(DEPTH_TOPIC, '10.5');   // string being pulled: the depth really is changing
+    publish(DEPTH_TOPIC, '9.0');
+    publish(CLAMP_TOPIC, '3');
+    publish(DEPTH_TOPIC, '7.5');
+    ingestion.stopRecording();
+
+    // Nothing is clipped during Verpressen, so every one of these is uploaded.
+    // Frozen at the hole bottom they would be a flat 12 m line, and the pipe
+    // count and the offset would have walked up with each clamp cycle.
+    expect(
+      db.getAllSessionReadings(sessionId)
+        .filter((r) => r.topic === DEPTH_TOPIC)
+        .map((r) => r.valueNumeric),
+    ).toEqual([12.0, 10.5, 9.0, 7.5]);
+    expect(db.getSessionStats(sessionId).clipped).toBe(0);
+
+    enableRohrwechsel();
+  });
+
+  it('reads a payload the recording path would accept as a number', () => {
+    const { ingestion } = ingestionMod;
+    enableRohrwechsel();
+
+    const sessionId = db.createSession('A-45', '{}');
+    ingestion.startRecording(sessionId, sensorMap());
+
+    // Some boxes append the unit. The recording path parses this with
+    // parseFloat and stores 180; if clamp detection used a stricter parse it
+    // would read NaN, and the Klemmbacke would silently never fire.
+    publish(CLAMP_TOPIC, '2 bar');
+    publish(DEPTH_TOPIC, '2.0');
+    publish(CLAMP_TOPIC, '180 bar');
+    publish(RPM_TOPIC, '40');
+    ingestion.stopRecording();
+
+    const rpm = db.getSessionReadingsDetailed(sessionId).filter((r) => r.topic === RPM_TOPIC);
+    expect(rpm.map((r) => r.phase)).toEqual(['rohrwechsel']);
+  });
+
   it('does not count clipped readings as data at risk', () => {
     // Clipped readings are never uploaded and never exported, so counting them
     // would make the reset guard refuse forever on any rig that changes pipes.
@@ -292,5 +388,8 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
 
     expect(clipped).toBeGreaterThan(0);
     expect(db.getUnsafeDataSummary().readings).toBe(atRisk);
+    // ...but they are reported, because a reset deletes them and telling a
+    // worker nothing is at risk is how a mis-clipped shift gets lost.
+    expect(db.getUnsafeDataSummary().clipped).toBe(clipped);
   });
 });

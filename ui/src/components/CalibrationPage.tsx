@@ -23,7 +23,21 @@ interface Sensor {
   offset: number;
   topic: string | null;
   raw: number | null;
+  /** How old the raw value is. The buffer keeps the last one for minutes. */
+  rawAgeMs: number | null;
   calibrated: number | null;
+}
+
+/**
+ * Above this, the value on screen is the last one that arrived rather than
+ * what the sensor is doing — say so, and do not offer to zero against it. The
+ * server refuses a stale tare anyway; this keeps the technician from tapping
+ * into that refusal.
+ */
+const STALE_AFTER_MS = 10_000;
+
+function isStale(s: Sensor): boolean {
+  return s.raw !== null && s.rawAgeMs !== null && s.rawAgeMs > STALE_AFTER_MS;
 }
 
 function formatValue(v: number | null, digits = 2): string {
@@ -141,9 +155,16 @@ export function CalibrationPage() {
     setSaving(sensor.name);
     setError(null);
     try {
-      await fetch(`/api/config/calibration/${encodeURIComponent(sensor.name)}`, {
+      const res = await fetch(`/api/config/calibration/${encodeURIComponent(sensor.name)}`, {
         method: 'DELETE',
       });
+      // Without this the fields would read 1 / 0 whatever happened, and the
+      // next poll would quietly paint the old values back — leaving the
+      // technician unsure whether the calibration is gone.
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `Die Kalibrierung konnte nicht entfernt werden (Fehler ${res.status}).`);
+      }
       setDrafts((d) => ({ ...d, [sensor.name]: { scale: '1', offset: '0' } }));
       load(false);
     } catch (err) {
@@ -196,8 +217,10 @@ export function CalibrationPage() {
               </div>
 
               <div style={styles.valueCell}>
-                <div style={styles.valueLabel}>Rohwert</div>
-                <div style={styles.rawValue}>{formatValue(s.raw)}</div>
+                <div style={styles.valueLabel}>{isStale(s) ? 'Rohwert (alt)' : 'Rohwert'}</div>
+                <div style={isStale(s) ? styles.rawValueStale : styles.rawValue}>
+                  {formatValue(s.raw)}
+                </div>
               </div>
               <div style={styles.arrow}>→</div>
               <div style={styles.valueCell}>
@@ -225,9 +248,9 @@ export function CalibrationPage() {
                   />
                 </label>
                 <button
-                  style={s.raw === null ? styles.tareButtonIdle : styles.tareButton}
+                  style={s.raw === null || isStale(s) ? styles.tareButtonIdle : styles.tareButton}
                   onClick={() => tare(s)}
-                  disabled={saving === s.name || s.raw === null}
+                  disabled={saving === s.name || s.raw === null || isStale(s)}
                   title="Versatz auf den aktuellen Rohwert setzen"
                 >
                   Nullen
@@ -295,6 +318,10 @@ const styles: Record<string, React.CSSProperties> = {
   rawValue: {
     fontSize: 'var(--font-md)', fontFamily: 'var(--font-mono)',
     color: 'var(--text-secondary)',
+  },
+  rawValueStale: {
+    fontSize: 'var(--font-md)', fontFamily: 'var(--font-mono)',
+    color: 'var(--color-warning)',
   },
   calValue: {
     fontSize: 'var(--font-md)', fontFamily: 'var(--font-mono)', fontWeight: 700,

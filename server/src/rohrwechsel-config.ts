@@ -24,8 +24,16 @@ const OPEN_KEY = 'rohrwechsel_open_threshold';
 const TOLERANCE_KEY = 'rohrwechsel_tolerance';
 const DEPTH_MODE_KEY = 'rohrwechsel_depth_mode';
 
-/** What the Implenia MQTT box publishes on the rigs seen so far. */
-export const DEFAULT_CLAMP_TOPIC = 'machine/Klemmbacke';
+/**
+ * The prefill for the config screen, taken from the only rig that has actually
+ * been captured: `assets/reference/README.md` records this box publishing
+ * `Bohrgeraet/Klemmdruck`, capitalised, with no `Klemmbacke` topic anywhere.
+ *
+ * It is a starting point, not a convention — topic names differ per box and
+ * have to be wired on site. The screen shows the live value next to the field
+ * precisely so a wrong guess here is visible in seconds.
+ */
+export const DEFAULT_CLAMP_TOPIC = 'Bohrgeraet/Klemmdruck';
 
 export interface RohrwechselConfig extends RohrwechselSettings {
   /**
@@ -87,7 +95,7 @@ export function validateRohrwechsel(input: RohrwechselInput): ValidationResult {
     return {
       ok: false,
       error:
-        'Bitte das Topic der Klemmbacke angeben, z. B. machine/Klemmbacke — oder die ' +
+        `Bitte das Topic der Klemmbacke angeben, z. B. ${DEFAULT_CLAMP_TOPIC} — oder die ` +
         'Rohrverlängerung ausschalten, wenn das Gerät kein Klemmbacken-Signal liefert.',
     };
   }
@@ -98,6 +106,31 @@ export function validateRohrwechsel(input: RohrwechselInput): ValidationResult {
     };
   }
 
+  const tuning = validateTuning(input, current);
+  if (!tuning.ok) {
+    // Switching off must never be refused. Without a clamp topic none of these
+    // numbers do anything, so a field left in a bad state — a cleared Toleranz
+    // while experimenting — falls back to what is stored instead of blocking
+    // the one action that makes a misbehaving feature stop.
+    if (clampTopic !== null) return tuning;
+    const { enabled: _enabled, ...stored } = current;
+    return { ok: true, value: { ...stored, clampTopic: null } };
+  }
+
+  return { ok: true, value: { ...tuning.value, clampTopic } };
+}
+
+/**
+ * The settings that describe the rig, without the topic that arms the feature.
+ *
+ * The thresholds are in whatever unit the machine publishes. Calling them bar
+ * would be a guess: the G08 box publishes the Klemmdruck as a raw number in
+ * the thousands, so the messages name the field, not a unit.
+ */
+function validateTuning(
+  input: RohrwechselInput,
+  current: RohrwechselConfig,
+): ValidationResult {
   const depthMode: DepthMode = input.depthMode === undefined
     ? current.depthMode
     : isDepthMode(input.depthMode)
@@ -128,21 +161,25 @@ export function validateRohrwechsel(input: RohrwechselInput): ValidationResult {
   if (!Number.isFinite(closeThreshold) || closeThreshold <= 0) {
     return {
       ok: false,
-      error: 'Bitte den Druck in bar angeben, ab dem die Klemmbacke als geschlossen gilt.',
+      error:
+        'Bitte den Wert angeben, ab dem die Klemmbacke als geschlossen gilt — ' +
+        'abzulesen am aktuellen Klemmdruck auf dieser Seite.',
     };
   }
   if (!Number.isFinite(openThreshold) || openThreshold < 0) {
     return {
       ok: false,
-      error: 'Bitte den Druck in bar angeben, unter dem die Klemmbacke als offen gilt.',
+      error:
+        'Bitte den Wert angeben, unter dem die Klemmbacke als offen gilt — ' +
+        'abzulesen am aktuellen Klemmdruck auf dieser Seite.',
     };
   }
   if (openThreshold >= closeThreshold) {
     return {
       ok: false,
       error:
-        `Der Öffnungsdruck (${openThreshold} bar) muss kleiner sein als der Schließdruck ` +
-        `(${closeThreshold} bar). Sonst schaltet die Erkennung bei jedem Messrauschen hin und her.`,
+        `Der Wert für „offen" (${openThreshold}) muss kleiner sein als der für „zu" ` +
+        `(${closeThreshold}). Sonst schaltet die Erkennung bei jedem Messrauschen hin und her.`,
     };
   }
 
@@ -165,7 +202,7 @@ export function validateRohrwechsel(input: RohrwechselInput): ValidationResult {
   return {
     ok: true,
     value: {
-      clampTopic, depthMode, pipeLength,
+      clampTopic: current.clampTopic, depthMode, pipeLength,
       closeThreshold, openThreshold, tolerance,
     },
   };
