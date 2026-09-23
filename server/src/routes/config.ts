@@ -40,6 +40,39 @@ import { createLogger } from '../logger.js';
 const log = createLogger('config');
 
 /**
+ * Is this the name of a sensor the active Verfahren actually defines?
+ *
+ * Guards every route that binds something to a sensor name. A typo that got
+ * through would not fail loudly — it would store a calibration or a topic
+ * binding against a sensor that never exists, and the data would go missing
+ * at upload time with nothing on screen to say why.
+ *
+ * Returns a result rather than replying itself, matching validateCalibration()
+ * and validateRohrwechsel() elsewhere in this file.
+ */
+type SensorCheck = { ok: true } | { ok: false; status: 400 | 409; error: string };
+
+function checkKnownSensor(sensorName: string): SensorCheck {
+  const verfahren = getActiveVerfahren();
+  if (!verfahren) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'Es ist noch kein Verfahren eingerichtet. Bitte zuerst die Einrichtung abschließen.',
+    };
+  }
+  if (!(loadSensorCsv(verfahren) ?? []).some((r) => r.name === sensorName)) {
+    return {
+      ok: false,
+      status: 400,
+      error: `„${sensorName}" ist kein Sensor dieses Verfahrens. Bitte einen Sensor aus der Liste wählen.`,
+    };
+  }
+  return { ok: true };
+}
+
+
+/**
  * The last raw value per sensor, resolved exactly the way the live path
  * resolves an incoming topic. Used by the calibration screen and by taring, so
  * both see the same number the recording would see.
@@ -418,19 +451,8 @@ export function registerConfigRoutes(app: FastifyInstance): void {
         return reply.status(400).send({ error: 'Es wurde kein Sensor angegeben.' });
       }
 
-      const verfahren = getActiveVerfahren();
-      if (!verfahren) {
-        return reply.status(409).send({
-          error: 'Es ist noch kein Verfahren eingerichtet. Bitte zuerst die Einrichtung abschließen.',
-        });
-      }
-      // A typo here would silently calibrate nothing at all.
-      const known = (loadSensorCsv(verfahren) ?? []).some((r) => r.name === sensorName);
-      if (!known) {
-        return reply.status(400).send({
-          error: `„${sensorName}" ist kein Sensor dieses Verfahrens. Bitte einen Sensor aus der Liste wählen.`,
-        });
-      }
+      const check = checkKnownSensor(sensorName);
+      if (!check.ok) return reply.status(check.status).send({ error: check.error });
 
       const result = validateCalibration(request.body?.scale, request.body?.offset);
       if (!result.ok) return reply.status(400).send({ error: result.error });
@@ -463,18 +485,8 @@ export function registerConfigRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const sensorName = request.params.sensorName.trim();
 
-      const verfahren = getActiveVerfahren();
-      if (!verfahren) {
-        return reply.status(409).send({
-          error: 'Es ist noch kein Verfahren eingerichtet. Bitte zuerst die Einrichtung abschließen.',
-        });
-      }
-      const known = (loadSensorCsv(verfahren) ?? []).some((r) => r.name === sensorName);
-      if (!known) {
-        return reply.status(400).send({
-          error: `„${sensorName}" ist kein Sensor dieses Verfahrens. Bitte einen Sensor aus der Liste wählen.`,
-        });
-      }
+      const check = checkKnownSensor(sensorName);
+      if (!check.ok) return reply.status(check.status).send({ error: check.error });
 
       const stored = getCalibrationMap().get(sensorName.toLowerCase()) ?? NEUTRAL;
       const scale = request.body?.scale === undefined
@@ -568,21 +580,8 @@ export function registerConfigRoutes(app: FastifyInstance): void {
         return reply.status(400).send({ error: 'Topic und Sensorname sind erforderlich.' });
       }
 
-      const verfahren = getActiveVerfahren();
-      if (!verfahren) {
-        return reply.status(409).send({
-          error: 'Es ist noch kein Verfahren eingerichtet. Bitte zuerst die Einrichtung abschließen.',
-        });
-      }
-
-      // Guard against binding to a sensor that does not exist for this
-      // Verfahren — a typo here would silently drop data at upload time.
-      const known = (loadSensorCsv(verfahren) ?? []).some((r) => r.name === sensorName);
-      if (!known) {
-        return reply.status(400).send({
-          error: `„${sensorName}" ist kein Sensor dieses Verfahrens. Bitte einen Sensor aus der Liste wählen.`,
-        });
-      }
+      const check = checkKnownSensor(sensorName);
+      if (!check.ok) return reply.status(check.status).send({ error: check.error });
 
       setTopicOverride(topic, sensorName);
       clearResolverCache();
