@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import type { ReplaySpeed } from '../hooks/useReplay';
 
 interface ReplayState {
@@ -44,12 +44,28 @@ function basename(filePath: string): string {
   return filePath.split('/').pop() ?? filePath;
 }
 
+type PanelMode = 'input' | 'transport';
+
 export function ReplayPanel({
   state, loading, onPlay, onPause, onStop, onSetSpeed, onSeek, onLoad,
 }: Props) {
   const [fileInput, setFileInput] = useState('');
-  const [showFileInput, setShowFileInput] = useState(!state.file);
+  // Drive mode from server state — once a file is loaded, show transport.
+  // The user can switch back to input mode to load a different file.
+  const [mode, setMode] = useState<PanelMode>(state.file ? 'transport' : 'input');
   const sliderRef = useRef<HTMLInputElement>(null);
+
+  // When the server state changes from no-file to file-loaded, switch to
+  // transport mode. This is the feedback: the panel visually changes.
+  const prevFile = useRef(state.file);
+  useEffect(() => {
+    if (state.file && !prevFile.current) {
+      setMode('transport');
+    } else if (!state.file && prevFile.current) {
+      setMode('input');
+    }
+    prevFile.current = state.file;
+  }, [state.file]);
 
   // Debounce seek while dragging
   const seekTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -65,32 +81,38 @@ export function ReplayPanel({
     ? (state.currentOffsetMs / state.durationMs) * 100
     : 0;
 
-  // File not loaded — show the load UI
-  if (!state.file || showFileInput) {
+  const handleLoad = () => {
+    if (fileInput.trim()) onLoad(fileInput.trim());
+  };
+
+  // ── Badge: reflects actual state ───────────────────────────────────
+  const badgeInfo = (() => {
+    if (loading) return { label: 'LADEN...', color: '#e65100' };
+    if (state.fastForwarding) return { label: 'SEEK', color: '#e65100' };
+    if (state.playing) return { label: 'PLAY', color: '#4caf50' };
+    if (state.file && state.position > 0) return { label: 'PAUSE', color: '#7c4dff' };
+    if (state.file) return { label: 'BEREIT', color: '#7c4dff' };
+    return { label: 'REPLAY', color: '#555' };
+  })();
+
+  // ── Input mode ─────────────────────────────────────────────────────
+  if (mode === 'input') {
     return (
       <div style={styles.panel}>
         <div style={styles.loadRow}>
-          <span style={styles.replayBadge}>REPLAY</span>
+          <span style={{ ...styles.badge, backgroundColor: badgeInfo.color }}>
+            {badgeInfo.label}
+          </span>
           <input
             type="text"
             value={fileInput}
             onChange={(e) => setFileInput(e.target.value)}
             placeholder="Pfad zur Dump-Datei (z.B. assets/bohrung_g8_marktbreit_mqtt.txt)"
             style={styles.fileInput}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && fileInput.trim()) {
-                onLoad(fileInput.trim());
-                setShowFileInput(false);
-              }
-            }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleLoad(); }}
           />
           <button
-            onClick={() => {
-              if (fileInput.trim()) {
-                onLoad(fileInput.trim());
-                setShowFileInput(false);
-              }
-            }}
+            onClick={handleLoad}
             disabled={loading || !fileInput.trim()}
             style={{
               ...styles.controlButton,
@@ -98,11 +120,12 @@ export function ReplayPanel({
               opacity: loading || !fileInput.trim() ? 0.5 : 1,
             }}
           >
-            {loading ? '...' : 'Laden'}
+            Laden
           </button>
+          {/* Let the user switch back to transport if a file is already loaded */}
           {state.file && (
             <button
-              onClick={() => setShowFileInput(false)}
+              onClick={() => setMode('transport')}
               style={{ ...styles.controlButton, ...styles.dimButton }}
             >
               ✕
@@ -113,36 +136,43 @@ export function ReplayPanel({
     );
   }
 
+  // ── Transport mode ─────────────────────────────────────────────────
   return (
     <div style={styles.panel}>
       <div style={styles.mainRow}>
         {/* Left: badge + file info */}
         <div style={styles.infoSection}>
-          <span style={styles.replayBadge}>REPLAY</span>
+          <span style={{ ...styles.badge, backgroundColor: badgeInfo.color }}>
+            {badgeInfo.label}
+          </span>
           <button
-            onClick={() => setShowFileInput(true)}
+            onClick={() => { setFileInput(state.file ?? ''); setMode('input'); }}
             style={styles.fileButton}
-            title={state.file}
+            title={state.file ?? ''}
           >
-            {basename(state.file)}
+            {basename(state.file ?? '')}
           </button>
           <span style={styles.statsText}>
-            {state.readingCount.toLocaleString('de-DE')} aufgenommen
+            {state.totalMessages.toLocaleString('de-DE')} msgs
+            {state.readingCount > 0 && (
+              <> · {state.readingCount.toLocaleString('de-DE')} rec</>
+            )}
           </span>
         </div>
 
         {/* Center: transport controls + timeline */}
         <div style={styles.transportSection}>
-          {/* Play / Pause */}
           <button
             onClick={state.playing ? onPause : onPlay}
-            style={styles.playButton}
+            style={{
+              ...styles.playButton,
+              ...(state.playing ? styles.playButtonActive : {}),
+            }}
             disabled={loading}
           >
             {state.playing ? '⏸' : '▶'}
           </button>
 
-          {/* Stop */}
           <button
             onClick={onStop}
             style={{ ...styles.controlButton, ...styles.stopButton }}
@@ -193,14 +223,11 @@ export function ReplayPanel({
           </div>
         </div>
 
-        {/* Right: position info */}
+        {/* Right: position */}
         <div style={styles.positionSection}>
           <span style={styles.positionText}>
             {state.position.toLocaleString('de-DE')} / {state.totalMessages.toLocaleString('de-DE')}
           </span>
-          {state.fastForwarding && (
-            <span style={styles.ffBadge}>Seeking...</span>
-          )}
         </div>
       </div>
     </div>
@@ -235,15 +262,17 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '0.75rem',
     flexShrink: 0,
   },
-  replayBadge: {
+  badge: {
     fontSize: '0.8rem',
     fontWeight: 700,
     color: '#ffffff',
-    backgroundColor: '#7c4dff',
     padding: '4px 10px',
     borderRadius: '6px',
     letterSpacing: '0.05em',
     flexShrink: 0,
+    minWidth: '56px',
+    textAlign: 'center' as const,
+    transition: 'background-color 0.3s ease',
   },
   fileButton: {
     fontSize: '0.95rem',
@@ -263,6 +292,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '0.9rem',
     color: '#8899aa',
     flexShrink: 0,
+    whiteSpace: 'nowrap' as const,
   },
   transportSection: {
     display: 'flex',
@@ -285,6 +315,11 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     flexShrink: 0,
     fontFamily: 'inherit',
+    transition: 'all 0.15s ease',
+  },
+  playButtonActive: {
+    borderColor: '#4caf50',
+    backgroundColor: '#1a3020',
   },
   controlButton: {
     height: '40px',
@@ -358,7 +393,6 @@ const styles: Record<string, React.CSSProperties> = {
     margin: 0,
     padding: 0,
     cursor: 'pointer',
-    // Custom range styling via CSS class below
     WebkitAppearance: 'none' as never,
     appearance: 'none' as never,
     background: 'transparent',
@@ -381,6 +415,7 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: '36px',
     minWidth: '44px',
     fontFamily: 'inherit',
+    transition: 'all 0.15s ease',
   },
   speedButtonActive: {
     backgroundColor: '#7c4dff',
@@ -396,15 +431,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '0.85rem',
     color: '#8899aa',
     fontFamily: 'var(--font-mono)',
-  },
-  ffBadge: {
-    fontSize: '0.75rem',
-    fontWeight: 600,
-    color: '#ffffff',
-    backgroundColor: '#e65100',
-    padding: '2px 8px',
-    borderRadius: '4px',
-    animation: 'pulse 1s ease-in-out infinite',
   },
   fileInput: {
     flex: 1,
