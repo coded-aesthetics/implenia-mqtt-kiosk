@@ -75,11 +75,36 @@ export function parseSensorCsv(content: string): CsvSensorRow[] {
   });
 }
 
-export function loadSensorCsv(verfahren: string): CsvSensorRow[] | null {
+/**
+ * Parsed rows per Verfahren. The CSVs are release assets — they only change
+ * when a new version is deployed, which restarts the process — so this holds
+ * for the process lifetime and is dropped by clearVerfahrenCache() for the
+ * reset flow and for tests.
+ *
+ * Worth caching because the calibration and topic-assignment screens poll
+ * their endpoints every 1.5-3 s, and each request used to re-read and
+ * re-parse the file from disk.
+ */
+const csvCache = new Map<string, CsvSensorRow[]>();
+
+/**
+ * Sensor rows for a Verfahren, or null when the CSV is missing or unreadable.
+ *
+ * Readonly because the result is shared: mutating it would poison the cache
+ * for every later caller.
+ */
+export function loadSensorCsv(verfahren: string): readonly CsvSensorRow[] | null {
+  const cached = csvCache.get(verfahren);
+  if (cached) return cached;
+
   const file = path.join(SENSORS_DIR, `${verfahren}-sensors-herstellen.csv`);
   try {
-    return parseSensorCsv(fs.readFileSync(file, 'utf-8'));
+    const rows = parseSensorCsv(fs.readFileSync(file, 'utf-8'));
+    csvCache.set(verfahren, rows);
+    return rows;
   } catch {
+    // Deliberately not cached: a missing file is a deployment fault that a
+    // re-sync can fix without a restart.
     return null;
   }
 }
@@ -204,6 +229,7 @@ export function setActiveVerfahren(verfahren: string): void {
   activeVerfahren = verfahren;
   metaCache = null;
   roleCache = null;
+  csvCache.clear();
   log.info('Verfahren set to %s', verfahren);
 }
 
@@ -215,6 +241,7 @@ export function clearVerfahrenCache(): void {
   activeVerfahren = undefined;
   metaCache = null;
   roleCache = null;
+  csvCache.clear();
 }
 
 export interface StreamSensor {

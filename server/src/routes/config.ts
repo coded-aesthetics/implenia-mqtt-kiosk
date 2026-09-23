@@ -1,78 +1,35 @@
-import mqtt from 'mqtt';
 import type { FastifyInstance } from 'fastify';
-import {
-  getMeta, setMeta, deleteMeta, getObservedTopics, clearBuffer,
-  getTopicOverrides, setTopicOverride, deleteTopicOverride,
-} from '../db.js';
+import { getMeta, setMeta, deleteMeta, getUnsafeDataSummary, resetKiosk } from '../db.js';
 import { getApiConfig, fetchImplenia } from '../implenia-api.js';
 import { config as envConfig } from '../config.js';
 import { ingestion, DataIngestion } from '../ingestion.js';
 import { deviceSource } from '../device-source.js';
 import { abortRecording } from '../recording.js';
-import {
-  DEFAULT_BROKER_URL,
-  DEFAULT_TOPICS,
-  getMqttSettings,
-  normalizeBrokerUrl,
-  normalizeTopics,
-  setMqttSettings,
-} from '../mqtt-config.js';
-import { getActiveVerfahren, loadSensorCsv } from '../sensor-meta.js';
-import {
-  DEFAULT_CLAMP_TOPIC, getRohrwechselConfig, setRohrwechselConfig, validateRohrwechsel,
-} from '../rohrwechsel-config.js';
-import { DEPTH_MODES } from '../rohrwechsel.js';
-import {
-  applyCalibration, clearCalibrationCache, getCalibrationMap, validateCalibration,
-  tareOffset, NEUTRAL,
-} from '../calibration.js';
-import { getCalibrations, setCalibration, deleteCalibration } from '../db.js';
-import { parsePayload } from '../parse-payload.js';
-import { clearResolverCache, loadTopicMap, getResolverContext, resolveSensorKey } from '../topic-resolver.js';
+import { clearCalibrationCache } from '../calibration.js';
+import { clearResolverCache } from '../topic-resolver.js';
 import {
   TRANSPORTS, getTransport, isTransportConfigured, isValidTransport, setTransport,
   TransportAlreadySetError, clearTransportCache,
 } from '../transport.js';
-import { getUnsafeDataSummary, resetKiosk } from '../db.js';
 import { clearVerfahrenCache } from '../sensor-meta.js';
 import { createLogger } from '../logger.js';
+import { registerMqttConfigRoutes } from './config-mqtt.js';
+import { registerRohrwechselConfigRoutes } from './config-rohrwechsel.js';
+import { registerCalibrationRoutes } from './config-calibration.js';
+import { registerTopicOverrideRoutes } from './config-topics.js';
 
+// Logs as 'config', not as this file's name: /api/logs?module=config is how
+// service personnel filter these, and splitting the file must not split that.
 const log = createLogger('config');
 
 /**
- * The last raw value per sensor, resolved exactly the way the live path
- * resolves an incoming topic. Used by the calibration screen and by taring, so
- * both see the same number the recording would see.
+ * The /api/config surface.
  *
- * `ageMs` travels with each value and is the point of the window being five
- * minutes rather than five seconds: the screen should keep showing the last
- * reading when the broker hiccups, clearly marked as old, while taring against
- * one has to be refused. Only the caller knows which of the two it is.
+ * What stays here is what the kiosk is: its Implenia credentials, its
+ * transport, and the reset that returns it to a blank machine. The parts that
+ * configure one subsystem each live beside this file and are registered below,
+ * so this stays a map of the surface rather than all of it.
  */
-interface LiveRaw {
-  topic: string;
-  raw: number | null;
-  /** How long ago this value arrived. */
-  ageMs: number;
-}
-
-function liveRawBySensor(): Map<string, LiveRaw> {
-  const ctx = getResolverContext();
-  const now = Date.now();
-  const latest = new Map<string, LiveRaw>();
-  for (const t of getObservedTopics(now - 5 * 60_000)) {
-    const key = resolveSensorKey(t.topic, ctx);
-    if (key) {
-      latest.set(key.toLowerCase(), {
-        topic: t.topic,
-        raw: parsePayload(t.lastPayload).valueNumeric,
-        ageMs: Math.max(0, now - t.lastSeen),
-      });
-    }
-  }
-  return latest;
-}
-
 export function registerConfigRoutes(app: FastifyInstance): void {
   app.get('/api/config', async (_request, reply) => {
     const cfg = getApiConfig();
@@ -208,7 +165,6 @@ export function registerConfigRoutes(app: FastifyInstance): void {
 
   // ── Reset ───────────────────────────────────────────────────────────────
 
-  /** What a reset would destroy, and whether it is allowed right now. */
   app.get('/api/config/reset', async () => {
     const unsafe = getUnsafeDataSummary();
     return {
@@ -258,417 +214,16 @@ export function registerConfigRoutes(app: FastifyInstance): void {
     return reply.send({ ok: true });
   });
 
-  // ── MQTT ────────────────────────────────────────────────────────────────
-
-  app.get('/api/config/mqtt', async () => {
-    const settings = getMqttSettings();
-    return {
-      ...settings,
-      defaultBrokerUrl: DEFAULT_BROKER_URL,
-      defaultTopics: DEFAULT_TOPICS,
-      connected: ingestion.sourceConnected,
-    };
-  });
-
-  /**
-   * Try a broker address without persisting it, so a wrong value is caught
-   * here instead of showing up as silent no-data three screens later.
-   */
-  app.post<{ Body: { brokerUrl?: string } }>(
-    '/api/config/mqtt/test',
-    async (request, reply) => {
-      const normalized = normalizeBrokerUrl(request.body?.brokerUrl ?? '');
-      if (!normalized.ok) {
-        return reply.status(400).send({ ok: false, error: normalized.error });
-      }
-
-      const result = await probeBroker(normalized.url);
-      return reply.send({ ...result, brokerUrl: normalized.url });
-    },
-  );
-
-  app.put<{ Body: { brokerUrl?: string; topics?: string } }>(
-    '/api/config/mqtt',
-    async (request, reply) => {
-      const broker = normalizeBrokerUrl(request.body?.brokerUrl ?? '');
-      if (!broker.ok) return reply.status(400).send({ error: broker.error });
-
-      const topics = normalizeTopics(request.body?.topics ?? DEFAULT_TOPICS);
-      if (!topics.ok) return reply.status(400).send({ error: topics.error });
-
-      const previous = getMqttSettings();
-      const changed =
-        previous.brokerUrl !== broker.url || previous.topics !== topics.url;
-
-      setMqttSettings(broker.url, topics.url);
-      log.info('MQTT settings updated: %s (%s)', broker.url, topics.url);
-
-      if (changed) {
-        // Rows from the previous broker would otherwise keep answering "topics
-        // are arriving" for the next five minutes — reporting success for
-        // exactly the wrong address the caller just typed.
-        clearBuffer();
-      }
-
-      // Pick up the new settings without a process restart.
-      ingestion.restartSource();
-
-      return reply.send({ brokerUrl: broker.url, topics: topics.url });
-    },
-  );
-
-  /**
-   * Topics actually seen on the broker. Drives the wizard's "is data arriving"
-   * check and, later, the sensor assignment screen.
-   */
-  app.get<{ Querystring: { since?: string } }>(
-    '/api/config/mqtt/topics',
-    async (request) => {
-      const windowMs = Number(request.query.since ?? '') || 5 * 60_000;
-      const topics = getObservedTopics(Date.now() - windowMs);
-      return { windowMs, count: topics.length, topics };
-    },
-  );
-
-  // ── Rohrverlängerung ────────────────────────────────────────────────────
-
-  /**
-   * Klemmbacke handling. Off until a topic is configured — a rig without a
-   * clamp signal must keep behaving exactly as it did before this existed.
-   */
-  app.get('/api/config/rohrwechsel', async () => {
-    const cfg = getRohrwechselConfig();
-    return {
-      ...cfg,
-      defaultClampTopic: DEFAULT_CLAMP_TOPIC,
-      depthModes: Object.entries(DEPTH_MODES).map(([key, label]) => ({ key, label })),
-    };
-  });
-
-  app.put<{
-    Body: {
-      clampTopic?: string | null;
-      depthMode?: string;
-      pipeLength?: number;
-      closeThreshold?: number;
-      openThreshold?: number;
-      tolerance?: number;
-    };
-  }>('/api/config/rohrwechsel', async (request, reply) => {
-    const result = validateRohrwechsel(request.body ?? {});
-    if (!result.ok) return reply.status(400).send({ error: result.error });
-
-    setRohrwechselConfig(result.value);
-    // A threshold typed while an element is being drilled has to apply to that
-    // element, not the next one.
-    ingestion.refreshRohrwechselConfig();
-
-    log.info(
-      'Rohrverlängerung updated: topic=%s, Tiefe=%s, Rohrlänge=%s m',
-      result.value.clampTopic ?? '(aus)', result.value.depthMode, result.value.pipeLength,
-    );
-    return reply.send({ ...result.value, enabled: result.value.clampTopic !== null });
-  });
-
-  // ── Sensor calibration ──────────────────────────────────────────────────
-
-  /**
-   * Every float sensor of this Verfahren with its scale and offset, and what
-   * it is reading right now — raw and calibrated.
-   *
-   * The live value is what makes this usable: a technician sets a factor by
-   * comparing the kiosk against the display on the rig, not by arithmetic.
-   */
-  app.get('/api/config/calibration', async () => {
-    const verfahren = getActiveVerfahren();
-    const rows = verfahren ? loadSensorCsv(verfahren) ?? [] : [];
-    const stored = getCalibrationMap();
-    const latest = liveRawBySensor();
-
-    const sensors = rows
-      .filter((r) => r.type.trim() === 'Double')
-      .map((r) => {
-        const key = r.name.toLowerCase();
-        const cal = stored.get(key) ?? NEUTRAL;
-        const live = latest.get(key);
-        const raw = live?.raw ?? null;
-        return {
-          name: r.name,
-          unit: r.unit,
-          source: r.source,
-          scale: cal.scale,
-          offset: cal.offset,
-          topic: live?.topic ?? null,
-          raw,
-          // So the screen can mark a value as old instead of presenting a
-          // four-minute-old reading as what the sensor is doing right now.
-          rawAgeMs: raw === null ? null : live?.ageMs ?? null,
-          calibrated: raw === null ? null : applyCalibration(raw, cal),
-        };
-      });
-
-    return { verfahren, sensors, calibrated: getCalibrations().length };
-  });
-
-  app.put<{ Body: { sensorName?: string; scale?: unknown; offset?: unknown } }>(
-    '/api/config/calibration',
-    async (request, reply) => {
-      const sensorName = request.body?.sensorName?.trim();
-      if (!sensorName) {
-        return reply.status(400).send({ error: 'Es wurde kein Sensor angegeben.' });
-      }
-
-      const verfahren = getActiveVerfahren();
-      if (!verfahren) {
-        return reply.status(409).send({
-          error: 'Es ist noch kein Verfahren eingerichtet. Bitte zuerst die Einrichtung abschließen.',
-        });
-      }
-      // A typo here would silently calibrate nothing at all.
-      const known = (loadSensorCsv(verfahren) ?? []).some((r) => r.name === sensorName);
-      if (!known) {
-        return reply.status(400).send({
-          error: `„${sensorName}" ist kein Sensor dieses Verfahrens. Bitte einen Sensor aus der Liste wählen.`,
-        });
-      }
-
-      const result = validateCalibration(request.body?.scale, request.body?.offset);
-      if (!result.ok) return reply.status(400).send({ error: result.error });
-
-      setCalibration(sensorName, result.value.scale, result.value.offset);
-      // No TTL on the cache: a calibration changes recorded measurements, so
-      // it has to take effect on the very next reading.
-      clearCalibrationCache();
-      log.info(
-        'Calibration for %s set to ×%s %s%s',
-        sensorName, result.value.scale,
-        result.value.offset >= 0 ? '+' : '', result.value.offset,
-      );
-      return reply.send({ sensorName, ...result.value });
-    },
-  );
-
-  /**
-   * Zero a sensor: store the offset that cancels whatever it is reading right
-   * now (`-(rohwert × Faktor)`).
-   *
-   * The raw value is read here rather than taken from the request, so what
-   * gets cancelled is the reading at the moment of the tap and not whatever
-   * the screen last polled up to a few seconds earlier. The factor may come
-   * from the form — a technician typically sets the factor and zeroes in one
-   * go, before saving — and falls back to the stored one.
-   */
-  app.post<{ Params: { sensorName: string }; Body: { scale?: unknown } }>(
-    '/api/config/calibration/:sensorName/tare',
-    async (request, reply) => {
-      const sensorName = request.params.sensorName.trim();
-
-      const verfahren = getActiveVerfahren();
-      if (!verfahren) {
-        return reply.status(409).send({
-          error: 'Es ist noch kein Verfahren eingerichtet. Bitte zuerst die Einrichtung abschließen.',
-        });
-      }
-      const known = (loadSensorCsv(verfahren) ?? []).some((r) => r.name === sensorName);
-      if (!known) {
-        return reply.status(400).send({
-          error: `„${sensorName}" ist kein Sensor dieses Verfahrens. Bitte einen Sensor aus der Liste wählen.`,
-        });
-      }
-
-      const stored = getCalibrationMap().get(sensorName.toLowerCase()) ?? NEUTRAL;
-      const scale = request.body?.scale === undefined
-        ? stored.scale
-        : Number(typeof request.body.scale === 'string'
-          ? request.body.scale.replace(',', '.')
-          : request.body.scale);
-
-      const live = liveRawBySensor().get(sensorName.toLowerCase());
-      const result = tareOffset(live?.raw ?? null, scale, live?.ageMs ?? null);
-      if (!result.ok) return reply.status(409).send({ error: result.error });
-
-      setCalibration(sensorName, scale, result.offset);
-      clearCalibrationCache();
-      log.info(
-        'Calibration for %s tared: raw=%s, scale=%s, offset=%s',
-        sensorName, live?.raw, scale, result.offset,
-      );
-      return reply.send({
-        sensorName, scale, offset: result.offset, raw: live?.raw ?? null, topic: live?.topic ?? null,
-      });
-    },
-  );
-
-  app.delete<{ Params: { sensorName: string } }>(
-    '/api/config/calibration/:sensorName',
-    async (request, reply) => {
-      deleteCalibration(request.params.sensorName);
-      clearCalibrationCache();
-      log.info('Calibration removed for %s', request.params.sensorName);
-      return reply.send({ ok: true });
-    },
-  );
-
-  // ── Topic assignment ────────────────────────────────────────────────────
-
-  /**
-   * Everything the assignment screen needs: the sensors this Verfahren
-   * expects, which topic currently feeds each, and where that binding came
-   * from (shipped map vs. wired on site).
-   */
-  app.get('/api/config/topic-overrides', async () => {
-    const verfahren = getActiveVerfahren();
-    const shipped = verfahren ? loadTopicMap(verfahren) : new Map<string, string>();
-    const overrides = getTopicOverrides();
-
-    const boundBySensor = new Map<string, { topic: string; source: 'override' | 'shipped' | 'name' }>();
-    for (const [topic, sensorName] of shipped) {
-      boundBySensor.set(sensorName.toLowerCase(), { topic, source: 'shipped' });
-    }
-    // Overrides win, mirroring resolveSensorKey().
-    for (const o of overrides) {
-      boundBySensor.set(o.sensorName.toLowerCase(), { topic: o.topic, source: 'override' });
-    }
-
-    // A topic whose last segment already equals a sensor name needs no
-    // binding — it resolves today. Showing it as "not assigned" would send a
-    // technician off rebinding sensors that already work, so resolve what is
-    // actually arriving and report that too.
-    const observed = getObservedTopics(Date.now() - 5 * 60_000);
-    const ctx = getResolverContext();
-    for (const t of observed) {
-      const key = resolveSensorKey(t.topic, ctx);
-      if (!key || boundBySensor.has(key)) continue;
-      boundBySensor.set(key, { topic: t.topic, source: 'name' });
-    }
-
-    const rows = verfahren ? loadSensorCsv(verfahren) ?? [] : [];
-    const sensors = rows
-      .filter((r) => r.source === 'mqtt')
-      .map((r) => {
-        const bound = boundBySensor.get(r.name.toLowerCase());
-        return {
-          name: r.name,
-          unit: r.unit,
-          priority: r.priority,
-          topic: bound?.topic ?? null,
-          boundBy: bound?.source ?? 'none',
-        };
-      });
-
-    return { verfahren, sensors, overrides };
-  });
-
-  app.put<{ Body: { topic?: string; sensorName?: string } }>(
-    '/api/config/topic-overrides',
-    async (request, reply) => {
-      const topic = request.body?.topic?.trim();
-      const sensorName = request.body?.sensorName?.trim();
-      if (!topic || !sensorName) {
-        return reply.status(400).send({ error: 'Topic und Sensorname sind erforderlich.' });
-      }
-
-      const verfahren = getActiveVerfahren();
-      if (!verfahren) {
-        return reply.status(409).send({
-          error: 'Es ist noch kein Verfahren eingerichtet. Bitte zuerst die Einrichtung abschließen.',
-        });
-      }
-
-      // Guard against binding to a sensor that does not exist for this
-      // Verfahren — a typo here would silently drop data at upload time.
-      const known = (loadSensorCsv(verfahren) ?? []).some((r) => r.name === sensorName);
-      if (!known) {
-        return reply.status(400).send({
-          error: `„${sensorName}" ist kein Sensor dieses Verfahrens. Bitte einen Sensor aus der Liste wählen.`,
-        });
-      }
-
-      setTopicOverride(topic, sensorName);
-      clearResolverCache();
-      log.info('Topic %s assigned to sensor %s', topic, sensorName);
-      return reply.send({ topic, sensorName });
-    },
-  );
-
-  app.delete<{ Params: { topic: string } }>(
-    '/api/config/topic-overrides/:topic',
-    async (request, reply) => {
-      // Fastify hands params over already percent-decoded, so decoding again
-      // would corrupt a topic containing a literal '%' — or throw URIError on
-      // one that is not valid escape syntax.
-      const topic = request.params.topic;
-      deleteTopicOverride(topic);
-      clearResolverCache();
-      log.info('Topic assignment removed for %s', topic);
-      return reply.send({ ok: true });
-    },
-  );
-
   app.delete('/api/config/api-key', async (_request, reply) => {
     deleteMeta('implenia_api_key');
     log.info('API key removed via config page');
     return reply.send({ ok: true });
   });
-}
 
-/** Connect, report, disconnect. Never leaves a client behind. */
-function probeBroker(
-  brokerUrl: string,
-  timeoutMs = 8000,
-): Promise<{ ok: boolean; error?: string }> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const client = mqtt.connect(brokerUrl, {
-      reconnectPeriod: 0, // one attempt — this is a test, not a session
-      connectTimeout: timeoutMs,
-    });
+  // ── Subsystems ──────────────────────────────────────────────────────────
 
-    const finish = (result: { ok: boolean; error?: string }) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      client.end(true);
-      resolve(result);
-    };
-
-    const timer = setTimeout(
-      () => finish({ ok: false, error: describeBrokerError('connack timeout', brokerUrl) }),
-      timeoutMs + 1000,
-    );
-
-    client.on('connect', () => finish({ ok: true }));
-    client.on('error', (err) => {
-      // Keep the library's own wording in the log for remote diagnosis; the
-      // technician gets a German sentence that says what to do about it.
-      log.warn('MQTT probe of %s failed: %s', brokerUrl, err.message);
-      finish({ ok: false, error: describeBrokerError(err.message, brokerUrl) });
-    });
-  });
-}
-
-/**
- * Turn an mqtt.js error into something a technician on site can act on.
- * Library messages are English and name syscalls; these name the box and the
- * cable.
- */
-export function describeBrokerError(raw: string, brokerUrl: string): string {
-  const msg = raw.toLowerCase();
-
-  if (msg.includes('timeout')) {
-    return `Keine Antwort von ${brokerUrl}. Bitte prüfen, ob die MQTT-Box eingeschaltet und das Netzwerkkabel verbunden ist.`;
-  }
-  if (msg.includes('econnrefused')) {
-    return `${brokerUrl} ist erreichbar, nimmt aber keine Verbindung an. Bitte prüfen, ob die Adresse und der Port richtig sind.`;
-  }
-  if (msg.includes('enotfound') || msg.includes('eai_again')) {
-    return `Die Adresse ${brokerUrl} konnte nicht aufgelöst werden. Bitte den Namen prüfen oder die IP-Adresse direkt eintragen.`;
-  }
-  if (msg.includes('ehostunreach') || msg.includes('enetunreach')) {
-    return `${brokerUrl} ist im Netzwerk nicht erreichbar. Bitte prüfen, ob der PC mit der MQTT-Box verbunden ist.`;
-  }
-  if (msg.includes('not authorized') || msg.includes('bad username') || msg.includes('bad user')) {
-    return `${brokerUrl} hat die Verbindung abgelehnt (keine Berechtigung). Bitte die Konfiguration der MQTT-Box prüfen.`;
-  }
-  return `Verbindung zu ${brokerUrl} nicht möglich. Bitte Adresse, Netzwerkkabel und MQTT-Box prüfen.`;
+  registerMqttConfigRoutes(app);
+  registerRohrwechselConfigRoutes(app);
+  registerCalibrationRoutes(app);
+  registerTopicOverrideRoutes(app);
 }

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { navigate } from '../hooks/useHashRouter';
+import { usePolledJson } from '../hooks/usePolledJson';
+import { formatNumber } from '../utils/format';
 
 /**
  * Bind MQTT topics to sensors — the MQTT counterpart to ChannelPicker, and
@@ -33,12 +35,20 @@ const BOUND_LABEL: Record<SensorRow['boundBy'], string> = {
   none: '',
 };
 
+/** A payload that is not a number is shown as-is — that text is often the
+ *  only thing identifying an opaque topic. */
 function formatValue(raw: string): string {
   const n = Number.parseFloat(raw);
   if (!Number.isFinite(n)) return raw || '–';
-  return n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return formatNumber(n);
 }
 
+/**
+ * Deliberately not commentTimeAgo() or date-fns: both collapse everything
+ * under a minute into one phrase, and seconds are the entire signal here.
+ * This answers "is this topic publishing right now?", which is how a
+ * technician tells a live topic from a dead one.
+ */
 function secondsAgo(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (s < 2) return 'gerade eben';
@@ -65,18 +75,11 @@ export function TopicAssignment() {
 
   // Values must move while the machine moves — that is what makes an opaque
   // topic identifiable at all.
-  useEffect(() => {
-    let cancelled = false;
-    const poll = () => {
-      fetch('/api/config/mqtt/topics')
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => { if (!cancelled && d) setTopics(d.topics ?? []); })
-        .catch(() => {});
-    };
-    poll();
-    const timer = setInterval(poll, 1500);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
+  usePolledJson<{ topics?: ObservedTopic[] }>(
+    '/api/config/mqtt/topics',
+    1500,
+    (d) => setTopics(d.topics ?? []),
+  );
 
   const boundTopics = new Map(
     sensors.filter((s) => s.topic).map((s) => [s.topic as string, s]),

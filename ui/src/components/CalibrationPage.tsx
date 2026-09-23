@@ -1,4 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
+import { formatNumber } from '../utils/format';
+import { usePolledJson } from '../hooks/usePolledJson';
 
 /**
  * Per-sensor linear calibration: `wert = rohwert × Faktor + Versatz`.
@@ -41,11 +43,7 @@ function isStale(s: Sensor): boolean {
 }
 
 function formatValue(v: number | null, digits = 2): string {
-  if (v === null) return '—';
-  return v.toLocaleString('de-DE', {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
+  return v === null ? '–' : formatNumber(v, digits);
 }
 
 /** German decimal comma in, JS number out. */
@@ -61,31 +59,38 @@ export function CalibrationPage() {
   const [savedName, setSavedName] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
+  const apply = useCallback((d: { sensors?: Sensor[] }, withDrafts: boolean) => {
+    if (!d.sensors) return;
+    setSensors(d.sensors);
+    if (withDrafts) {
+      const next: Record<string, { scale: string; offset: string }> = {};
+      for (const s of d.sensors) {
+        next[s.name] = { scale: String(s.scale), offset: String(s.offset) };
+      }
+      setDrafts(next);
+    }
+    setLoaded(true);
+  }, []);
+
+  /** Imperative refresh, used after saving, taring and resetting. */
   const load = useCallback((withDrafts: boolean) => {
     fetch('/api/config/calibration')
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { sensors?: Sensor[] } | null) => {
-        if (!d?.sensors) return;
-        setSensors(d.sensors);
-        if (withDrafts) {
-          const next: Record<string, { scale: string; offset: string }> = {};
-          for (const s of d.sensors) {
-            next[s.name] = { scale: String(s.scale), offset: String(s.offset) };
-          }
-          setDrafts(next);
-        }
-        setLoaded(true);
-      })
+      .then((d: { sensors?: Sensor[] } | null) => { if (d) apply(d, withDrafts); })
       .catch(() => setLoaded(true));
-  }, []);
+  }, [apply]);
 
   useEffect(() => { load(true); }, [load]);
 
-  // Keep the live values moving without touching what is being typed.
-  useEffect(() => {
-    const timer = setInterval(() => load(false), 3000);
-    return () => clearInterval(timer);
-  }, [load]);
+  // Keep the live values moving without touching what is being typed. Not
+  // immediate: load(true) above already fetched this on mount, and a second
+  // request racing it could overwrite the drafts it just filled.
+  usePolledJson<{ sensors?: Sensor[] }>(
+    '/api/config/calibration',
+    3000,
+    (d) => apply(d, false),
+    { immediate: false },
+  );
 
   async function save(sensor: Sensor) {
     const draft = drafts[sensor.name];
