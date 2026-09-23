@@ -6,6 +6,7 @@ import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import type { Schicht } from '@coded-aesthetics/din4023/profile';
 import type { QueuedComment } from '../hooks/useCommentQueue';
 import { formatNumber, isNoValue } from '../utils/format';
+import { CommentCard } from './CommentCard';
 
 export type ViewTab = 'messwerte' | 'vorgabe' | 'kommentare';
 
@@ -143,109 +144,6 @@ function buildSensorLookup(sensors: SensorDef[]): Map<string, SensorDef> {
 // ---------------------------------------------------------------------------
 // Comment helpers & component
 // ---------------------------------------------------------------------------
-
-const COMMENT_STATUS: Record<QueuedComment['status'], { label: string; color: string }> = {
-  transcribing: { label: 'Transkribiert...', color: '#e6a700' },
-  ready: { label: 'Bereit', color: '#4a90d9' },
-  sending: { label: 'Sendet...', color: '#4a90d9' },
-  sent: { label: 'Gesendet', color: '#4caf50' },
-  error: { label: 'Fehler', color: '#f44336' },
-};
-
-function commentTimeAgo(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000);
-  if (seconds < 60) return 'gerade eben';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `vor ${minutes} Min.`;
-  const hours = Math.floor(minutes / 60);
-  return `vor ${hours} Std.`;
-}
-
-function CommentCard({
-  item, onEdit, onDelete, onRetry,
-}: {
-  item: QueuedComment;
-  onEdit: (id: string, text: string) => void;
-  onDelete: (id: string) => void;
-  onRetry: (id: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [editValue, setEditValue] = useState('');
-  const status = COMMENT_STATUS[item.status];
-
-  return (
-    <div style={commentStyles.card}>
-      <div style={commentStyles.cardHeader}>
-        <span style={commentStyles.timeAgo}>{commentTimeAgo(item.createdAt)}</span>
-        <div style={{ ...commentStyles.statusBadge, backgroundColor: status.color + '22', color: status.color }}>
-          <span style={{ ...commentStyles.statusDot, backgroundColor: status.color }} />
-          {status.label}
-        </div>
-      </div>
-
-      {editing ? (
-        <div>
-          <textarea
-            value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
-            style={commentStyles.textarea}
-            autoFocus
-          />
-          <div style={commentStyles.actionRow}>
-            <button
-              onClick={() => { onEdit(item.id, editValue); setEditing(false); }}
-              style={{ ...commentStyles.actionButton, ...commentStyles.saveButton }}
-            >
-              Speichern
-            </button>
-            <button
-              onClick={() => setEditing(false)}
-              style={{ ...commentStyles.actionButton, ...commentStyles.cancelButton }}
-            >
-              Abbrechen
-            </button>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div style={{
-            ...commentStyles.textContent,
-            ...(item.status === 'transcribing' ? commentStyles.textTranscribing : {}),
-          }}>
-            {item.text || '...'}
-          </div>
-          {item.errorMessage && (
-            <div style={commentStyles.errorMessage}>{item.errorMessage}</div>
-          )}
-          <div style={commentStyles.actionRow}>
-            {item.status !== 'transcribing' && item.status !== 'sending' && (
-              <button
-                onClick={() => { setEditValue(item.text); setEditing(true); }}
-                style={{ ...commentStyles.actionButton, ...commentStyles.editButton }}
-              >
-                Bearbeiten
-              </button>
-            )}
-            {item.status === 'error' && (
-              <button
-                onClick={() => onRetry(item.id)}
-                style={{ ...commentStyles.actionButton, ...commentStyles.retryButton }}
-              >
-                Erneut senden
-              </button>
-            )}
-            <button
-              onClick={() => onDelete(item.id)}
-              style={{ ...commentStyles.actionButton, ...commentStyles.deleteButton }}
-            >
-              Löschen
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -574,7 +472,7 @@ export function ElementDetail({ elementName, readings, vorgaben, activeTab, setA
                   <div style={styles.hintText}>Sage „Kommentar" um einen Kommentar zu diktieren</div>
                 </div>
               ) : (
-                <div style={commentStyles.list}>
+                <div style={commentListStyle}>
                   {elementComments.map((item) => (
                     <CommentCard
                       key={item.id}
@@ -969,106 +867,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-const commentStyles = {
-  list: {
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: '1rem',
-    padding: '1rem 0',
-  },
-  card: {
-    backgroundColor: '#1a2744',
-    borderRadius: '10px',
-    padding: '1rem 1.25rem',
-    borderLeft: '4px solid #1976d2',
-  },
-  cardHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '0.75rem',
-  },
-  timeAgo: {
-    fontSize: '0.9rem',
-    color: '#8899aa',
-  },
-  statusBadge: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.4rem',
-    padding: '0.25rem 0.75rem',
-    borderRadius: '12px',
-    fontSize: '0.85rem',
-    fontWeight: 600,
-  },
-  statusDot: {
-    width: '8px',
-    height: '8px',
-    borderRadius: '50%',
-  },
-  textContent: {
-    fontSize: '1rem',
-    color: '#ffffff',
-    lineHeight: 1.5,
-    marginBottom: '0.75rem',
-    whiteSpace: 'pre-wrap' as const,
-  },
-  textTranscribing: {
-    fontStyle: 'italic' as const,
-    color: '#aabbcc',
-  },
-  errorMessage: {
-    fontSize: '0.9rem',
-    color: '#f44336',
-    marginBottom: '0.75rem',
-  },
-  textarea: {
-    width: '100%',
-    minHeight: '100px',
-    backgroundColor: '#0f1a2e',
-    color: '#ffffff',
-    border: '1px solid #2a3f5f',
-    borderRadius: '8px',
-    padding: '0.75rem',
-    fontSize: '1rem',
-    fontFamily: 'inherit',
-    resize: 'vertical' as const,
-    marginBottom: '0.75rem',
-  },
-  actionRow: {
-    display: 'flex',
-    gap: '0.75rem',
-    flexWrap: 'wrap' as const,
-  },
-  actionButton: {
-    minHeight: '48px',
-    minWidth: '120px',
-    padding: '0.75rem 1.25rem',
-    fontSize: '1rem',
-    fontWeight: 600,
-    border: 'none',
-    borderRadius: '8px',
-    cursor: 'pointer',
-    transition: 'opacity 0.2s',
-  },
-  editButton: {
-    backgroundColor: '#1976d2',
-    color: '#ffffff',
-  },
-  saveButton: {
-    backgroundColor: '#4caf50',
-    color: '#ffffff',
-  },
-  cancelButton: {
-    backgroundColor: '#556677',
-    color: '#ffffff',
-  },
-  retryButton: {
-    backgroundColor: '#ff9800',
-    color: '#ffffff',
-  },
-  deleteButton: {
-    backgroundColor: '#f44336',
-    color: '#ffffff',
-  },
+const commentListStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-md)',
+  padding: 'var(--space-md) 0',
 };
