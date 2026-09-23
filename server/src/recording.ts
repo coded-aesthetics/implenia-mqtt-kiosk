@@ -106,30 +106,108 @@ export async function beginRecording(elementName: string): Promise<{ sessionId: 
 
   const sessionId = createSession(elementName, JSON.stringify(sensorMapJson));
   ingestion.startRecording(sessionId, sensorMap);
-
-  if (config.LOG_SENSOR_UPLOAD) {
-    const logMapping = sensorMap.get(LOG_SENSOR_NAME);
-    if (logMapping) {
-      unsubscribeLog = onLogEntry(config.LOG_SENSOR_LEVEL, (entry: LogEntry) => {
-        queueMicrotask(() => {
-          try {
-            insertSessionReading(
-              sessionId,
-              LOG_SENSOR_NAME,
-              logMapping.sensorId,
-              logMapping.sensorType,
-              null,
-              JSON.stringify({ l: entry.level, m: entry.module, msg: entry.msg }),
-            );
-          } catch {}
-        });
-      });
-      log.info('Log sensor upload enabled for session %d', sessionId);
-    }
-  }
+  attachLogSensor(sessionId, sensorMap);
 
   log.info('Started session %d for "%s" with %d sensors', sessionId, elementName, sensorMap.size);
   return { sessionId };
+}
+
+/**
+ * Route log entries into the session so they are uploaded with it.
+ *
+ * Shared by starting and resuming: a restart that re-attached the readings but
+ * not the log sensor would drop exactly the diagnostics explaining why the
+ * kiosk restarted in the first place.
+ */
+function attachLogSensor(sessionId: number, sensorMap: Map<string, SensorMapEntry>): void {
+  if (!config.LOG_SENSOR_UPLOAD) return;
+
+  const logMapping = sensorMap.get(LOG_SENSOR_NAME);
+  if (!logMapping) return;
+
+  // Defensive: two subscriptions would record every entry twice.
+  if (unsubscribeLog) unsubscribeLog();
+
+  unsubscribeLog = onLogEntry(config.LOG_SENSOR_LEVEL, (entry: LogEntry) => {
+    queueMicrotask(() => {
+      try {
+        insertSessionReading(
+          sessionId,
+          LOG_SENSOR_NAME,
+          logMapping.sensorId,
+          logMapping.sensorType,
+          null,
+          JSON.stringify({ l: entry.level, m: entry.module, msg: entry.msg }),
+        );
+      } catch {}
+    });
+  });
+  log.info('Log sensor upload enabled for session %d', sessionId);
+}
+
+/**
+ * The persisted sensor map, back in the shape the ingestion layer wants.
+ *
+ * Tolerant of a damaged map on purpose. Readings whose sensor is missing are
+ * still recorded, just without a sensor id — kept locally and not uploadable,
+ * which a technician can still export and fix. Refusing to resume would
+ * instead record nothing at all for the rest of the element, which is the
+ * outcome this whole path exists to prevent.
+ */
+function parseSensorMap(json: string): Map<string, SensorMapEntry> {
+  const map = new Map<string, SensorMapEntry>();
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    log.error('Session sensor map is not valid JSON — resuming without sensor ids');
+    return map;
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    log.error('Session sensor map is not an object — resuming without sensor ids');
+    return map;
+  }
+
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const entry = value as { sensorId?: unknown; sensorType?: unknown };
+    if (typeof entry?.sensorId === 'string' && typeof entry?.sensorType === 'string') {
+      map.set(key, { sensorId: entry.sensorId, sensorType: entry.sensorType });
+    }
+  }
+  return map;
+}
+
+/**
+ * Re-attach the live recording to a session still open in the database.
+ *
+ * PM2 restarts the kiosk mid-element — on a crash, on a power cut, and when
+ * someone taps "Installieren & neustarten". Without this the session row stays
+ * open while nothing is attached to it: `insertBuffer` and the WebSocket
+ * broadcast both run *before* the recording check in `onReading`, so the bar
+ * keeps reading "Aufzeichnung läuft" and the tiles keep ticking while
+ * `insertSessionReading` is never called. The worker sees a healthy screen and
+ * uploads an element missing everything after the restart.
+ *
+ * The sensor map is rebuilt from `recording_sessions.sensor_map` rather than
+ * re-fetched: the Implenia API is exactly what is unavailable on a site that
+ * has lost connectivity, and a resume that depended on it would fail where it
+ * is needed most. `startRecording()` restores the Rohrwechsel phase and pipe
+ * count from `drill_state` itself, so clipping survives the restart too.
+ */
+export function resumeRecording(): { sessionId: number } | null {
+  const session = getActiveSession();
+  if (!session) return null;
+
+  const sensorMap = parseSensorMap(session.sensor_map);
+  ingestion.startRecording(session.id, sensorMap);
+  attachLogSensor(session.id, sensorMap);
+
+  log.info(
+    'Resumed session %d for "%s" with %d sensors',
+    session.id, session.element_name, sensorMap.size,
+  );
+  return { sessionId: session.id };
 }
 
 export function endRecording(): { sessionId: number } {

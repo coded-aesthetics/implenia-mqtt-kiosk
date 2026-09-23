@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { updater } from '../updater.js';
 import { createLogger } from '../logger.js';
+import { getActiveSession } from '../db.js';
 
 const log = createLogger('data-routes');
 
@@ -9,6 +10,21 @@ export function registerDataRoutes(app: FastifyInstance): void {
     if (!updater.updateAvailable) {
       return reply.status(404).send({ error: 'No update available' });
     }
+
+    // Applying restarts the process. A recording survives that now — the
+    // session is re-attached on boot — but the seconds the kiosk is down are
+    // still a hole in the measurements, and there is no reason to put one in
+    // the middle of an element when the update can just as well wait.
+    const active = getActiveSession();
+    if (active) {
+      return reply.status(409).send({
+        error:
+          `Das Update startet die App neu. Die Aufzeichnung für „${active.element_name}" ` +
+          'läuft gerade — dabei würden einige Sekunden Messwerte fehlen. Bitte die ' +
+          'Aufzeichnung beenden und das Update danach installieren.',
+      });
+    }
+
     updater.downloadAndApply().catch((err) => {
       log.error(err, 'downloadAndApply error');
     });

@@ -178,6 +178,7 @@ export function App() {
         version={updateAvailable}
         source={updateSource}
         applying={updateApplying}
+        recordingActive={recordingState.active}
       />
       <main style={{
         ...styles.main,
