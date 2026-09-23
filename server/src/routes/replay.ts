@@ -21,7 +21,7 @@ import {
   createSession, getActiveSession, endSession,
   getSessionReadingCount,
 } from '../db.js';
-import { broadcastMessage } from '../websocket.js';
+import { broadcastMessage, setBroadcastSuppressed } from '../websocket.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('replay-routes');
@@ -65,6 +65,10 @@ function endReplaySession(): void {
 }
 
 export function registerReplayRoutes(app: FastifyInstance): void {
+  // Wire broadcast suppression here (dev-only) so websocket.ts stays clean.
+  replaySource.on('fast-forward-start', () => setBroadcastSuppressed(true));
+  replaySource.on('fast-forward-end', () => setBroadcastSuppressed(false));
+
   /**
    * Load a dump file and prepare for replay. Stops any active playback.
    *
