@@ -399,6 +399,13 @@ export function getSessions(): Session[] {
   return getSessionsStmt.all() as Session[];
 }
 
+export function deleteSessionWithReadings(id: number): void {
+  db.transaction(() => {
+    db.prepare('DELETE FROM session_readings WHERE session_id = ?').run(id);
+    db.prepare('DELETE FROM recording_sessions WHERE id = ?').run(id);
+  })();
+}
+
 const getDrillStateStmt = db.prepare(
   'SELECT drill_state FROM recording_sessions WHERE id = ?'
 );

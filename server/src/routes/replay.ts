@@ -1,15 +1,13 @@
 /**
- * Replay control routes — dev-only.
+ * Replay control routes.
  *
  * Lets a developer load a captured MQTT dump and replay it through the real
- * pipeline at various speeds, with seek support. Gated behind
- * NODE_ENV === 'development' — never registered in production.
+ * pipeline at various speeds, with seek support. Registered exclusively by
+ * the standalone replay server (`replay-server.ts`), never by the production
+ * kiosk.
  *
- * Upload is disabled structurally: a replay runs against a throwaway DB
- * (DB_PATH pointed at :memory: or a temp file), so there is no upload session
- * and no API credentials to reach. The routes additionally refuse to start
- * a recording via the Implenia API — replay sessions use an offline
- * recording path that does not contact the platform.
+ * The replay server runs against :memory: SQLite, so there is no upload
+ * session and no API credentials to reach.
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -19,7 +17,7 @@ import { replaySource, type ReplaySpeed } from '../replay-source.js';
 import { ingestion, type SensorMapEntry } from '../ingestion.js';
 import {
   createSession, getActiveSession, endSession,
-  getSessionReadingCount,
+  getSessionReadingCount, deleteSessionWithReadings,
 } from '../db.js';
 import { broadcastMessage, setBroadcastSuppressed } from '../websocket.js';
 import { createLogger } from '../logger.js';
@@ -64,6 +62,15 @@ function endReplaySession(): void {
   }
 }
 
+function discardReplaySession(): void {
+  const session = getActiveSession();
+  if (session) {
+    ingestion.stopRecording();
+    deleteSessionWithReadings(session.id);
+    log.info('Discarded replay session %d', session.id);
+  }
+}
+
 export function registerReplayRoutes(app: FastifyInstance): void {
   // Wire broadcast suppression here (dev-only) so websocket.ts stays clean.
   replaySource.on('fast-forward-start', () => setBroadcastSuppressed(true));
@@ -77,7 +84,7 @@ export function registerReplayRoutes(app: FastifyInstance): void {
   app.post<{ Body: { file?: string } }>('/api/replay/load', async (request, reply) => {
     const filePath = request.body?.file;
     if (!filePath) {
-      return reply.status(400).send({ error: 'file is required' });
+      return reply.status(400).send({ error: 'Dateipfad fehlt — bitte Pfad zur Dump-Datei angeben' });
     }
 
     // The server runs from server/, but dump files live at the project root
@@ -89,7 +96,7 @@ export function registerReplayRoutes(app: FastifyInstance): void {
       : path.resolve(projectRoot, filePath);
 
     if (!fs.existsSync(resolved)) {
-      return reply.status(404).send({ error: `File not found: ${resolved}` });
+      return reply.status(404).send({ error: `Datei nicht gefunden: ${resolved}` });
     }
 
     // Stop any running replay and session
@@ -97,9 +104,6 @@ export function registerReplayRoutes(app: FastifyInstance): void {
     endReplaySession();
 
     const result = replaySource.load(resolved);
-
-    // Swap ingestion to replay source
-    ingestion.setSource(replaySource);
 
     return reply.send({
       ...result,
@@ -111,7 +115,7 @@ export function registerReplayRoutes(app: FastifyInstance): void {
   /** Start or resume playback. Starts a recording session if needed. */
   app.post('/api/replay/play', async (_request, reply) => {
     if (replaySource.state.totalMessages === 0) {
-      return reply.status(400).send({ error: 'No dump loaded — POST /api/replay/load first' });
+      return reply.status(400).send({ error: 'Kein Dump geladen — zuerst eine Datei laden' });
     }
 
     // Ensure a recording session exists so readings are captured
@@ -133,7 +137,7 @@ export function registerReplayRoutes(app: FastifyInstance): void {
   app.post<{ Body: { speed?: unknown } }>('/api/replay/speed', async (request, reply) => {
     const speed = request.body?.speed;
     if (!isValidSpeed(speed)) {
-      return reply.status(400).send({ error: `speed must be one of: ${VALID_SPEEDS.join(', ')}` });
+      return reply.status(400).send({ error: `Geschwindigkeit muss einer der folgenden Werte sein: ${VALID_SPEEDS.join(', ')}` });
     }
     replaySource.setSpeed(speed);
     return reply.send(replaySource.state);
@@ -150,11 +154,11 @@ export function registerReplayRoutes(app: FastifyInstance): void {
   app.post<{ Body: { offsetMs?: number } }>('/api/replay/seek', async (request, reply) => {
     const offsetMs = request.body?.offsetMs;
     if (typeof offsetMs !== 'number' || offsetMs < 0) {
-      return reply.status(400).send({ error: 'offsetMs must be a non-negative number' });
+      return reply.status(400).send({ error: 'offsetMs muss eine nicht-negative Zahl sein' });
     }
 
     if (replaySource.state.totalMessages === 0) {
-      return reply.status(400).send({ error: 'No dump loaded — POST /api/replay/load first' });
+      return reply.status(400).send({ error: 'Kein Dump geladen — zuerst eine Datei laden' });
     }
 
     const wasPlaying = replaySource.state.playing;
@@ -162,8 +166,8 @@ export function registerReplayRoutes(app: FastifyInstance): void {
     // 1. Stop playback
     replaySource.pause();
 
-    // 2. End the current session (clears ingestion state)
-    endReplaySession();
+    // 2. Discard the current session and its readings (seek replays from 0)
+    discardReplaySession();
 
     // 3. Reset the source to position 0
     replaySource.reset();
@@ -173,7 +177,7 @@ export function registerReplayRoutes(app: FastifyInstance): void {
 
     // 5. Fast-forward to the target. During fast-forward, broadcast is
     //    suppressed (websocket.ts listens to fast-forward-start/end events).
-    const count = replaySource.fastForwardTo(offsetMs);
+    const count = await replaySource.fastForwardTo(offsetMs);
 
     // 6. Resume playback if it was running before seek
     if (wasPlaying) {

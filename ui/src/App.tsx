@@ -16,8 +16,6 @@ import { TopicAssignment } from './components/TopicAssignment';
 import { CalibrationPage } from './components/CalibrationPage';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
-import { useReplay } from './hooks/useReplay';
-import { ReplayPanel } from './components/ReplayPanel';
 import type { ViewTab } from './components/ElementDetail';
 
 export function App() {
@@ -62,9 +60,6 @@ export function App() {
   useEffect(() => {
     if (needsSetupRedirect(gate)) navigate('setup');
   }, [gate.onSetupRoute, gate.settled, gate.hasError, gate.verfahren]);
-
-  // Replay panel (dev-only). Polls /api/replay/state while dev mode is on.
-  const replay = useReplay(devMode);
 
   // Comment queue (background whisper transcription + API posting)
   const commentQueue = useCommentQueue();
@@ -193,19 +188,6 @@ export function App() {
       }}>
         {content}
       </main>
-      {devMode && (
-        <ReplayPanel
-          state={replay.state}
-          loading={replay.loading}
-          error={replay.error}
-          onPlay={replay.play}
-          onPause={replay.pause}
-          onStop={replay.stop}
-          onSetSpeed={replay.setSpeed}
-          onSeek={replay.seek}
-          onLoad={replay.load}
-        />
-      )}
       <RecordingBar
         currentPage={route.page}
         elementName={route.params.name}

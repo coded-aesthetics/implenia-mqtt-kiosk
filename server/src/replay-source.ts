@@ -174,24 +174,31 @@ export class ReplaySource extends DataSource {
    * The caller suppresses broadcast by listening to the `fast-forward-start`
    * and `fast-forward-end` events. Returns the number of messages emitted.
    */
-  fastForwardTo(targetOffsetMs: number): number {
+  async fastForwardTo(targetOffsetMs: number): Promise<number> {
     if (this.messages.length === 0) return 0;
 
     this._fastForwarding = true;
     this.emit('fast-forward-start');
     let count = 0;
+    const BATCH_SIZE = 5000;
 
-    while (this.position < this.messages.length) {
-      const msg = this.messages[this.position];
-      if (msg.offsetMs > targetOffsetMs) break;
+    try {
+      while (this.position < this.messages.length) {
+        const msg = this.messages[this.position];
+        if (msg.offsetMs > targetOffsetMs) break;
 
-      this.emitReading(msg);
-      this.position++;
-      count++;
+        this.emitReading(msg);
+        this.position++;
+        count++;
+
+        if (count % BATCH_SIZE === 0) {
+          await new Promise<void>((r) => setImmediate(r));
+        }
+      }
+    } finally {
+      this._fastForwarding = false;
+      this.emit('fast-forward-end');
     }
-
-    this._fastForwarding = false;
-    this.emit('fast-forward-end');
     log.info(
       'Fast-forwarded %d messages to offset %ds',
       count, Math.round(targetOffsetMs / 1000),
