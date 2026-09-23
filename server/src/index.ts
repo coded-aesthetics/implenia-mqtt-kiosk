@@ -15,7 +15,7 @@ import { registerConfigRoutes } from './routes/config.js';
 import { registerImpleniaRoutes } from './routes/implenia.js';
 import { registerRecordingRoutes } from './routes/recording.js';
 import { registerDeviceRoutes } from './routes/devices.js';
-import { ensureLogSensor } from './recording.js';
+import { ensureLogSensor, resumeRecording } from './recording.js';
 import { registerLogRoutes } from './routes/logs.js';
 import { registerVerfahrenRoutes } from './routes/verfahren.js';
 import { registerTranscribeRoutes } from './routes/transcribe.js';
@@ -60,6 +60,14 @@ async function start(): Promise<void> {
   // started by ingestion — deviceManager is owned by the serial source, not
   // started unconditionally, so an MQTT kiosk does not also poll USB ports.
   connectivity.start();
+
+  // Before the source starts emitting, so a reading that arrives in the first
+  // milliseconds is not dropped. A session left open by a restart mid-element
+  // is otherwise never re-attached: the bar keeps showing "Aufzeichnung" and
+  // the tiles keep updating while nothing is written.
+  const resumed = resumeRecording();
+  if (resumed) log.info('Recording resumed after restart (session %d)', resumed.sessionId);
+
   ingestion.start();
   updater.start();
   ensureLogSensor().catch(() => {});

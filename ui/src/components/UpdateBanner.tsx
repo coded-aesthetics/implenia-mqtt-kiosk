@@ -1,12 +1,17 @@
+import { useState } from 'react';
 import type { UpdateSource } from '../hooks/useWebSocket';
 
 interface Props {
   version: string | null;
   source: UpdateSource | null;
   applying: boolean;
+  /** Installing restarts the app, so it waits until the element is finished. */
+  recordingActive: boolean;
 }
 
-export function UpdateBanner({ version, source, applying }: Props) {
+export function UpdateBanner({ version, source, applying, recordingActive }: Props) {
+  const [error, setError] = useState<string | null>(null);
+
   if (import.meta.env.DEV) return null;
   if (!version && !applying) return null;
 
@@ -22,19 +27,38 @@ export function UpdateBanner({ version, source, applying }: Props) {
 
   const sourceLabel = source === 'usb' ? ' (USB)' : '';
 
+  async function install() {
+    setError(null);
+    try {
+      const res = await fetch('/api/update', { method: 'POST' });
+      // The server refuses while a recording is running. Showing its reason
+      // beats a button that silently does nothing.
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(body.error ?? `Das Update konnte nicht gestartet werden (Fehler ${res.status}).`);
+      }
+    } catch {
+      setError('Das Update konnte nicht gestartet werden. Bitte erneut versuchen.');
+    }
+  }
+
   return (
     <div style={styles.banner}>
       <span style={styles.text}>
         Version {version} verfügbar{sourceLabel}.
       </span>
-      <button
-        style={styles.button}
-        onClick={() => {
-          fetch('/api/update', { method: 'POST' });
-        }}
-      >
-        Installieren & neustarten
-      </button>
+      {/* Never offered mid-element: installing restarts the app, which would
+          punch a hole of missing measurements into the running recording. */}
+      {recordingActive ? (
+        <span style={styles.text}>
+          Wird nach dem Beenden der Aufzeichnung installiert.
+        </span>
+      ) : (
+        <button style={styles.button} onClick={install}>
+          Installieren &amp; neustarten
+        </button>
+      )}
+      {error && <span style={styles.text}>{error}</span>}
     </div>
   );
 }
