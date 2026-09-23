@@ -75,7 +75,7 @@ describe('normalizeTopics', () => {
 
 // describeBrokerError lives with the route that uses it, but its whole job is
 // keeping library English out of the technician's screen — worth pinning.
-import { describeBrokerError } from './routes/config.js';
+import { describeBrokerError } from './routes/config-mqtt.js';
 
 describe('describeBrokerError', () => {
   const url = 'mqtt://192.168.2.1:1883';
