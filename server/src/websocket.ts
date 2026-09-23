@@ -9,10 +9,23 @@ import type { DeviceFrame } from './simulator-source.js';
 import { getRecordingState } from './recording.js';
 import { getSessionReadingCount } from './db.js';
 import type { DrillStatus } from './rohrwechsel.js';
+import { replaySource } from './replay-source.js';
 
 const clients = new Set<WebSocket>();
 
+/**
+ * Suppressed during a replay fast-forward (seek). The fast-forward replays
+ * thousands of messages synchronously; broadcasting each one would flood every
+ * WebSocket client and freeze the UI. The replay source emits
+ * `fast-forward-start` / `fast-forward-end` to toggle this.
+ */
+let broadcastSuppressed = false;
+
+replaySource.on('fast-forward-start', () => { broadcastSuppressed = true; });
+replaySource.on('fast-forward-end', () => { broadcastSuppressed = false; });
+
 function broadcast(data: Record<string, unknown>): void {
+  if (broadcastSuppressed) return;
   const message = JSON.stringify(data);
   for (const ws of clients) {
     if (ws.readyState === 1) {

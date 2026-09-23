@@ -21,6 +21,7 @@ import { registerVerfahrenRoutes } from './routes/verfahren.js';
 import { registerTranscribeRoutes } from './routes/transcribe.js';
 import { isWhisperAvailable } from './whisper.js';
 import { close as closeDb } from './db.js';
+import { registerReplayRoutes } from './routes/replay.js';
 
 const log = createLogger('server');
 
@@ -49,6 +50,10 @@ async function start(): Promise<void> {
   registerLogRoutes(app);
   registerVerfahrenRoutes(app);
   registerTranscribeRoutes(app);
+  if (config.NODE_ENV === 'development') {
+    registerReplayRoutes(app);
+    log.info('Replay routes registered (dev mode)');
+  }
   setupWebSocket(app);
 
   // SPA fallback: serve index.html for unmatched routes

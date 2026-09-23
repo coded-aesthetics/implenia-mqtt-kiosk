@@ -1,0 +1,211 @@
+/**
+ * Replay control routes — dev-only.
+ *
+ * Lets a developer load a captured MQTT dump and replay it through the real
+ * pipeline at various speeds, with seek support. Gated behind
+ * NODE_ENV === 'development' — never registered in production.
+ *
+ * Upload is disabled structurally: a replay runs against a throwaway DB
+ * (DB_PATH pointed at :memory: or a temp file), so there is no upload session
+ * and no API credentials to reach. The routes additionally refuse to start
+ * a recording via the Implenia API — replay sessions use an offline
+ * recording path that does not contact the platform.
+ */
+
+import type { FastifyInstance } from 'fastify';
+import path from 'node:path';
+import fs from 'node:fs';
+import { replaySource, type ReplaySpeed } from '../replay-source.js';
+import { ingestion, type SensorMapEntry } from '../ingestion.js';
+import {
+  createSession, getActiveSession, endSession,
+  getSessionReadingCount,
+} from '../db.js';
+import { broadcastMessage } from '../websocket.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('replay-routes');
+
+const VALID_SPEEDS: ReplaySpeed[] = [1, 10, 60, 'max'];
+
+function isValidSpeed(v: unknown): v is ReplaySpeed {
+  return v === 1 || v === 10 || v === 60 || v === 'max';
+}
+
+/**
+ * Start a replay recording session without contacting the Implenia API.
+ *
+ * The real `beginRecording` fetches sensor definitions from the platform. A
+ * replay session uses a static sensor map so it works fully offline: the
+ * readings land in SQLite with their topics, but without sensor ids — which
+ * is exactly how a live session handles an unresolved topic. The data is
+ * still visible in the UI, exportable, and exercises the full pipeline.
+ */
+function startReplaySession(elementName: string): number {
+  const existing = getActiveSession();
+  if (existing) {
+    // Reuse the existing session rather than failing
+    return existing.id;
+  }
+
+  const sensorMap = new Map<string, SensorMapEntry>();
+  const sessionId = createSession(elementName, JSON.stringify({}));
+  ingestion.startRecording(sessionId, sensorMap);
+  log.info('Started replay session %d for "%s"', sessionId, elementName);
+  return sessionId;
+}
+
+function endReplaySession(): void {
+  const session = getActiveSession();
+  if (session) {
+    ingestion.stopRecording();
+    endSession(session.id);
+    log.info('Ended replay session %d', session.id);
+  }
+}
+
+export function registerReplayRoutes(app: FastifyInstance): void {
+  /**
+   * Load a dump file and prepare for replay. Stops any active playback.
+   *
+   * Body: { file: string } — absolute path, or relative to the project root.
+   */
+  app.post<{ Body: { file?: string } }>('/api/replay/load', async (request, reply) => {
+    const filePath = request.body?.file;
+    if (!filePath) {
+      return reply.status(400).send({ error: 'file is required' });
+    }
+
+    const resolved = path.isAbsolute(filePath)
+      ? filePath
+      : path.resolve(process.cwd(), filePath);
+
+    if (!fs.existsSync(resolved)) {
+      return reply.status(404).send({ error: `File not found: ${resolved}` });
+    }
+
+    // Stop any running replay and session
+    replaySource.stop();
+    endReplaySession();
+
+    const result = replaySource.load(resolved);
+
+    // Swap ingestion to replay source
+    ingestion.setSource(replaySource);
+
+    return reply.send({
+      ...result,
+      file: resolved,
+      durationFormatted: formatDuration(result.durationMs),
+    });
+  });
+
+  /** Start or resume playback. Starts a recording session if needed. */
+  app.post('/api/replay/play', async (_request, reply) => {
+    if (replaySource.state.totalMessages === 0) {
+      return reply.status(400).send({ error: 'No dump loaded — POST /api/replay/load first' });
+    }
+
+    // Ensure a recording session exists so readings are captured
+    const sessionId = startReplaySession('replay');
+    replaySource.start();
+
+    broadcastMessage({ type: 'recording-state', active: true, sessionId, elementName: 'replay' });
+
+    return reply.send(replaySource.state);
+  });
+
+  /** Pause playback (keeps position). */
+  app.post('/api/replay/pause', async (_request, reply) => {
+    replaySource.pause();
+    return reply.send(replaySource.state);
+  });
+
+  /** Set playback speed. Body: { speed: 1 | 10 | 60 | "max" } */
+  app.post<{ Body: { speed?: unknown } }>('/api/replay/speed', async (request, reply) => {
+    const speed = request.body?.speed;
+    if (!isValidSpeed(speed)) {
+      return reply.status(400).send({ error: `speed must be one of: ${VALID_SPEEDS.join(', ')}` });
+    }
+    replaySource.setSpeed(speed);
+    return reply.send(replaySource.state);
+  });
+
+  /**
+   * Seek to a point in the dump. Body: { offsetMs: number }
+   *
+   * Resets the pipeline and fast-forwards from 0 to the target offset at max
+   * speed with broadcast suppressed. This is the only correct approach: the
+   * pipeline is path-dependent (cumulative volumes, clamp state machine), so
+   * the state at any point depends on every message before it.
+   */
+  app.post<{ Body: { offsetMs?: number } }>('/api/replay/seek', async (request, reply) => {
+    const offsetMs = request.body?.offsetMs;
+    if (typeof offsetMs !== 'number' || offsetMs < 0) {
+      return reply.status(400).send({ error: 'offsetMs must be a non-negative number' });
+    }
+
+    if (replaySource.state.totalMessages === 0) {
+      return reply.status(400).send({ error: 'No dump loaded — POST /api/replay/load first' });
+    }
+
+    const wasPlaying = replaySource.state.playing;
+
+    // 1. Stop playback
+    replaySource.pause();
+
+    // 2. End the current session (clears ingestion state)
+    endReplaySession();
+
+    // 3. Reset the source to position 0
+    replaySource.reset();
+
+    // 4. Start a fresh recording session
+    const sessionId = startReplaySession('replay');
+
+    // 5. Fast-forward to the target. During fast-forward, broadcast is
+    //    suppressed (websocket.ts listens to fast-forward-start/end events).
+    const count = replaySource.fastForwardTo(offsetMs);
+
+    // 6. Resume playback if it was running before seek
+    if (wasPlaying) {
+      replaySource.start();
+    }
+
+    broadcastMessage({ type: 'recording-state', active: true, sessionId, elementName: 'replay' });
+
+    return reply.send({
+      ...replaySource.state,
+      seeked: true,
+      messagesReplayed: count,
+    });
+  });
+
+  /** Stop playback and end the session. */
+  app.post('/api/replay/stop', async (_request, reply) => {
+    replaySource.stop();
+    endReplaySession();
+    broadcastMessage({
+      type: 'recording-state', active: false, sessionId: null, elementName: null,
+    });
+    return reply.send(replaySource.state);
+  });
+
+  /** Current replay state. */
+  app.get('/api/replay/state', async (_request, reply) => {
+    const session = getActiveSession();
+    return reply.send({
+      ...replaySource.state,
+      sessionId: session?.id ?? null,
+      readingCount: session ? getSessionReadingCount(session.id) : 0,
+    });
+  });
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours}h ${minutes}m ${seconds}s`;
+}

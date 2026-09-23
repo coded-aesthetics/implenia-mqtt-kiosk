@@ -82,7 +82,7 @@ export class DataIngestion extends EventEmitter {
   private started = false;
 
   private readonly onReading = (reading: SensorReading): void => {
-    insertBuffer(reading.topic, reading.payload);
+    insertBuffer(reading.topic, reading.payload, reading.receivedAt);
 
     // Overrides and the shipped topic map resolve boxes whose topic names
     // differ from the sensor names; an unresolved topic still gets stored,
@@ -106,7 +106,7 @@ export class DataIngestion extends EventEmitter {
         mapping?.sensorType ?? null,
         valueNumeric,
         valueText,
-        { valueRaw: corrected.valueRaw, phase: corrected.phase, clipped: corrected.clipped },
+        { receivedAt: reading.receivedAt, valueRaw: corrected.valueRaw, phase: corrected.phase, clipped: corrected.clipped },
       );
     }
   };

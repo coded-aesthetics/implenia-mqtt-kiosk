@@ -52,6 +52,8 @@ export interface SessionReadingRow {
 
 /** Options for a recorded reading beyond its value. All optional. */
 export interface SessionReadingOptions {
+  /** Timestamp to record. Defaults to Date.now() — overridden during replay. */
+  receivedAt?: number;
   /** The uncorrected value, when `valueNumeric` carries a corrected one. */
   valueRaw?: number | null;
   /** Which drilling phase this reading was taken in. */
@@ -304,8 +306,8 @@ const deleteMetaStmt = db.prepare('DELETE FROM meta WHERE key = ?');
 
 // --- Buffer functions ---
 
-export function insertBuffer(topic: string, payload: string): void {
-  insertBufferStmt.run(topic, payload, Date.now());
+export function insertBuffer(topic: string, payload: string, receivedAt?: number): void {
+  insertBufferStmt.run(topic, payload, receivedAt ?? Date.now());
 }
 
 export function pruneBuffer(maxAgeMs = 86_400_000): void {
@@ -489,7 +491,7 @@ export function insertSessionReading(
     sensorType,
     valueNumeric,
     valueText,
-    Date.now(),
+    options.receivedAt ?? Date.now(),
     options.phase ?? 'bohren',
     options.clipped ? CLIPPED_STATUS : 'pending',
     options.valueRaw ?? null,
