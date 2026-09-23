@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { usePolledJson } from '../hooks/usePolledJson';
 
 /**
  * Broker address and subscription filter. Used by the setup wizard and by the
@@ -46,19 +47,11 @@ export function MqttSettings({ onSaved }: Props) {
       });
   }, []);
 
-  useEffect(() => {
-    if (!saved) return;
-    let cancelled = false;
-    const poll = () => {
-      fetch('/api/config/mqtt/topics')
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => { if (!cancelled && d) setTopicCount(d.count); })
-        .catch(() => {});
-    };
-    poll();
-    const timer = setInterval(poll, 3000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [saved]);
+  usePolledJson<{ count: number }>(
+    saved ? '/api/config/mqtt/topics' : null,
+    3000,
+    (d) => setTopicCount(d.count),
+  );
 
   function edited<T>(setter: (v: T) => void) {
     return (v: T) => { setter(v); setTestResult(null); setSaved(false); };

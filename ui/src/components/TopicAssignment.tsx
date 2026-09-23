@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { navigate } from '../hooks/useHashRouter';
+import { usePolledJson } from '../hooks/usePolledJson';
 import { formatNumber } from '../utils/format';
 
 /**
@@ -68,18 +69,11 @@ export function TopicAssignment() {
 
   // Values must move while the machine moves — that is what makes an opaque
   // topic identifiable at all.
-  useEffect(() => {
-    let cancelled = false;
-    const poll = () => {
-      fetch('/api/config/mqtt/topics')
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => { if (!cancelled && d) setTopics(d.topics ?? []); })
-        .catch(() => {});
-    };
-    poll();
-    const timer = setInterval(poll, 1500);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
+  usePolledJson<{ topics?: ObservedTopic[] }>(
+    '/api/config/mqtt/topics',
+    1500,
+    (d) => setTopics(d.topics ?? []),
+  );
 
   const boundTopics = new Map(
     sensors.filter((s) => s.topic).map((s) => [s.topic as string, s]),

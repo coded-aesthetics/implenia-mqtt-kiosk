@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { formatNumber } from '../utils/format';
+import { usePolledJson } from '../hooks/usePolledJson';
 
 /**
  * Rohrverlängerung settings.
@@ -64,22 +65,11 @@ export function RohrwechselSettings() {
   // Watch the clamp so the thresholds can be set against real values. The
   // server does the topic matching — it owns that rule, and the recorder has
   // to be reading the same topic this screen is showing.
-  useEffect(() => {
-    if (!clampTopic.trim()) return;
-    let cancelled = false;
-    const poll = () => {
-      fetch(`/api/config/rohrwechsel/live?topic=${encodeURIComponent(clampTopic)}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d: { raw?: number | null } | null) => {
-          if (cancelled) return;
-          setLive(typeof d?.raw === 'number' && Number.isFinite(d.raw) ? d.raw : null);
-        })
-        .catch(() => {});
-    };
-    poll();
-    const timer = setInterval(poll, 2000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [clampTopic]);
+  usePolledJson<{ raw?: number | null }>(
+    clampTopic.trim() ? `/api/config/rohrwechsel/live?topic=${encodeURIComponent(clampTopic)}` : null,
+    2000,
+    (d) => setLive(typeof d.raw === 'number' && Number.isFinite(d.raw) ? d.raw : null),
+  );
 
   function edited<T>(setter: (v: T) => void) {
     return (v: T) => { setter(v); setSaved(false); setError(null); };

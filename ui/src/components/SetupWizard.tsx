@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { navigate } from '../hooks/useHashRouter';
 import { MqttSettings } from './MqttSettings';
+import { usePolledJson } from '../hooks/usePolledJson';
 
 /**
  * First-start setup, shown instead of the whole app until this machine has a
@@ -89,19 +90,15 @@ export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
 
   // Devices are listed on the serial step so the technician can see whether the
   // USB connection is actually up before leaving the wizard.
-  useEffect(() => {
-    if (step !== 'serial') return;
-    let cancelled = false;
-    const poll = () => {
-      fetch('/status')
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => { if (!cancelled && d) setSerialDevices(d.devices ?? []); })
-        .catch(() => { if (!cancelled) setSerialDevices([]); });
-    };
-    poll();
-    const timer = setInterval(poll, 3000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [step]);
+  usePolledJson<{ devices?: SerialDevice[] }>(
+    step === 'serial' ? '/status' : null,
+    3000,
+    (d) => setSerialDevices(d.devices ?? []),
+    // An unreachable server means the list on screen is no longer evidence of
+    // anything, and a stale device is worse here than an empty list: the whole
+    // point of this step is seeing whether the USB connection is actually up.
+    { onError: () => setSerialDevices([]) },
+  );
 
   // Everything the wizard needs to render a step is read back from the server,
   // not carried in component state. A reload — or landing on #/setup/done
