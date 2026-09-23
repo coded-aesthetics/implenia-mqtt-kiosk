@@ -406,6 +406,14 @@ export function deleteSessionWithReadings(id: number): void {
   })();
 }
 
+const clearSessionReadingsStmt = db.prepare(
+  'DELETE FROM session_readings WHERE session_id = ?'
+);
+
+export function clearSessionReadings(id: number): void {
+  clearSessionReadingsStmt.run(id);
+}
+
 const getDrillStateStmt = db.prepare(
   'SELECT drill_state FROM recording_sessions WHERE id = ?'
 );
@@ -867,3 +875,8 @@ export function resetKiosk(): void {
   });
   tx();
 }
+
+// ── Explicit transaction control (replay seek batching) ─────────────────
+
+export function beginTransaction(): void { db.exec('BEGIN'); }
+export function commitTransaction(): void { db.exec('COMMIT'); }

@@ -14,97 +14,42 @@ import { createServer } from 'node:net';
 import mqtt from 'mqtt';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseDump, type DumpMessage } from './mqtt-dump.js';
+import { fileURLToPath } from 'node:url';
+import { ReplaySource, type ReplaySpeed } from './replay-source.js';
+import type { SensorReading } from './data-source.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('replay-server');
 
 const MQTT_PORT = Number(process.env.REPLAY_MQTT_PORT ?? 1884);
 const HTTP_PORT = Number(process.env.REPLAY_PORT ?? 3001);
 
-type ReplaySpeed = 1 | 10 | 60 | 'max';
 const VALID_SPEEDS: ReplaySpeed[] = [1, 10, 60, 'max'];
+const REPLAY_CONTROL_TOPIC = '$replay/control';
 
-// ── State ──────────────────────────────────────────────────────────────
+// ── Playback source ─────────────────────────────────────────────────────
 
-let messages: DumpMessage[] = [];
-let position = 0;
-let speed: ReplaySpeed = 1;
-let playing = false;
-let filePath: string | null = null;
-let timer: ReturnType<typeof setTimeout> | null = null;
+const source = new ReplaySource();
+
 let client: mqtt.MqttClient | null = null;
 
-function getState() {
-  return {
-    file: filePath,
-    totalMessages: messages.length,
-    position,
-    speed,
-    playing,
-    currentOffsetMs: position > 0 ? messages[position - 1].offsetMs : 0,
-    durationMs: messages.length > 0 ? messages[messages.length - 1].offsetMs : 0,
-  };
+source.on('reading', (reading: SensorReading) => {
+  client?.publish(reading.topic, reading.payload);
+});
+
+function publishControl(action: string): Promise<void> {
+  return new Promise((resolve) => {
+    if (!client) { resolve(); return; }
+    client.publish(REPLAY_CONTROL_TOPIC, action, () => resolve());
+  });
 }
 
-// ── Playback engine ────────────────────────────────────────────────────
-
-function stopPlayback() {
-  playing = false;
-  if (timer) { clearTimeout(timer); timer = null; }
-}
-
-function publishMsg(msg: DumpMessage) {
-  client?.publish(msg.topic, msg.payload);
-}
-
-function scheduleNext() {
-  if (!playing || position >= messages.length) {
-    if (position >= messages.length) {
-      playing = false;
-    }
-    return;
-  }
-
-  const msg = messages[position];
-
-  if (speed === 'max') {
-    const BATCH = 1000;
-    let emitted = 0;
-    while (playing && position < messages.length && emitted < BATCH) {
-      publishMsg(messages[position]);
-      position++;
-      emitted++;
-    }
-    if (playing && position < messages.length) {
-      timer = setTimeout(scheduleNext, 0);
-    } else if (position >= messages.length) {
-      playing = false;
-    }
-    return;
-  }
-
-  const prevOffset = position > 0 ? messages[position - 1].offsetMs : msg.offsetMs;
-  const delay = Math.max(0, (msg.offsetMs - prevOffset) / speed);
-
-  timer = setTimeout(() => {
-    if (!playing) return;
-    publishMsg(msg);
-    position++;
-    scheduleNext();
-  }, delay);
-}
-
-// ── MQTT broker (created in start()) ───────────────────────────────────
-
-let aedes: InstanceType<typeof Aedes>;
-let broker: ReturnType<typeof createServer>;
-
-// ── HTTP server (replay control UI + API) ──────────────────────────────
+// ── HTTP server (replay control UI + API) ────────────────────────────────
 
 const app = Fastify();
 
-const uiHtml = fs.readFileSync(
-  path.join(path.dirname(new URL(import.meta.url).pathname), 'replay-ui.html'),
-  'utf-8',
-);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const uiHtml = fs.readFileSync(path.join(__dirname, 'replay-ui.html'), 'utf-8');
 
 app.get('/', async (_req, reply) => reply.type('text/html').send(uiHtml));
 
@@ -119,46 +64,41 @@ app.post<{ Body: { file?: string } }>('/api/replay/load', async (req, reply) => 
     return reply.status(404).send({ error: `Datei nicht gefunden: ${resolved}` });
   }
 
-  stopPlayback();
-  const content = fs.readFileSync(resolved, 'utf-8');
-  messages = parseDump(content);
-  position = 0;
-  filePath = resolved;
+  source.stop();
+  await publishControl('replay-stop');
+  const result = source.load(resolved);
 
-  const durationMs = messages.length > 0 ? messages[messages.length - 1].offsetMs : 0;
-  const totalSec = Math.floor(durationMs / 1000);
+  const totalSec = Math.floor(result.durationMs / 1000);
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
 
   return reply.send({
-    messages: messages.length,
-    durationMs,
+    ...result,
     file: resolved,
     durationFormatted: `${h}h ${m}m ${s}s`,
   });
 });
 
 app.post('/api/replay/play', async (_req, reply) => {
-  if (messages.length === 0) {
+  if (source.state.totalMessages === 0) {
     return reply.status(400).send({ error: 'Kein Dump geladen — zuerst eine Datei laden' });
   }
-  if (!playing) {
-    playing = true;
-    scheduleNext();
-  }
-  return reply.send(getState());
+  await publishControl('replay-start');
+  source.start();
+  return reply.send(source.state);
 });
 
 app.post('/api/replay/pause', async (_req, reply) => {
-  stopPlayback();
-  return reply.send(getState());
+  source.pause();
+  return reply.send(source.state);
 });
 
 app.post('/api/replay/stop', async (_req, reply) => {
-  stopPlayback();
-  position = 0;
-  return reply.send(getState());
+  source.stop();
+  source.reset();
+  await publishControl('replay-stop');
+  return reply.send(source.state);
 });
 
 app.post<{ Body: { speed?: unknown } }>('/api/replay/speed', async (req, reply) => {
@@ -166,8 +106,8 @@ app.post<{ Body: { speed?: unknown } }>('/api/replay/speed', async (req, reply) 
   if (s !== 1 && s !== 10 && s !== 60 && s !== 'max') {
     return reply.status(400).send({ error: `Geschwindigkeit muss einer der folgenden Werte sein: ${VALID_SPEEDS.join(', ')}` });
   }
-  speed = s;
-  return reply.send(getState());
+  source.setSpeed(s);
+  return reply.send(source.state);
 });
 
 app.post<{ Body: { offsetMs?: number } }>('/api/replay/seek', async (req, reply) => {
@@ -175,35 +115,39 @@ app.post<{ Body: { offsetMs?: number } }>('/api/replay/seek', async (req, reply)
   if (typeof offsetMs !== 'number' || offsetMs < 0) {
     return reply.status(400).send({ error: 'offsetMs muss eine nicht-negative Zahl sein' });
   }
-  if (messages.length === 0) {
+  if (source.state.totalMessages === 0) {
     return reply.status(400).send({ error: 'Kein Dump geladen — zuerst eine Datei laden' });
   }
 
-  const wasPlaying = playing;
-  stopPlayback();
-  position = 0;
+  const wasPlaying = source.state.playing;
+  source.pause();
+  source.reset();
 
-  // Fast-forward: publish all messages up to the target offset at max speed
-  while (position < messages.length && messages[position].offsetMs <= offsetMs) {
-    publishMsg(messages[position]);
-    position++;
-    // Yield every 5000 messages
-    if (position % 5000 === 0) {
-      await new Promise<void>((r) => setImmediate(r));
-    }
-  }
+  // Tell the kiosk to suppress WebSocket broadcast during fast-forward.
+  // The kiosk subscribes to $replay/control and calls setBroadcastSuppressed.
+  await publishControl('seek-start');
+
+  // Fast-forward from 0 to the target: readings are emitted, published to
+  // the broker, and the kiosk processes them through its real pipeline
+  // (ingestion → SQLite) — so path-dependent state (depth, volumes, clamp)
+  // is rebuilt correctly. The kiosk just doesn't push them to the UI.
+  const count = await source.fastForwardTo(offsetMs);
+
+  await publishControl('seek-end');
 
   if (wasPlaying) {
-    playing = true;
-    scheduleNext();
+    source.start();
   }
 
-  return reply.send({ ...getState(), seeked: true });
+  return reply.send({ ...source.state, seeked: true, messagesReplayed: count });
 });
 
-app.get('/api/replay/state', async (_req, reply) => reply.send(getState()));
+app.get('/api/replay/state', async (_req, reply) => reply.send(source.state));
 
 // ── Start ──────────────────────────────────────────────────────────────
+
+let aedes: InstanceType<typeof Aedes>;
+let broker: ReturnType<typeof createServer>;
 
 async function start() {
   aedes = await Aedes.createBroker();
@@ -211,7 +155,7 @@ async function start() {
 
   await new Promise<void>((resolve, reject) => {
     broker.listen(MQTT_PORT, () => {
-      console.log(`MQTT broker listening on mqtt://localhost:${MQTT_PORT}`);
+      log.info('MQTT broker listening on mqtt://localhost:%d', MQTT_PORT);
       resolve();
     });
     broker.on('error', reject);
@@ -221,14 +165,14 @@ async function start() {
   await new Promise<void>((resolve) => client!.on('connect', () => resolve()));
 
   await app.listen({ port: HTTP_PORT, host: '0.0.0.0' });
-  console.log(`Replay UI at http://localhost:${HTTP_PORT}`);
-  console.log(`\nConfigure the kiosk with:  MQTT_URL=mqtt://localhost:${MQTT_PORT}`);
+  log.info('Replay UI at http://localhost:%d', HTTP_PORT);
+  log.info('Configure the kiosk with:  MQTT_URL=mqtt://localhost:%d', MQTT_PORT);
 }
 
 function shutdown() {
-  stopPlayback();
+  source.stop();
   client?.end();
-  broker.close();
+  broker?.close();
   app.close();
   process.exit(0);
 }
@@ -236,4 +180,4 @@ function shutdown() {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-start().catch((err) => { console.error(err); process.exit(1); });
+start().catch((err) => { log.error('Failed to start: %s', err.message); process.exit(1); });

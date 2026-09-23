@@ -64,6 +64,7 @@ interface WebSocketState {
   updateAvailable: string | null;
   updateSource: UpdateSource | null;
   updateApplying: boolean;
+  replaySeeking: boolean;
 }
 
 const INITIAL_RECORDING: RecordingState = {
@@ -87,6 +88,7 @@ export function useWebSocket() {
     updateAvailable: null,
     updateSource: null,
     updateApplying: false,
+    replaySeeking: false,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -207,6 +209,10 @@ export function useWebSocket() {
           case 'update-applying':
             wasApplyingUpdate.current = true;
             setState((prev) => ({ ...prev, updateApplying: true }));
+            break;
+
+          case 'replay-seeking':
+            setState((prev) => ({ ...prev, replaySeeking: !!msg.seeking }));
             break;
         }
       } catch {

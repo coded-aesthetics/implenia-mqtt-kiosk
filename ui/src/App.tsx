@@ -19,7 +19,7 @@ import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
 
 export function App() {
-  const { readings, deviceFrames, connectivity, recordingState, uploadProgress, updateAvailable, updateSource, updateApplying } =
+  const { readings, deviceFrames, connectivity, recordingState, uploadProgress, updateAvailable, updateSource, updateApplying, replaySeeking } =
     useWebSocket();
   const route = useHashRouter();
   const config = useConfig();
@@ -180,6 +180,11 @@ export function App() {
         applying={updateApplying}
         recordingActive={recordingState.active}
       />
+      {replaySeeking && (
+        <div style={styles.seekingOverlay}>
+          <div style={styles.seekingText}>Spule vor…</div>
+        </div>
+      )}
       <main style={{
         ...styles.main,
         ...(route.page === 'element' || route.page === 'sensors' || route.page === 'calibration'
@@ -224,5 +229,19 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--text-primary)',
     fontFamily: 'var(--font-body)',
     fontSize: 'var(--font-md)',
+  },
+  seekingOverlay: {
+    position: 'fixed' as const,
+    inset: 0,
+    zIndex: 9999,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+  },
+  seekingText: {
+    fontSize: '2rem',
+    fontWeight: 700,
+    color: 'var(--text-primary)',
   },
 };

@@ -168,6 +168,29 @@ export class ReplaySource extends DataSource {
   }
 
   /**
+   * Move position to a target offset without emitting readings.
+   *
+   * Used by the standalone replay server where readings flow through MQTT —
+   * emitting during seek would flood connected kiosks. Pipeline state is NOT
+   * rebuilt; for path-dependent correctness use fastForwardTo() with broadcast
+   * suppression (see routes/replay.ts).
+   */
+  seekTo(targetOffsetMs: number): void {
+    this.stopPlayback();
+    let lo = 0;
+    let hi = this.messages.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.messages[mid].offsetMs <= targetOffsetMs) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    this.position = lo;
+  }
+
+  /**
    * Fast-forward from the current position to a target offset, emitting
    * readings synchronously with no delay and no WebSocket broadcast.
    *
