@@ -19,7 +19,8 @@ import {
 } from '../mqtt-config.js';
 import { getActiveVerfahren, loadSensorCsv } from '../sensor-meta.js';
 import {
-  DEFAULT_CLAMP_TOPIC, getRohrwechselConfig, setRohrwechselConfig, validateRohrwechsel,
+  DEFAULT_CLAMP_TOPIC, getRohrwechselConfig, isClampTopic, setRohrwechselConfig,
+  validateRohrwechsel,
 } from '../rohrwechsel-config.js';
 import { DEPTH_MODES } from '../rohrwechsel.js';
 import {
@@ -377,6 +378,40 @@ export function registerConfigRoutes(app: FastifyInstance): void {
       depthModes: Object.entries(DEPTH_MODES).map(([key, label]) => ({ key, label })),
     };
   });
+
+  /**
+   * The live value of the topic being considered as the Klemmbacke signal,
+   * matched with the same isClampTopic() the ingestion path uses.
+   *
+   * Resolved here rather than in the browser on purpose: the settings screen
+   * used to carry its own copy of that matching rule, and a drift between the
+   * two would show a technician a value the recorder is not actually reading —
+   * on the screen whose whole job is confirming the right topic was picked.
+   *
+   * The topic comes in as a query parameter because the screen previews a
+   * topic that is still being typed, before it has been saved.
+   */
+  app.get<{ Querystring: { topic?: string } }>(
+    '/api/config/rohrwechsel/live',
+    async (request) => {
+      const wanted = request.query.topic?.trim();
+      const miss = { topic: null, raw: null, ageMs: null };
+      if (!wanted) return miss;
+
+      const now = Date.now();
+      // Ordered by topic name, so a wildcard-ish match picks the same one the
+      // screen used to pick when it filtered the list itself.
+      for (const t of getObservedTopics(now - 5 * 60_000)) {
+        if (!isClampTopic(t.topic, wanted)) continue;
+        return {
+          topic: t.topic,
+          raw: parsePayload(t.lastPayload).valueNumeric,
+          ageMs: Math.max(0, now - t.lastSeen),
+        };
+      }
+      return miss;
+    },
+  );
 
   app.put<{
     Body: {

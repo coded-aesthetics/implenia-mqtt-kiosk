@@ -27,23 +27,7 @@ interface Config {
   defaultClampTopic: string;
 }
 
-/** Last payload seen per topic, from the shared observation buffer. */
-interface ObservedTopic {
-  topic: string;
-  lastPayload: string;
-  lastSeen: number;
-}
-
 const PIPE_PRESETS = [2, 3];
-
-/** Mirrors the server's isClampTopic: full topic, or last segment. */
-function matchesClampTopic(topic: string, clampTopic: string): boolean {
-  const full = topic.toLowerCase();
-  const wanted = clampTopic.toLowerCase();
-  if (full === wanted) return true;
-  const segment = full.split('/').pop() ?? '';
-  return segment !== '' && segment === (wanted.split('/').pop() ?? '');
-}
 
 export function RohrwechselSettings() {
   const [enabled, setEnabled] = useState(false);
@@ -77,18 +61,18 @@ export function RohrwechselSettings() {
       });
   }, []);
 
-  // Watch the clamp so the thresholds can be set against real values.
+  // Watch the clamp so the thresholds can be set against real values. The
+  // server does the topic matching — it owns that rule, and the recorder has
+  // to be reading the same topic this screen is showing.
   useEffect(() => {
     if (!clampTopic.trim()) return;
     let cancelled = false;
     const poll = () => {
-      fetch('/api/config/mqtt/topics')
+      fetch(`/api/config/rohrwechsel/live?topic=${encodeURIComponent(clampTopic)}`)
         .then((r) => (r.ok ? r.json() : null))
-        .then((d: { topics?: ObservedTopic[] } | null) => {
-          if (cancelled || !d?.topics) return;
-          const hit = d.topics.find((t) => matchesClampTopic(t.topic, clampTopic));
-          const value = hit ? Number(hit.lastPayload) : NaN;
-          setLive(Number.isFinite(value) ? value : null);
+        .then((d: { raw?: number | null } | null) => {
+          if (cancelled) return;
+          setLive(typeof d?.raw === 'number' && Number.isFinite(d.raw) ? d.raw : null);
         })
         .catch(() => {});
     };

@@ -303,11 +303,14 @@ Only the seconds the process is actually down are lost, and that gap is unavoida
 Switching the feature **off** is never refused. The screen submits every field alongside the off switch, and with no clamp topic none of those numbers do anything — so a field left in a bad state falls back to what is stored rather than blocking the one action that makes a misbehaving feature stop.
 
 ```
-GET /api/config/rohrwechsel   → { clampTopic, enabled, depthMode, pipeLength, closeThreshold, openThreshold, tolerance }
-PUT /api/config/rohrwechsel   → same fields; takes effect on the running session
+GET /api/config/rohrwechsel        → { clampTopic, enabled, depthMode, pipeLength, closeThreshold, openThreshold, tolerance }
+PUT /api/config/rohrwechsel        → same fields; takes effect on the running session
+GET /api/config/rohrwechsel/live   → ?topic=… → { topic, raw, ageMs } — the clamp value, or nulls on a miss
 ```
 
 The **Rohrverlängerung** card on the config page shows the live Klemmbacke value next to the thresholds, so they can be set by watching the clamp open and close rather than by guessing.
+
+That value comes from `/api/config/rohrwechsel/live`, which matches the topic with the same `isClampTopic()` the ingestion path uses. The topic travels as a query parameter because the screen previews one that is still being typed, before it is saved. The matching deliberately does not happen in the browser: the screen used to carry its own copy of the rule, and a drift between the two would show a technician a value the recorder is not actually reading.
 
 ## Sensor Calibration
 
