@@ -6,6 +6,7 @@ interface Props {
   connectivity: 'online' | 'offline' | 'unknown';
   hasApiKey: boolean;
   currentPage: string;
+  configSection?: string;
   pageTitle?: string;
   voiceSupported?: boolean;
   isListening?: boolean;
@@ -15,7 +16,7 @@ interface Props {
   commentQueueCount?: number;
 }
 
-export function Header({ connectivity, hasApiKey, currentPage, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount }: Props) {
+export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -33,9 +34,14 @@ export function Header({ connectivity, hasApiKey, currentPage, pageTitle, voiceS
     <div style={styles.bar}>
       {/* Left: logo + optional back button */}
       <div style={styles.leftSection}>
-        {(currentPage === 'element' || currentPage === 'comments') && (
+        {(currentPage === 'element' || currentPage === 'comments' || !!configSection || currentPage === 'sensors' || currentPage === 'calibration' || currentPage === 'rohrverlaengerung') && (
           <button
-            onClick={() => navigate('/')}
+            onClick={() => {
+              if (configSection) navigate('config');
+              else if (currentPage === 'sensors') navigate('config/datenquelle');
+              else if (currentPage === 'calibration' || currentPage === 'rohrverlaengerung') navigate('config/messwerte');
+              else navigate('/');
+            }}
             style={styles.backButton}
           >
             ←

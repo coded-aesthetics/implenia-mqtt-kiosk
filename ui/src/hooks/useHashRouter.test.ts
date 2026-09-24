@@ -12,6 +12,33 @@ describe('parseRoute', () => {
     expect(parseRoute('#/comments').page).toBe('comments');
   });
 
+  // ── Config sub-routes ───────────────────────────────────────────────────
+
+  it('parses bare #/config as the hub (no section)', () => {
+    const r = parseRoute('#/config');
+    expect(r).toMatchObject({ page: 'config', params: {} });
+  });
+
+  it('parses config sub-sections', () => {
+    for (const section of ['verbindung', 'datenquelle', 'messwerte', 'system']) {
+      expect(parseRoute(`#/config/${section}`)).toMatchObject({
+        page: 'config',
+        params: { section },
+      });
+    }
+  });
+
+  it('does not mistake a prefix for a config route', () => {
+    expect(parseRoute('#/configs').page).toBe('home');
+  });
+
+  it('keeps query params on config sub-routes', () => {
+    const r = parseRoute('#/config/verbindung?foo=bar');
+    expect(r.page).toBe('config');
+    expect(r.params.section).toBe('verbindung');
+    expect(r.query.foo).toBe('bar');
+  });
+
   it('parses an element name, decoded', () => {
     const r = parseRoute('#/element/H%2026');
     expect(r.page).toBe('element');
@@ -32,6 +59,10 @@ describe('parseRoute', () => {
 
   it('parses the sensor assignment route', () => {
     expect(parseRoute('#/sensors').page).toBe('sensors');
+  });
+
+  it('parses the rohrverlaengerung route', () => {
+    expect(parseRoute('#/rohrverlaengerung').page).toBe('rohrverlaengerung');
   });
 
   it('does not mistake a prefix for a setup route', () => {

@@ -201,7 +201,7 @@ export function TopicAssignment() {
         <div style={styles.headerRight}>
           <span style={styles.counter}>{assignedCount} / {sensors.length}</span>
           <button
-            onClick={(e) => { e.stopPropagation(); navigate('config'); }}
+            onClick={(e) => { e.stopPropagation(); navigate('config/datenquelle'); }}
             style={styles.backButton}
           >
             Schließen

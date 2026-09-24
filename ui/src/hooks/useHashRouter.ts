@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 export interface Route {
-  page: 'home' | 'config' | 'element' | 'comments' | 'setup' | 'sensors' | 'calibration';
+  page: 'home' | 'config' | 'element' | 'comments' | 'setup' | 'sensors' | 'calibration' | 'rohrverlaengerung';
   params: Record<string, string>;
   query: Record<string, string>;
 }
@@ -21,8 +21,9 @@ export function parseRoute(hash: string): Route {
     }
   }
 
-  if (path === 'config') {
-    return { page: 'config', params: {}, query };
+  const configMatch = path.match(/^config(?:\/(.+))?$/);
+  if (configMatch) {
+    return { page: 'config', params: configMatch[1] ? { section: configMatch[1] } : {}, query };
   }
 
   if (path === 'comments') {
@@ -39,6 +40,10 @@ export function parseRoute(hash: string): Route {
   // live values needs the whole display.
   if (path === 'kalibrierung') {
     return { page: 'calibration', params: {}, query };
+  }
+
+  if (path === 'rohrverlaengerung') {
+    return { page: 'rohrverlaengerung', params: {}, query };
   }
 
   // The setup wizard is a route, not a conditional overlay. Its step lives in
