@@ -96,6 +96,7 @@ export function RohrwechselSettings() {
       if (!res.ok) throw new Error(body.error ?? `Fehler ${res.status}`);
       setEnabled(nextEnabled);
       setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
     } catch (err) {
       setError((err as Error).message);
     } finally {

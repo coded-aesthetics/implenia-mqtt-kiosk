@@ -14,6 +14,7 @@ import { CommentQueuePage } from './components/CommentQueuePage';
 import { SetupWizard } from './components/SetupWizard';
 import { TopicAssignment } from './components/TopicAssignment';
 import { CalibrationPage } from './components/CalibrationPage';
+import { RohrverlaengerungPage } from './components/RohrverlaengerungPage';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
@@ -82,7 +83,7 @@ export function App() {
       <SetupWizard
         step={route.params.step ?? 'verfahren'}
         onFinish={() => { setup.refetch(); navigate(''); }}
-        hasApiKey={config.hasApiKey}
+        config={config}
       />
     );
   }
@@ -99,14 +100,23 @@ export function App() {
 
   switch (route.page) {
     case 'config': {
+      const section = route.params.section;
       content = (
         <ConfigPage
           config={config}
           devMode={devMode}
           deviceFrames={deviceFrames}
+          updateAvailable={updateAvailable}
+          section={section}
         />
       );
-      pageTitle = 'Einstellungen';
+      const SECTION_TITLES: Record<string, string> = {
+        verbindung: 'Verbindung',
+        datenquelle: 'Datenquelle',
+        messwerte: 'Messwerte',
+        system: 'System',
+      };
+      pageTitle = section ? SECTION_TITLES[section] ?? 'Einstellungen' : 'Einstellungen';
       break;
     }
     case 'sensors': {
@@ -117,6 +127,11 @@ export function App() {
     case 'calibration': {
       content = <CalibrationPage />;
       pageTitle = 'Kalibrierung';
+      break;
+    }
+    case 'rohrverlaengerung': {
+      content = <RohrverlaengerungPage />;
+      pageTitle = 'Rohrverlängerung';
       break;
     }
     case 'comments': {
@@ -165,6 +180,7 @@ export function App() {
         connectivity={connectivity}
         hasApiKey={config.hasApiKey}
         currentPage={route.page}
+        configSection={route.page === 'config' ? route.params.section : undefined}
         pageTitle={pageTitle}
         voiceSupported={voice.isSupported}
         isListening={voice.isListening}
@@ -187,7 +203,8 @@ export function App() {
       )}
       <main style={{
         ...styles.main,
-        ...(route.page === 'element' || route.page === 'sensors' || route.page === 'calibration'
+        ...(route.page === 'element' || route.page === 'sensors' || route.page === 'calibration' || route.page === 'rohrverlaengerung'
+          || (route.page === 'config' && !route.params.section)
           ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const }
           : {}),
       }}>

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { navigate } from '../hooks/useHashRouter';
+import type { ConfigState } from '../hooks/useImplenia';
 import { MqttSettings } from './MqttSettings';
+import { VerbindungConfig } from './VerbindungConfig';
 import { usePolledJson } from '../hooks/usePolledJson';
 
 /**
@@ -23,24 +25,25 @@ interface Props {
   step: string;
   /** Leave the wizard: the app re-reads the Verfahren and routes home. */
   onFinish: () => void;
-  hasApiKey: boolean;
+  config: ConfigState;
 }
 
 type Transport = 'mqtt' | 'serial';
-type Step = 'verfahren' | 'transport' | 'mqtt' | 'serial' | 'done';
+type Step = 'verfahren' | 'transport' | 'mqtt' | 'serial' | 'verbindung' | 'done';
 
 const STEP_TITLES: Record<Step, string> = {
   verfahren: 'Verfahren wählen',
   transport: 'Datenquelle wählen',
   mqtt: 'MQTT-Box verbinden',
   serial: 'Geräte anschließen',
+  verbindung: 'API-Zugang einrichten',
   done: 'Einrichtung abgeschlossen',
 };
 
 /** The step sequence depends on the transport, so the counter stays honest. */
 function stepOrder(transport: Transport | null): Step[] {
   if (transport === null) return ['verfahren', 'transport', 'done'];
-  return ['verfahren', 'transport', transport, 'done'];
+  return ['verfahren', 'transport', transport, 'verbindung', 'done'];
 }
 
 interface SerialDevice {
@@ -54,7 +57,8 @@ function isStep(value: string): value is Step {
   return value in STEP_TITLES;
 }
 
-export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
+export function SetupWizard({ step: rawStep, onFinish, config }: Props) {
+  const hasApiKey = config.hasApiKey;
   const step: Step = isStep(rawStep) ? rawStep : 'verfahren';
   const goto = (next: Step) => navigate(`setup/${next}`);
 
@@ -378,6 +382,21 @@ export function SetupWizard({ step: rawStep, onFinish, hasApiKey }: Props) {
               </button>
               <button onClick={() => goto('done')} style={styles.secondaryButton}>
                 Weiter
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === 'verbindung' && (
+          <>
+            <h1 style={styles.question}>API-Zugang einrichten</h1>
+            <VerbindungConfig config={config} />
+            <div style={styles.doneActions}>
+              <button onClick={() => goto(transport!)} style={styles.secondaryButton}>
+                Zurück
+              </button>
+              <button onClick={() => goto('done')} style={styles.secondaryButton}>
+                {hasApiKey ? 'Weiter' : 'Überspringen'}
               </button>
             </div>
           </>
