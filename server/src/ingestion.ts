@@ -238,11 +238,17 @@ export class DataIngestion extends EventEmitter {
     const wasStarted = this.started;
     if (wasStarted) {
       this.source.off('reading', this.onReading);
+      this.source.off('seek-start', this.onSeekStart);
+      this.source.off('replay-start', this.onReplayStart);
+      this.source.off('replay-stop', this.onReplayStop);
       this.source.stop();
     }
     this.source = source;
     if (wasStarted) {
       this.source.on('reading', this.onReading);
+      this.source.on('seek-start', this.onSeekStart);
+      this.source.on('replay-start', this.onReplayStart);
+      this.source.on('replay-stop', this.onReplayStop);
       this.source.start();
     }
   }

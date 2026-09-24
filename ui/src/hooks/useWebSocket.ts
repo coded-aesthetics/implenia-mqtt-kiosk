@@ -108,6 +108,10 @@ export function useWebSocket() {
         window.location.reload();
         return;
       }
+      // A disconnect during replay seek leaves replaySeeking true with no
+      // dismiss mechanism. The server doesn't re-send seek state on connect,
+      // so reset it here.
+      setState((prev) => prev.replaySeeking ? { ...prev, replaySeeking: false } : prev);
     };
 
     ws.onmessage = (event) => {

@@ -880,3 +880,4 @@ export function resetKiosk(): void {
 
 export function beginTransaction(): void { db.exec('BEGIN'); }
 export function commitTransaction(): void { db.exec('COMMIT'); }
+export function rollbackTransaction(): void { db.exec('ROLLBACK'); }

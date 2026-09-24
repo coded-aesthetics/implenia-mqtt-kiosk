@@ -2,7 +2,7 @@ import mqtt from 'mqtt';
 import { DataSource } from './data-source.js';
 import { getMqttSettings } from './mqtt-config.js';
 import { broadcastMessage, setBroadcastSuppressed } from './websocket.js';
-import { beginTransaction, commitTransaction } from './db.js';
+import { beginTransaction, commitTransaction, rollbackTransaction } from './db.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('mqtt');
@@ -66,10 +66,25 @@ class MqttSource extends DataSource {
           broadcastMessage({ type: 'replay-seeking', seeking: true });
           setBroadcastSuppressed(true);
           this.emit('seek-start');
-          beginTransaction();
+          try {
+            beginTransaction();
+          } catch (err) {
+            log.error('Failed to begin seek transaction: %s', (err as Error).message);
+          }
         } else if (action === 'seek-end') {
           log.info('Replay seek finished — resuming broadcast');
-          commitTransaction();
+          try {
+            commitTransaction();
+          } catch (err) {
+            log.error('Failed to commit seek transaction, rolling back: %s', (err as Error).message);
+            try { rollbackTransaction(); } catch { /* already outside a transaction */ }
+          }
+          this.emit('seek-end');
+          setBroadcastSuppressed(false);
+          broadcastMessage({ type: 'replay-seeking', seeking: false });
+        } else if (action === 'seek-abort') {
+          log.warn('Replay seek aborted — rolling back');
+          try { rollbackTransaction(); } catch { /* no transaction open */ }
           this.emit('seek-end');
           setBroadcastSuppressed(false);
           broadcastMessage({ type: 'replay-seeking', seeking: false });

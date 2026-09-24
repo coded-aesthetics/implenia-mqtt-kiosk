@@ -173,7 +173,7 @@ export class ReplaySource extends DataSource {
    * Used by the standalone replay server where readings flow through MQTT —
    * emitting during seek would flood connected kiosks. Pipeline state is NOT
    * rebuilt; for path-dependent correctness use fastForwardTo() with broadcast
-   * suppression (see routes/replay.ts).
+   * suppression (see replay-server.ts).
    */
   seekTo(targetOffsetMs: number): void {
     this.stopPlayback();
@@ -286,5 +286,3 @@ export class ReplaySource extends DataSource {
     }, scaledDelay);
   }
 }
-
-export const replaySource = new ReplaySource();

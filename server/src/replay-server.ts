@@ -57,7 +57,9 @@ app.post<{ Body: { file?: string } }>('/api/replay/load', async (req, reply) => 
   const file = req.body?.file;
   if (!file) return reply.status(400).send({ error: 'Dateipfad fehlt' });
 
-  const projectRoot = path.resolve(process.cwd(), '..');
+  // __dirname is server/src/ (or server/dist/ when compiled). Walk up to the
+  // repo root so relative paths like 'assets/dump.txt' work regardless of cwd.
+  const projectRoot = path.resolve(__dirname, '..', '..');
   const resolved = path.isAbsolute(file) ? file : path.resolve(projectRoot, file);
 
   if (!fs.existsSync(resolved)) {
@@ -127,13 +129,18 @@ app.post<{ Body: { offsetMs?: number } }>('/api/replay/seek', async (req, reply)
   // The kiosk subscribes to $replay/control and calls setBroadcastSuppressed.
   await publishControl('seek-start');
 
-  // Fast-forward from 0 to the target: readings are emitted, published to
-  // the broker, and the kiosk processes them through its real pipeline
-  // (ingestion → SQLite) — so path-dependent state (depth, volumes, clamp)
-  // is rebuilt correctly. The kiosk just doesn't push them to the UI.
-  const count = await source.fastForwardTo(offsetMs);
-
-  await publishControl('seek-end');
+  let count: number;
+  try {
+    // Fast-forward from 0 to the target: readings are emitted, published to
+    // the broker, and the kiosk processes them through its real pipeline
+    // (ingestion → SQLite) — so path-dependent state (depth, volumes, clamp)
+    // is rebuilt correctly. The kiosk just doesn't push them to the UI.
+    count = await source.fastForwardTo(offsetMs);
+    await publishControl('seek-end');
+  } catch (err) {
+    await publishControl('seek-abort');
+    throw err;
+  }
 
   if (wasPlaying) {
     source.start();
