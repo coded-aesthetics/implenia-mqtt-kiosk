@@ -21,7 +21,6 @@ import { registerVerfahrenRoutes } from './routes/verfahren.js';
 import { registerTranscribeRoutes } from './routes/transcribe.js';
 import { isWhisperAvailable } from './whisper.js';
 import { close as closeDb } from './db.js';
-
 const log = createLogger('server');
 
 const app = Fastify({ loggerInstance: logger as FastifyBaseLogger });

@@ -2,7 +2,8 @@ import { EventEmitter } from 'node:events';
 import type { DataSource, SensorReading } from './data-source.js';
 import {
   insertBuffer, pruneBuffer, insertSessionReading, getDrillState, setDrillState,
-  getOperatingMode, setOperatingModeRow,
+  getOperatingMode, setOperatingModeRow, clearSessionReadings,
+  createSession, endSession, getActiveSession,
 } from './db.js';
 import { parsePayload } from './parse-payload.js';
 import { getResolverContext, resolveSensorKey } from './topic-resolver.js';
@@ -82,7 +83,7 @@ export class DataIngestion extends EventEmitter {
   private started = false;
 
   private readonly onReading = (reading: SensorReading): void => {
-    insertBuffer(reading.topic, reading.payload);
+    insertBuffer(reading.topic, reading.payload, reading.receivedAt);
 
     // Overrides and the shipped topic map resolve boxes whose topic names
     // differ from the sensor names; an unresolved topic still gets stored,
@@ -106,7 +107,7 @@ export class DataIngestion extends EventEmitter {
         mapping?.sensorType ?? null,
         valueNumeric,
         valueText,
-        { valueRaw: corrected.valueRaw, phase: corrected.phase, clipped: corrected.clipped },
+        { receivedAt: reading.receivedAt, valueRaw: corrected.valueRaw, phase: corrected.phase, clipped: corrected.clipped },
       );
     }
   };
@@ -237,11 +238,17 @@ export class DataIngestion extends EventEmitter {
     const wasStarted = this.started;
     if (wasStarted) {
       this.source.off('reading', this.onReading);
+      this.source.off('seek-start', this.onSeekStart);
+      this.source.off('replay-start', this.onReplayStart);
+      this.source.off('replay-stop', this.onReplayStop);
       this.source.stop();
     }
     this.source = source;
     if (wasStarted) {
       this.source.on('reading', this.onReading);
+      this.source.on('seek-start', this.onSeekStart);
+      this.source.on('replay-start', this.onReplayStart);
+      this.source.on('replay-stop', this.onReplayStop);
       this.source.start();
     }
   }
@@ -294,6 +301,18 @@ export class DataIngestion extends EventEmitter {
     }
   }
 
+  /**
+   * Reset session state for replay seek. Clears all recorded readings and
+   * resets the drill state machine so the fast-forward from position 0
+   * rebuilds everything from scratch.
+   */
+  resetForSeek(): void {
+    if (this.activeSession) {
+      clearSessionReadings(this.activeSession.id);
+      this.activeSession.drill = initialDrillState();
+    }
+  }
+
   startRecording(sessionId: number, sensorMap: Map<string, SensorMapEntry>): void {
     // A session that already carries state is being resumed, not started —
     // after a crash or an auto-update restart. Picking the phase and the pipe
@@ -327,10 +346,30 @@ export class DataIngestion extends EventEmitter {
     this.source.start();
   }
 
+  private onSeekStart = (): void => { this.resetForSeek(); };
+
+  private onReplayStart = (): void => {
+    if (this.activeSession) return;
+    const sessionId = createSession('replay', JSON.stringify({}));
+    this.startRecording(sessionId, new Map());
+    log.info('Started replay session %d', sessionId);
+  };
+
+  private onReplayStop = (): void => {
+    if (!this.activeSession) return;
+    const sessionId = this.activeSession.id;
+    this.stopRecording();
+    endSession(sessionId);
+    log.info('Ended replay session %d', sessionId);
+  };
+
   start(): void {
     if (this.started) return;
     this.started = true;
     this.source.on('reading', this.onReading);
+    this.source.on('seek-start', this.onSeekStart);
+    this.source.on('replay-start', this.onReplayStart);
+    this.source.on('replay-stop', this.onReplayStop);
     this.source.start();
 
     this.pruneTimer = setInterval(() => {
@@ -345,6 +384,9 @@ export class DataIngestion extends EventEmitter {
     }
     if (this.started) {
       this.source.off('reading', this.onReading);
+      this.source.off('seek-start', this.onSeekStart);
+      this.source.off('replay-start', this.onReplayStart);
+      this.source.off('replay-stop', this.onReplayStop);
       this.started = false;
     }
     this.source.stop();

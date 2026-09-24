@@ -52,6 +52,8 @@ export interface SessionReadingRow {
 
 /** Options for a recorded reading beyond its value. All optional. */
 export interface SessionReadingOptions {
+  /** Timestamp to record. Defaults to Date.now() — overridden during replay. */
+  receivedAt?: number;
   /** The uncorrected value, when `valueNumeric` carries a corrected one. */
   valueRaw?: number | null;
   /** Which drilling phase this reading was taken in. */
@@ -304,8 +306,8 @@ const deleteMetaStmt = db.prepare('DELETE FROM meta WHERE key = ?');
 
 // --- Buffer functions ---
 
-export function insertBuffer(topic: string, payload: string): void {
-  insertBufferStmt.run(topic, payload, Date.now());
+export function insertBuffer(topic: string, payload: string, receivedAt?: number): void {
+  insertBufferStmt.run(topic, payload, receivedAt ?? Date.now());
 }
 
 export function pruneBuffer(maxAgeMs = 86_400_000): void {
@@ -395,6 +397,21 @@ export function updateSessionStatus(id: number, status: Session['status']): void
 
 export function getSessions(): Session[] {
   return getSessionsStmt.all() as Session[];
+}
+
+export function deleteSessionWithReadings(id: number): void {
+  db.transaction(() => {
+    db.prepare('DELETE FROM session_readings WHERE session_id = ?').run(id);
+    db.prepare('DELETE FROM recording_sessions WHERE id = ?').run(id);
+  })();
+}
+
+const clearSessionReadingsStmt = db.prepare(
+  'DELETE FROM session_readings WHERE session_id = ?'
+);
+
+export function clearSessionReadings(id: number): void {
+  clearSessionReadingsStmt.run(id);
 }
 
 const getDrillStateStmt = db.prepare(
@@ -489,7 +506,7 @@ export function insertSessionReading(
     sensorType,
     valueNumeric,
     valueText,
-    Date.now(),
+    options.receivedAt ?? Date.now(),
     options.phase ?? 'bohren',
     options.clipped ? CLIPPED_STATUS : 'pending',
     options.valueRaw ?? null,
@@ -858,3 +875,9 @@ export function resetKiosk(): void {
   });
   tx();
 }
+
+// ── Explicit transaction control (replay seek batching) ─────────────────
+
+export function beginTransaction(): void { db.exec('BEGIN'); }
+export function commitTransaction(): void { db.exec('COMMIT'); }
+export function rollbackTransaction(): void { db.exec('ROLLBACK'); }

@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MQTT Replay</title>
+<style>
+  :root {
+    --bg: #0e0b16;
+    --surface: #1a1028;
+    --surface-2: #241840;
+    --accent: #7c4dff;
+    --accent-dim: #5a35cc;
+    --text: #e8e0f0;
+    --text-dim: #8899aa;
+    --green: #4caf50;
+    --red: #f44336;
+    --orange: #e65100;
+    --yellow: #e6a700;
+    --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 2rem;
+  }
+  .container {
+    width: 100%;
+    max-width: 640px;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+  h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+  }
+
+  /* Badge */
+  .badge {
+    display: inline-block;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #fff;
+    padding: 6px 14px;
+    border-radius: 6px;
+    letter-spacing: 0.05em;
+    min-width: 64px;
+    text-align: center;
+  }
+
+  /* File picker */
+  .file-row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+  }
+  .file-input {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    font-size: 1rem;
+    font-family: var(--mono);
+    background: var(--surface-2);
+    border: 1px solid var(--accent-dim);
+    border-radius: 8px;
+    color: var(--text);
+    outline: none;
+    min-height: 64px;
+  }
+  .file-input:focus { border-color: var(--accent); }
+  .file-input::placeholder { color: var(--text-dim); }
+
+  .btn {
+    min-height: 64px;
+    min-width: 64px;
+    padding: 0 1.5rem;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.15s;
+  }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-surface { background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--accent-dim); }
+  .btn-round {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    padding: 0;
+    font-size: 1.4rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid var(--accent);
+    background: var(--surface-2);
+    color: #fff;
+  }
+  .btn-round.active { border-color: var(--green); background: #1a3020; }
+
+  /* Transport */
+  .transport { display: flex; align-items: center; gap: 0.75rem; }
+  .speed-row { display: flex; gap: 2px; border-radius: 6px; overflow: hidden; }
+  .speed-btn {
+    min-width: 64px;
+    min-height: 64px;
+    padding: 8px 14px;
+    font-size: 1rem;
+    font-weight: 600;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .speed-btn.active { background: var(--accent); color: #fff; }
+
+  /* Timeline */
+  .timeline {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .time-label {
+    font-family: var(--mono);
+    font-size: 1rem;
+    color: var(--text-dim);
+    min-width: 56px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .slider-wrap {
+    position: relative;
+    flex: 1;
+    height: 8px;
+    background: var(--surface-2);
+    border-radius: 4px;
+  }
+  .slider-fill {
+    position: absolute;
+    top: 0; left: 0;
+    height: 100%;
+    background: var(--accent);
+    border-radius: 4px;
+    pointer-events: none;
+    transition: width 0.3s ease;
+  }
+  .slider-wrap input[type=range] {
+    position: absolute;
+    top: -14px; left: 0;
+    width: 100%;
+    height: 36px;
+    margin: 0; padding: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+  }
+  .slider-wrap input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid #fff;
+    cursor: pointer;
+  }
+
+  /* Stats */
+  .stats {
+    display: flex;
+    gap: 2rem;
+    font-family: var(--mono);
+    font-size: 1rem;
+    color: var(--text-dim);
+  }
+  .stats strong { color: var(--text); }
+
+  /* Messages */
+  .msg {
+    font-size: 1rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    display: none;
+  }
+  .msg.visible { display: block; }
+  .msg-error { background: rgba(244,67,54,0.15); color: var(--red); }
+  .msg-success { background: rgba(76,175,80,0.15); color: var(--green); }
+  .msg-info { background: rgba(124,77,255,0.15); color: var(--accent); }
+
+  .section { display: flex; flex-direction: column; gap: 1rem; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div style="display:flex; align-items:center; gap:1rem;">
+    <h1>MQTT REPLAY</h1>
+    <span class="badge" id="badge" style="background:var(--text-dim)">BEREIT</span>
+  </div>
+
+  <!-- File picker (always visible) -->
+  <div class="section" id="picker">
+    <div class="file-row">
+      <input class="file-input" id="fileInput" type="text"
+        placeholder="Pfad zur Dump-Datei, z.B. assets/bohrung_g8.txt">
+      <button class="btn btn-primary" id="loadBtn">Laden</button>
+    </div>
+  </div>
+
+  <!-- Transport (shown after load) -->
+  <div class="section hidden" id="transport">
+    <div class="transport">
+      <button class="btn btn-round" id="playBtn" title="Wiedergabe">▶</button>
+      <button class="btn btn-round btn-surface" id="stopBtn" title="Stopp">⏹</button>
+      <div class="speed-row">
+        <button class="speed-btn active" data-speed="1">1×</button>
+        <button class="speed-btn" data-speed="10">10×</button>
+        <button class="speed-btn" data-speed="60">60×</button>
+        <button class="speed-btn" data-speed="max">⏩</button>
+      </div>
+    </div>
+
+    <div class="timeline">
+      <span class="time-label" id="timeCur">0:00</span>
+      <div class="slider-wrap">
+        <div class="slider-fill" id="sliderFill"></div>
+        <input type="range" id="slider" min="0" max="0" value="0">
+      </div>
+      <span class="time-label" id="timeEnd">0:00</span>
+    </div>
+
+    <div class="stats">
+      <span><strong id="position">0</strong> / <span id="total">0</span> Nachr.</span>
+      <span><strong id="readings">0</strong> Messwerte</span>
+    </div>
+  </div>
+
+  <!-- Status messages -->
+  <div class="msg" id="msgError"></div>
+  <div class="msg" id="msgSuccess"></div>
+  <div class="msg" id="msgInfo"></div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const badge    = $('#badge');
+const fileInput = $('#fileInput');
+const loadBtn  = $('#loadBtn');
+const picker   = $('#picker');
+const transport = $('#transport');
+const playBtn  = $('#playBtn');
+const stopBtn  = $('#stopBtn');
+const slider   = $('#slider');
+const sliderFill = $('#sliderFill');
+const timeCur  = $('#timeCur');
+const timeEnd  = $('#timeEnd');
+const posEl    = $('#position');
+const totalEl  = $('#total');
+const readEl   = $('#readings');
+const msgError = $('#msgError');
+const msgSuccess = $('#msgSuccess');
+const msgInfo  = $('#msgInfo');
+const speedBtns = document.querySelectorAll('[data-speed]');
+
+let state = { playing: false, fastForwarding: false, file: null, position: 0,
+  totalMessages: 0, speed: 1, currentOffsetMs: 0, durationMs: 0, readingCount: 0 };
+let pollTimer = null;
+
+function fmt(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return h + ':' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+  return m + ':' + String(sec).padStart(2,'0');
+}
+
+function num(n) { return n.toLocaleString('de-DE'); }
+
+function showMsg(el, cls, text) {
+  [msgError, msgSuccess, msgInfo].forEach(e => { e.classList.remove('visible'); e.className = 'msg'; });
+  el.className = 'msg ' + cls + ' visible';
+  el.textContent = text;
+}
+function clearMsgs() {
+  [msgError, msgSuccess, msgInfo].forEach(e => e.classList.remove('visible'));
+}
+
+function setBadge(label, color) {
+  badge.textContent = label;
+  badge.style.background = color;
+}
+
+function updateUI() {
+  const finished = state.file && !state.playing && state.position >= state.totalMessages && state.totalMessages > 0;
+
+  if (state.fastForwarding)              setBadge('SPULEN', 'var(--orange)');
+  else if (state.playing)                setBadge('LÄUFT', 'var(--green)');
+  else if (finished)                     setBadge('FERTIG', 'var(--yellow)');
+  else if (state.file && state.position > 0) setBadge('PAUSE', 'var(--accent)');
+  else if (state.file)                   setBadge('BEREIT', 'var(--accent)');
+  else                                   setBadge('BEREIT', 'var(--text-dim)');
+
+  transport.classList.toggle('hidden', !state.file);
+  playBtn.textContent = state.playing ? '⏸' : '▶';
+  playBtn.classList.toggle('active', state.playing);
+
+  slider.max = state.durationMs;
+  slider.value = state.currentOffsetMs;
+  const pct = state.durationMs > 0 ? (state.currentOffsetMs / state.durationMs * 100) : 0;
+  sliderFill.style.width = pct + '%';
+
+  timeCur.textContent = fmt(state.currentOffsetMs);
+  timeEnd.textContent = fmt(state.durationMs);
+  posEl.textContent = num(state.position);
+  totalEl.textContent = num(state.totalMessages);
+  readEl.textContent = num(state.readingCount || 0);
+
+  speedBtns.forEach(b => b.classList.toggle('active', String(state.speed) === b.dataset.speed));
+}
+
+async function post(path, body) {
+  const opts = { method: 'POST' };
+  if (body) {
+    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error || 'HTTP ' + res.status);
+  return json;
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/api/replay/state');
+    if (r.ok) { state = await r.json(); updateUI(); }
+  } catch {}
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(poll, 1000);
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+// ── Load ──
+loadBtn.addEventListener('click', async () => {
+  const file = fileInput.value.trim();
+  if (!file) return;
+  clearMsgs();
+  loadBtn.disabled = true;
+  try {
+    const res = await post('/api/replay/load', { file });
+    state.file = res.file;
+    state.totalMessages = res.messages;
+    state.durationMs = res.durationMs;
+    state.position = 0;
+    state.currentOffsetMs = 0;
+    state.playing = false;
+    updateUI();
+    showMsg(msgSuccess, 'msg-success',
+      num(res.messages) + ' Nachrichten geladen (' + res.durationFormatted + ')');
+    startPolling();
+  } catch (e) {
+    showMsg(msgError, 'msg-error', e.message);
+  } finally {
+    loadBtn.disabled = false;
+  }
+});
+fileInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadBtn.click(); });
+
+// ── Play / Pause ──
+playBtn.addEventListener('click', async () => {
+  clearMsgs();
+  try {
+    if (state.playing) {
+      state = await post('/api/replay/pause');
+    } else {
+      state = await post('/api/replay/play');
+    }
+    updateUI();
+  } catch (e) {
+    showMsg(msgError, 'msg-error', e.message);
+  }
+});
+
+// ── Stop ──
+stopBtn.addEventListener('click', async () => {
+  clearMsgs();
+  try {
+    state = await post('/api/replay/stop');
+    updateUI();
+    showMsg(msgInfo, 'msg-info', 'Wiedergabe beendet — Position zurückgesetzt');
+  } catch (e) {
+    showMsg(msgError, 'msg-error', e.message);
+  }
+});
+
+// ── Speed ──
+speedBtns.forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const speed = btn.dataset.speed === 'max' ? 'max' : Number(btn.dataset.speed);
+    try {
+      state = await post('/api/replay/speed', { speed });
+      updateUI();
+    } catch (e) {
+      showMsg(msgError, 'msg-error', e.message);
+    }
+  });
+});
+
+// ── Seek ──
+let seekTimeout = null;
+slider.addEventListener('input', () => {
+  const offsetMs = Number(slider.value);
+  timeCur.textContent = fmt(offsetMs);
+  const pct = state.durationMs > 0 ? (offsetMs / state.durationMs * 100) : 0;
+  sliderFill.style.width = pct + '%';
+
+  clearTimeout(seekTimeout);
+  seekTimeout = setTimeout(async () => {
+    clearMsgs();
+    setBadge('SPULEN', 'var(--orange)');
+    try {
+      state = await post('/api/replay/seek', { offsetMs });
+      updateUI();
+    } catch (e) {
+      showMsg(msgError, 'msg-error', e.message);
+    }
+  }, 300);
+});
+
+// Clear any cached service workers from the kiosk PWA
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(regs => {
+    regs.forEach(r => r.unregister());
+  });
+}
+
+// Initial poll
+poll();
+</script>
+</body>
+</html>

@@ -12,7 +12,15 @@ import type { DrillStatus } from './rohrwechsel.js';
 
 const clients = new Set<WebSocket>();
 
+let broadcastSuppressed = false;
+
+/** Toggle broadcast suppression (used by replay fast-forward). */
+export function setBroadcastSuppressed(suppressed: boolean): void {
+  broadcastSuppressed = suppressed;
+}
+
 function broadcast(data: Record<string, unknown>): void {
+  if (broadcastSuppressed) return;
   const message = JSON.stringify(data);
   for (const ws of clients) {
     if (ws.readyState === 1) {

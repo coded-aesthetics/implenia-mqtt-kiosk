@@ -1,9 +1,13 @@
 import mqtt from 'mqtt';
 import { DataSource } from './data-source.js';
 import { getMqttSettings } from './mqtt-config.js';
+import { broadcastMessage, setBroadcastSuppressed } from './websocket.js';
+import { beginTransaction, commitTransaction, rollbackTransaction } from './db.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('mqtt');
+
+const REPLAY_CONTROL_TOPIC = '$replay/control';
 
 class MqttSource extends DataSource {
   private client: mqtt.MqttClient | null = null;
@@ -47,9 +51,53 @@ class MqttSource extends DataSource {
           }
         });
       }
+
+      // $-prefixed topics are not matched by wildcard subscriptions (MQTT
+      // spec §4.7.2), so subscribe explicitly. The replay server publishes
+      // seek control messages on this topic.
+      this.client!.subscribe(REPLAY_CONTROL_TOPIC, () => {});
     });
 
     this.client.on('message', (topic, message) => {
+      if (topic === REPLAY_CONTROL_TOPIC) {
+        const action = message.toString();
+        if (action === 'seek-start') {
+          log.info('Replay seek started — suppressing broadcast');
+          broadcastMessage({ type: 'replay-seeking', seeking: true });
+          setBroadcastSuppressed(true);
+          this.emit('seek-start');
+          try {
+            beginTransaction();
+          } catch (err) {
+            log.error('Failed to begin seek transaction: %s', (err as Error).message);
+          }
+        } else if (action === 'seek-end') {
+          log.info('Replay seek finished — resuming broadcast');
+          try {
+            commitTransaction();
+          } catch (err) {
+            log.error('Failed to commit seek transaction, rolling back: %s', (err as Error).message);
+            try { rollbackTransaction(); } catch { /* already outside a transaction */ }
+          }
+          this.emit('seek-end');
+          setBroadcastSuppressed(false);
+          broadcastMessage({ type: 'replay-seeking', seeking: false });
+        } else if (action === 'seek-abort') {
+          log.warn('Replay seek aborted — rolling back');
+          try { rollbackTransaction(); } catch { /* no transaction open */ }
+          this.emit('seek-end');
+          setBroadcastSuppressed(false);
+          broadcastMessage({ type: 'replay-seeking', seeking: false });
+        } else if (action === 'replay-start') {
+          log.info('Replay session requested');
+          this.emit('replay-start');
+        } else if (action === 'replay-stop') {
+          log.info('Replay session end requested');
+          this.emit('replay-stop');
+        }
+        return;
+      }
+
       this.emit('reading', {
         topic,
         payload: message.toString(),

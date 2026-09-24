@@ -64,6 +64,7 @@ interface WebSocketState {
   updateAvailable: string | null;
   updateSource: UpdateSource | null;
   updateApplying: boolean;
+  replaySeeking: boolean;
 }
 
 const INITIAL_RECORDING: RecordingState = {
@@ -87,6 +88,7 @@ export function useWebSocket() {
     updateAvailable: null,
     updateSource: null,
     updateApplying: false,
+    replaySeeking: false,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -106,6 +108,10 @@ export function useWebSocket() {
         window.location.reload();
         return;
       }
+      // A disconnect during replay seek leaves replaySeeking true with no
+      // dismiss mechanism. The server doesn't re-send seek state on connect,
+      // so reset it here.
+      setState((prev) => prev.replaySeeking ? { ...prev, replaySeeking: false } : prev);
     };
 
     ws.onmessage = (event) => {
@@ -207,6 +213,10 @@ export function useWebSocket() {
           case 'update-applying':
             wasApplyingUpdate.current = true;
             setState((prev) => ({ ...prev, updateApplying: true }));
+            break;
+
+          case 'replay-seeking':
+            setState((prev) => ({ ...prev, replaySeeking: !!msg.seeking }));
             break;
         }
       } catch {

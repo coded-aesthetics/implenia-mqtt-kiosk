@@ -10,6 +10,7 @@
     "dev": "concurrently -n server,ui -c blue,green \"npm run dev -w server\" \"npm run dev -w ui\"",
     "build": "npm run build -w server && npm run build -w ui",
     "start": "node server/dist/index.js",
+    "replay": "npm run replay -w server",
     "lint": "npm run lint -w server && npm run lint -w ui"
   },
   "overrides": {
