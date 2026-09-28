@@ -17,7 +17,7 @@ export function buildCommands(): VoiceCommand[] {
         'starten',
       ],
       precondition: (ctx) =>
-        ctx.route.page === 'element' && !ctx.recordingState.active,
+        (ctx.route.page === 'element' || ctx.route.page === 'bohren') && !ctx.recordingState.active,
       preconditionHint: 'Aufzeichnung läuft bereits oder kein Element geöffnet',
       execute: async (ctx) => {
         const elementName = ctx.route.params.name;
@@ -119,7 +119,7 @@ export function buildCommands(): VoiceCommand[] {
         'live',
         'sensoren',
       ],
-      precondition: (ctx) => ctx.route.page === 'element',
+      precondition: (ctx) => ctx.route.page === 'element' || ctx.route.page === 'bohren',
       preconditionHint: 'Kein Element geöffnet',
       execute: (ctx) => {
         ctx.setActiveTab('messwerte');
@@ -135,7 +135,7 @@ export function buildCommands(): VoiceCommand[] {
         'sollwerte',
         'spezifikation',
       ],
-      precondition: (ctx) => ctx.route.page === 'element',
+      precondition: (ctx) => ctx.route.page === 'element' || ctx.route.page === 'bohren',
       preconditionHint: 'Kein Element geöffnet',
       execute: (ctx) => {
         ctx.setActiveTab('vorgabe');
@@ -152,7 +152,7 @@ export function buildCommands(): VoiceCommand[] {
         'zeige kommentare',
         'kommentarseite',
       ],
-      precondition: (ctx) => ctx.route.page === 'element',
+      precondition: (ctx) => ctx.route.page === 'element' || ctx.route.page === 'bohren',
       preconditionHint: 'Kein Element geöffnet',
       execute: (ctx) => {
         ctx.setActiveTab('kommentare');
@@ -184,7 +184,7 @@ export function buildCommands(): VoiceCommand[] {
         'kommentar hinzufügen',
         'anmerkung',
       ],
-      precondition: (ctx) => ctx.route.page === 'element',
+      precondition: (ctx) => ctx.route.page === 'element' || ctx.route.page === 'bohren',
       preconditionHint: 'Kein Element geöffnet',
       execute: () => {
         // Dictation mode is handled by useVoiceCommands — this is a trigger only

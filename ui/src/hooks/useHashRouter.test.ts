@@ -65,6 +65,12 @@ describe('parseRoute', () => {
     expect(parseRoute('#/rohrverlaengerung').page).toBe('rohrverlaengerung');
   });
 
+  it('parses a bohren route with element name', () => {
+    const r = parseRoute('#/bohren/H%2026');
+    expect(r.page).toBe('bohren');
+    expect(r.params.name).toBe('H 26');
+  });
+
   it('does not mistake a prefix for a setup route', () => {
     expect(parseRoute('#/setups').page).toBe('home');
     expect(parseRoute('#/element/setup').page).toBe('element');

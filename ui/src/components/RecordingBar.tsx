@@ -101,7 +101,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
   }, [status, recordingState.sessionId, exportTick]);
 
   // Only show on element page, or if recording is active for any element
-  if (currentPage !== 'element' && !recordingState.active) return null;
+  if (currentPage !== 'element' && currentPage !== 'bohren' && !recordingState.active) return null;
 
   async function startRecording() {
     if (!elementName) return;
@@ -225,9 +225,9 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     <div style={styles.bar}>
       {error && <div style={styles.error}>{error}</div>}
 
-      {/* Rohrverlängerung. Shown above the controls rather than in place of
-          them: "Beenden" has to stay reachable even mid-Rohrwechsel. */}
-      {recordingState.active && operatingMode === 'bohren' && rohrwechsel?.phase === 'rohrwechsel' && (
+      {/* Rohrverlängerung banner — only on non-bohren pages; the BohrenScreen
+          has its own inline Klemmbacke indicator. */}
+      {currentPage !== 'bohren' && recordingState.active && operatingMode === 'bohren' && rohrwechsel?.phase === 'rohrwechsel' && (
         <div style={styles.rohrwechselBanner}>
           <span style={styles.pauseIcon}>❚❚</span>
           <span>
@@ -237,10 +237,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
         </div>
       )}
 
-      {/* Gated on Bohren for the same reason as the banner above: during
-          Verpressen the Klemmbacke holds the string rather than changing a
-          pipe, so nothing it does says anything about the last Rohrwechsel. */}
-      {recordingState.active && operatingMode === 'bohren' && rohrwechsel?.warning
+      {currentPage !== 'bohren' && recordingState.active && operatingMode === 'bohren' && rohrwechsel?.warning
         && rohrwechsel.warningSince !== ackedWarning && (
         <div
           style={styles.rohrwechselWarning}
@@ -251,7 +248,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
         </div>
       )}
 
-      {status === 'idle' && currentPage === 'element' && (
+      {status === 'idle' && (currentPage === 'element' || currentPage === 'bohren') && (
         <button
           style={{ ...styles.button, ...styles.startButton }}
           onClick={startRecording}
@@ -259,26 +256,6 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
         >
           {loading ? 'Wird gestartet...' : 'Aufzeichnung beginnen'}
         </button>
-      )}
-
-      {/* Which operation is running. It decides whether a closed Klemmbacke
-          is a pipe change or simply a held pipe string, so it has to be as
-          easy to reach as the stop button. */}
-      {status === 'recording' && operatingMode && (
-        <div style={styles.modeRow}>
-          <button
-            style={operatingMode === 'bohren' ? styles.modeButtonActive : styles.modeButton}
-            onClick={() => setMode('bohren')}
-          >
-            Bohren
-          </button>
-          <button
-            style={operatingMode === 'verpressen' ? styles.modeButtonActive : styles.modeButton}
-            onClick={() => setMode('verpressen')}
-          >
-            Verpressen
-          </button>
-        </div>
       )}
 
       {status === 'recording' && (
@@ -292,6 +269,22 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
           <span style={styles.elapsed}>
             <ElapsedTime startedAt={recordingState.startedAt} />
           </span>
+          {operatingMode && (
+            <div style={styles.modeToggle}>
+              <button
+                style={operatingMode === 'bohren' ? styles.modeButtonActive : styles.modeButton}
+                onClick={() => setMode('bohren')}
+              >
+                B
+              </button>
+              <button
+                style={operatingMode === 'verpressen' ? styles.modeButtonActive : styles.modeButton}
+                onClick={() => setMode('verpressen')}
+              >
+                V
+              </button>
+            </div>
+          )}
           <button
             style={{ ...styles.button, ...styles.stopButton }}
             onClick={stopRecording}
@@ -417,10 +410,9 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: '0.5rem 1.5rem',
+    padding: '0.35rem 1.5rem',
     backgroundColor: '#0f0f23',
     borderTop: '1px solid #2a2a4a',
-    minHeight: '64px',
   },
   recordingRow: {
     display: 'flex',
@@ -583,18 +575,17 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#f44336',
     marginBottom: '0.5rem',
   },
-  modeRow: {
+  modeToggle: {
     display: 'flex',
     gap: '2px',
-    marginBottom: '0.5rem',
-    borderRadius: '8px',
+    borderRadius: '6px',
     overflow: 'hidden',
   },
   modeButton: {
     minHeight: '64px',
-    minWidth: '170px',
-    padding: '0 1.5rem',
-    fontSize: '1.4rem',
+    minWidth: '64px',
+    padding: '0 0.75rem',
+    fontSize: '1.2rem',
     fontWeight: 600,
     fontFamily: 'inherit',
     border: 'none',
@@ -604,9 +595,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
   modeButtonActive: {
     minHeight: '64px',
-    minWidth: '170px',
-    padding: '0 1.5rem',
-    fontSize: '1.4rem',
+    minWidth: '64px',
+    padding: '0 0.75rem',
+    fontSize: '1.2rem',
     fontWeight: 700,
     fontFamily: 'inherit',
     border: 'none',
@@ -618,14 +609,14 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '0.75rem',
+    gap: '0.5rem',
     width: '100%',
-    padding: '0.5rem 1rem',
-    marginBottom: '0.5rem',
-    borderRadius: '8px',
+    padding: '0.25rem 1rem',
+    marginBottom: '0.25rem',
+    borderRadius: '6px',
     backgroundColor: '#e65100',
     color: '#ffffff',
-    fontSize: '1.4rem',
+    fontSize: '1.1rem',
     fontWeight: 700,
     textAlign: 'center',
   },

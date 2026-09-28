@@ -15,6 +15,7 @@ import { SetupWizard } from './components/SetupWizard';
 import { TopicAssignment } from './components/TopicAssignment';
 import { CalibrationPage } from './components/CalibrationPage';
 import { RohrverlaengerungPage } from './components/RohrverlaengerungPage';
+import { BohrenScreen, INJEKTIONSBOHREN_BOHREN } from './components/BohrenScreen';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
@@ -146,23 +147,35 @@ export function App() {
       pageTitle = 'Kommentare';
       break;
     }
+    case 'bohren':
     case 'element': {
       const deviceVorgaben = shift.data?.measuring_devices.find(
         (d) => d.name === route.params.name,
       )?.vorgaben ?? null;
-      content = (
-        <ElementDetail
-          elementName={route.params.name}
-          readings={readings}
-          vorgaben={deviceVorgaben}
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          commentQueue={commentQueue.queue}
-          onCommentEdit={commentQueue.editText}
-          onCommentDelete={commentQueue.deleteComment}
-          onCommentRetry={commentQueue.retry}
-        />
-      );
+      if (setup.verfahren === 'injektionsbohren') {
+        content = (
+          <BohrenScreen
+            readings={readings}
+            vorgaben={deviceVorgaben}
+            config={INJEKTIONSBOHREN_BOHREN}
+            recordingState={recordingState}
+          />
+        );
+      } else {
+        content = (
+          <ElementDetail
+            elementName={route.params.name}
+            readings={readings}
+            vorgaben={deviceVorgaben}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            commentQueue={commentQueue.queue}
+            onCommentEdit={commentQueue.editText}
+            onCommentDelete={commentQueue.deleteComment}
+            onCommentRetry={commentQueue.retry}
+          />
+        );
+      }
       pageTitle = route.params.name;
       break;
     }
@@ -203,7 +216,7 @@ export function App() {
       )}
       <main style={{
         ...styles.main,
-        ...(route.page === 'element' || route.page === 'sensors' || route.page === 'calibration' || route.page === 'rohrverlaengerung'
+        ...(route.page === 'element' || route.page === 'bohren' || route.page === 'sensors' || route.page === 'calibration' || route.page === 'rohrverlaengerung'
           || (route.page === 'config' && !route.params.section)
           ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const }
           : {}),

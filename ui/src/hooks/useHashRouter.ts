@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 export interface Route {
-  page: 'home' | 'config' | 'element' | 'comments' | 'setup' | 'sensors' | 'calibration' | 'rohrverlaengerung';
+  page: 'home' | 'config' | 'element' | 'bohren' | 'comments' | 'setup' | 'sensors' | 'calibration' | 'rohrverlaengerung';
   params: Record<string, string>;
   query: Record<string, string>;
 }
@@ -52,6 +52,11 @@ export function parseRoute(hash: string): Route {
   const setupMatch = path.match(/^setup(?:\/(.+))?$/);
   if (setupMatch) {
     return { page: 'setup', params: { step: setupMatch[1] ?? 'verfahren' }, query };
+  }
+
+  const bohrenMatch = path.match(/^bohren\/(.+)$/);
+  if (bohrenMatch) {
+    return { page: 'bohren', params: { name: decodeURIComponent(bohrenMatch[1]) }, query };
   }
 
   const elementMatch = path.match(/^element\/(.+)$/);
