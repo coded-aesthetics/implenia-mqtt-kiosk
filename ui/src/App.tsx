@@ -15,6 +15,7 @@ import { SetupWizard } from './components/SetupWizard';
 import { TopicAssignment } from './components/TopicAssignment';
 import { CalibrationPage } from './components/CalibrationPage';
 import { RohrverlaengerungPage } from './components/RohrverlaengerungPage';
+import { BohrenScreen, INJEKTIONSBOHREN_BOHREN } from './components/BohrenScreen';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
@@ -146,6 +147,22 @@ export function App() {
       pageTitle = 'Kommentare';
       break;
     }
+    case 'bohren': {
+      const bohrenVorgaben = shift.data?.measuring_devices.find(
+        (d) => d.name === route.params.name,
+      )?.vorgaben ?? null;
+      content = (
+        <BohrenScreen
+          elementName={route.params.name}
+          readings={readings}
+          vorgaben={bohrenVorgaben}
+          config={INJEKTIONSBOHREN_BOHREN}
+          recordingState={recordingState}
+        />
+      );
+      pageTitle = route.params.name;
+      break;
+    }
     case 'element': {
       const deviceVorgaben = shift.data?.measuring_devices.find(
         (d) => d.name === route.params.name,
@@ -203,7 +220,7 @@ export function App() {
       )}
       <main style={{
         ...styles.main,
-        ...(route.page === 'element' || route.page === 'sensors' || route.page === 'calibration' || route.page === 'rohrverlaengerung'
+        ...(route.page === 'element' || route.page === 'bohren' || route.page === 'sensors' || route.page === 'calibration' || route.page === 'rohrverlaengerung'
           || (route.page === 'config' && !route.params.section)
           ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const }
           : {}),

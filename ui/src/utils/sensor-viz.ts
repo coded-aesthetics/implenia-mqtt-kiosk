@@ -4,7 +4,7 @@ export function clampFrac(v: number, min: number, max: number): number {
 }
 
 export function statusColor(val: number, soll: number | null | undefined): string {
-  if (soll == null) return 'var(--color-accent)';
+  if (soll == null) return 'var(--color-success)';
   if (soll === 0) {
     if (val === 0) return 'var(--color-success)';
     return 'var(--color-danger)';

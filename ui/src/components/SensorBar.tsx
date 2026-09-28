@@ -18,9 +18,9 @@ const VB_W = 640;
 const VB_H = 40;
 const LABEL_END = 105;
 const BAR_X = LABEL_END + 4;
-const VAL_X = VB_W - 52;
-const UNIT_X = VAL_X + 6;
-const BAR_END = VAL_X - 14;
+const VAL_X = VB_W - 34;
+const UNIT_X = VAL_X + 4;
+const BAR_END = VAL_X - 56;
 const BAR_W = BAR_END - BAR_X;
 
 const RANGE_Y = 0;
@@ -48,7 +48,7 @@ export function SensorBar({ value, min, max, label, unit, soll, labelStep: label
     parts.push(
       <text key={k++}
         x={VAL_X} y={BAR_Y + BAR_H / 2}
-        fill={sc} fontSize={16} fontWeight={700}
+        fill="#ffffff" fontSize={16} fontWeight={700}
         textAnchor="end" dominantBaseline="central"
         style={tabNums}
       >{formatNumber(value)}</text>
@@ -93,7 +93,7 @@ export function SensorBar({ value, min, max, label, unit, soll, labelStep: label
     parts.push(
       <rect key={k++}
         x={BAR_X} y={BAR_Y} width={BAR_W} height={BAR_H}
-        rx={2} fill="var(--surface-3)" opacity={0.45}
+        rx={2} fill="var(--text-dim)" opacity={0.35}
       />
     );
 

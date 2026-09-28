@@ -34,7 +34,7 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
     <div style={styles.bar}>
       {/* Left: logo + optional back button */}
       <div style={styles.leftSection}>
-        {(currentPage === 'element' || currentPage === 'comments' || !!configSection || currentPage === 'sensors' || currentPage === 'calibration' || currentPage === 'rohrverlaengerung') && (
+        {(currentPage === 'element' || currentPage === 'bohren' || currentPage === 'comments' || !!configSection || currentPage === 'sensors' || currentPage === 'calibration' || currentPage === 'rohrverlaengerung') && (
           <button
             onClick={() => {
               if (configSection) navigate('config');

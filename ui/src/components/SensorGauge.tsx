@@ -55,8 +55,8 @@ export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, la
       const isMajor = Math.abs(tickVal % labelStep) < 0.001 || Math.abs(tickVal % labelStep - labelStep) < 0.001;
       const ri = isMajor ? rInner - 4 : rInner;
       const filled = a <= START && a >= valAngle;
-      const tickColor = filled ? sc : 'var(--surface-3)';
-      const tickAlpha = filled ? (isMajor ? 0.95 : 0.7) : 1;
+      const tickColor = filled ? sc : 'var(--text-dim)';
+      const tickAlpha = filled ? (isMajor ? 0.95 : 0.7) : 0.5;
       const tickW = isMajor ? 2.5 : (filled ? 1.5 : 1.2);
       parts.push(
         <line key={k++}
@@ -111,7 +111,7 @@ export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, la
 
     parts.push(
       <text key={k++}
-        x={cx} y={cy - 6} fill={sc}
+        x={cx} y={cy - 6} fill="#ffffff"
         fontSize={32} fontWeight={800} textAnchor="middle" dominantBaseline="auto"
         style={tabNums}
       >

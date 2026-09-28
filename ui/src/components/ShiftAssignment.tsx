@@ -159,7 +159,7 @@ export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: P
           {data.measuring_devices.map((device) => (
             <button
               key={device.id}
-              onClick={() => navigate(`element/${encodeURIComponent(device.name)}`)}
+              onClick={() => navigate(`bohren/${encodeURIComponent(device.name)}`)}
               style={styles.tile}
             >
               <div style={styles.tileName}>{device.name}</div>
