@@ -24,12 +24,12 @@ describe('clampFrac', () => {
 });
 
 describe('statusColor', () => {
-  it('returns accent when soll is null', () => {
-    expect(statusColor(42, null)).toBe('var(--color-accent)');
+  it('returns success when soll is null', () => {
+    expect(statusColor(42, null)).toBe('var(--color-success)');
   });
 
-  it('returns accent when soll is undefined', () => {
-    expect(statusColor(42, undefined)).toBe('var(--color-accent)');
+  it('returns success when soll is undefined', () => {
+    expect(statusColor(42, undefined)).toBe('var(--color-success)');
   });
 
   it('returns success when soll is 0 and value is 0', () => {

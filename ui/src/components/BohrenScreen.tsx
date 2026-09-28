@@ -33,21 +33,10 @@ export interface BohrenConfig {
 }
 
 interface Props {
-  elementName: string;
   readings: Map<string, SensorReading>;
   vorgaben: VorgabenData | null;
   config: BohrenConfig;
   recordingState: RecordingState;
-}
-
-function findReadingValue(readings: Map<string, SensorReading>, sensor: string): number {
-  for (const r of readings.values()) {
-    if (r.topic === sensor || r.topic.endsWith('/' + sensor)) {
-      const n = parseFloat(r.payload);
-      return Number.isFinite(n) ? n : 0;
-    }
-  }
-  return 0;
 }
 
 function findSoll(vorgaben: VorgabenData | null, sensorName: string): number | null {
@@ -79,7 +68,21 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
   const allEntries = useMemo(() => collectVorgabeEntries(vorgaben), [vorgaben]);
   const geologyProfile = useMemo(() => buildSchichten(allEntries), [allEntries]);
 
-  const depth = findReadingValue(readings, config.depthSensor);
+  const sensorValues = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of readings.values()) {
+      const n = parseFloat(r.payload);
+      const val = Number.isFinite(n) ? n : 0;
+      map.set(r.topic, val);
+      const slashIdx = r.topic.lastIndexOf('/');
+      if (slashIdx >= 0) {
+        map.set(r.topic.substring(slashIdx + 1), val);
+      }
+    }
+    return map;
+  }, [readings]);
+
+  const depth = sensorValues.get(config.depthSensor) ?? 0;
 
   return (
     <div style={styles.container}>
@@ -114,7 +117,7 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
             {config.gauges.map((g) => (
               <div key={g.sensor} style={styles.gaugeCell}>
                 <SensorGauge
-                  value={findReadingValue(readings, g.sensor)}
+                  value={sensorValues.get(g.sensor) ?? 0}
                   min={g.min}
                   max={g.max}
                   label={g.label}
@@ -152,7 +155,7 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
             {config.bars.map((b) => (
               <SensorBar
                 key={b.sensor}
-                value={findReadingValue(readings, b.sensor)}
+                value={sensorValues.get(b.sensor) ?? 0}
                 min={b.min}
                 max={b.max}
                 label={b.label}
@@ -322,7 +325,7 @@ const styles: Record<string, CSSProperties> = {
   klemmWarning: {
     marginLeft: 'auto',
     color: '#e65100',
-    fontSize: '0.9rem',
+    fontSize: '1rem',
     cursor: 'pointer',
   },
   barStack: {

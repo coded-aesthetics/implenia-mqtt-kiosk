@@ -582,8 +582,8 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
   },
   modeButton: {
-    minHeight: '48px',
-    minWidth: '48px',
+    minHeight: '64px',
+    minWidth: '64px',
     padding: '0 0.75rem',
     fontSize: '1.2rem',
     fontWeight: 600,
@@ -594,8 +594,8 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--text-muted)',
   },
   modeButtonActive: {
-    minHeight: '48px',
-    minWidth: '48px',
+    minHeight: '64px',
+    minWidth: '64px',
     padding: '0 0.75rem',
     fontSize: '1.2rem',
     fontWeight: 700,
