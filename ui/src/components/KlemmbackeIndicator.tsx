@@ -83,8 +83,8 @@ const styles: Record<string, CSSProperties> = {
     lineHeight: 1,
   },
   unit: {
-    fontSize: '0.75rem',
-    color: 'var(--text-dim)',
+    fontSize: '1rem',
+    color: 'var(--text-muted)',
     fontWeight: 500,
   },
   gaugeWrap: {

@@ -143,10 +143,9 @@ export function SensorChart({ series, scales: scalesProp, windowMinutes = 5, hei
       axes: [
         {
           ...AXIS_STYLE,
-          values: (_u, vals) => vals.map((v) => {
-            const d = new Date(v * 1000);
-            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-          }),
+          values: (_u, vals) => vals.map((v) =>
+            new Date(v * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
+          ),
         },
         ...yAxes,
       ],

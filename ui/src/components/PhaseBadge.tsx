@@ -28,7 +28,7 @@ const styles: Record<string, CSSProperties> = {
     display: 'inline-block',
     borderRadius: 'var(--radius-sm)',
     padding: '0.15rem 0.75rem',
-    fontSize: 'var(--font-sm)',
+    fontSize: 'var(--font-base)',
     fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: '0.04em',

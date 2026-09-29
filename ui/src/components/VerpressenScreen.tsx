@@ -1,11 +1,13 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
-import type { SensorReading, RecordingState } from '../hooks/useWebSocket';
+import type { RecordingState } from '../hooks/useWebSocket';
 import type { VorgabenData } from '../hooks/useImplenia';
 import { SensorGauge } from './SensorGauge';
 import { SensorChart, type ChartSeries, type ChartScale } from './SensorChart';
 import { KlemmbackeIndicator } from './KlemmbackeIndicator';
 import { formatNumber } from '../utils/format';
+import { findSoll } from '../utils/sensors';
+import { useSensorValues } from '../hooks/useSensorValues';
 
 export interface GaugeSlot {
   sensor: string;
@@ -39,7 +41,7 @@ interface ClampConfig {
 }
 
 interface Props {
-  readings: Map<string, SensorReading>;
+  readings: Map<string, import('../hooks/useWebSocket').SensorReading>;
   vorgaben: VorgabenData | null;
   config: VerpressenConfig;
   recordingState: RecordingState;
@@ -48,32 +50,7 @@ interface Props {
 const CHART_WINDOW_MINUTES = 5;
 const MAX_BUFFER_POINTS = CHART_WINDOW_MINUTES * 60 * 2;
 
-function findSoll(vorgaben: VorgabenData | null, sensorName: string): number | null {
-  if (!vorgaben) return null;
-  const fv = vorgaben.float_sensors?.[sensorName];
-  if (typeof fv === 'number' && Number.isFinite(fv)) return fv;
-  const iv = vorgaben.int_sensors?.[sensorName];
-  if (typeof iv === 'number' && Number.isFinite(iv)) return iv;
-  return null;
-}
-
-function resolveSensorValue(readings: Map<string, SensorReading>, sensor: string): number {
-  for (const r of readings.values()) {
-    if (r.topic === sensor) {
-      const n = parseFloat(r.payload);
-      return Number.isFinite(n) ? n : 0;
-    }
-    const slashIdx = r.topic.lastIndexOf('/');
-    if (slashIdx >= 0 && r.topic.substring(slashIdx + 1) === sensor) {
-      const n = parseFloat(r.payload);
-      return Number.isFinite(n) ? n : 0;
-    }
-  }
-  return 0;
-}
-
-export function VerpressenScreen({ readings, vorgaben, config }: Props) {
-  // Klemmbacke config from server
+export function VerpressenScreen({ readings, vorgaben, config, recordingState: _recordingState }: Props) {
   const [clampConfig, setClampConfig] = useState<ClampConfig>({
     clampTopic: null,
     openThreshold: 50,
@@ -93,20 +70,7 @@ export function VerpressenScreen({ readings, vorgaben, config }: Props) {
       .catch(() => {});
   }, []);
 
-  // Build sensor values map
-  const sensorValues = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const r of readings.values()) {
-      const n = parseFloat(r.payload);
-      const val = Number.isFinite(n) ? n : 0;
-      map.set(r.topic, val);
-      const slashIdx = r.topic.lastIndexOf('/');
-      if (slashIdx >= 0) {
-        map.set(r.topic.substring(slashIdx + 1), val);
-      }
-    }
-    return map;
-  }, [readings]);
+  const sensorValues = useSensorValues(readings);
 
   const depth = sensorValues.get(config.depthSensor) ?? 0;
   const volume = sensorValues.get(config.volumeSensor) ?? 0;
@@ -114,26 +78,29 @@ export function VerpressenScreen({ readings, vorgaben, config }: Props) {
   // Klemmbacke state with hysteresis
   const clampValue = useMemo(() => {
     if (!clampConfig.clampTopic) return 0;
-    return resolveSensorValue(readings, clampConfig.clampTopic);
-  }, [readings, clampConfig.clampTopic]);
+    return sensorValues.get(clampConfig.clampTopic) ?? 0;
+  }, [sensorValues, clampConfig.clampTopic]);
 
-  const clampOpenRef = useRef(true);
-  if (clampValue >= clampConfig.closeThreshold) {
-    clampOpenRef.current = false;
-  } else if (clampValue < clampConfig.openThreshold) {
-    clampOpenRef.current = true;
-  }
-  const isClampOpen = clampOpenRef.current;
+  const [isClampOpen, setIsClampOpen] = useState(true);
 
-  // Chart data accumulation — samples sensorValues at ~1Hz, wall clock timestamps
+  useEffect(() => {
+    if (clampValue >= clampConfig.closeThreshold) {
+      setIsClampOpen(false);
+    } else if (clampValue < clampConfig.openThreshold) {
+      setIsClampOpen(true);
+    }
+  }, [clampValue, clampConfig.closeThreshold, clampConfig.openThreshold]);
+
+  // Chart data accumulation — samples sensorValues at ~1Hz via useEffect
   const chartBufferRef = useRef<Map<string, Array<{ ts: number; value: number }>>>(new Map());
   const lastSampleRef = useRef(0);
+  const [sampleTick, setSampleTick] = useState(0);
 
-  // Runs during render so the buffer is populated before chartSeries reads it
-  const now = Date.now();
-  const sampled = now - lastSampleRef.current >= 1000;
-  if (sampled) {
+  useEffect(() => {
+    const now = Date.now();
+    if (now - lastSampleRef.current < 1000) return;
     lastSampleRef.current = now;
+
     const cutoff = now - CHART_WINDOW_MINUTES * 60 * 1000;
     const buf = chartBufferRef.current;
 
@@ -150,7 +117,8 @@ export function VerpressenScreen({ readings, vorgaben, config }: Props) {
       while (arr.length > 0 && arr[0].ts < cutoff) arr.shift();
       if (arr.length > MAX_BUFFER_POINTS) arr.splice(0, arr.length - MAX_BUFFER_POINTS);
     }
-  }
+    setSampleTick((t) => t + 1);
+  }, [sensorValues, config.chartTraces]);
 
   const chartSeries = useMemo<ChartSeries[]>(() => {
     const buf = chartBufferRef.current;
@@ -161,9 +129,8 @@ export function VerpressenScreen({ readings, vorgaben, config }: Props) {
       scale: t.scale,
       data: [...(buf.get(t.sensor) ?? [])],
     }));
-  // readings triggers re-computation; sampled ensures we only snapshot at 1Hz
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.chartTraces, readings]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.chartTraces, sampleTick]);
 
   return (
     <div style={styles.container}>
@@ -274,7 +241,7 @@ const styles: Record<string, CSSProperties> = {
     padding: '0.25rem 0',
   },
   heroLabel: {
-    fontSize: 'var(--font-sm)',
+    fontSize: 'var(--font-base)',
     fontWeight: 600,
     color: 'var(--text-muted)',
     textTransform: 'uppercase',
