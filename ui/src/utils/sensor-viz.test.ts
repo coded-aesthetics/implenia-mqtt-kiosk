@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clampFrac, statusColor, autoLabelStep } from './sensor-viz';
+import { clampFrac, statusColor, thresholdColor, autoLabelStep } from './sensor-viz';
 
 describe('clampFrac', () => {
   it('returns 0 when min === max', () => {
@@ -50,6 +50,36 @@ describe('statusColor', () => {
 
   it('returns danger beyond 25% of soll', () => {
     expect(statusColor(50, 100)).toBe('var(--color-danger)');
+  });
+});
+
+describe('thresholdColor', () => {
+  it('returns success when thresholds are null', () => {
+    expect(thresholdColor(999, null)).toBe('var(--color-success)');
+  });
+
+  it('returns success when thresholds are undefined', () => {
+    expect(thresholdColor(999, undefined)).toBe('var(--color-success)');
+  });
+
+  it('returns success below warning', () => {
+    expect(thresholdColor(400, { warning: 500, danger: 2000 })).toBe('var(--color-success)');
+  });
+
+  it('returns warning at warning threshold', () => {
+    expect(thresholdColor(500, { warning: 500, danger: 2000 })).toBe('var(--color-warning)');
+  });
+
+  it('returns warning between warning and danger', () => {
+    expect(thresholdColor(1500, { warning: 500, danger: 2000 })).toBe('var(--color-warning)');
+  });
+
+  it('returns danger at danger threshold', () => {
+    expect(thresholdColor(2000, { warning: 500, danger: 2000 })).toBe('var(--color-danger)');
+  });
+
+  it('returns danger above danger threshold', () => {
+    expect(thresholdColor(5000, { warning: 500, danger: 2000 })).toBe('var(--color-danger)');
   });
 });
 
