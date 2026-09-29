@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { navigate } from '../hooks/useHashRouter';
+import type { OperatingMode } from '../hooks/useWebSocket';
+import { PhaseBadge } from './PhaseBadge';
 import logo from '../../assets/implenia-logo.png';
 
 interface Props {
@@ -14,9 +16,10 @@ interface Props {
   onMicPress?: () => void;
   onMicRelease?: () => void;
   commentQueueCount?: number;
+  operatingMode?: OperatingMode | null;
 }
 
-export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount }: Props) {
+export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -56,9 +59,12 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
         </a>
       </div>
 
-      {/* Center: page title */}
+      {/* Center: page title + phase badge */}
       <div style={styles.centerSection}>
         {pageTitle && <span style={styles.pageTitle}>{pageTitle}</span>}
+        {operatingMode && (currentPage === 'element' || currentPage === 'bohren') && (
+          <PhaseBadge mode={operatingMode} />
+        )}
       </div>
 
       {/* Right: connectivity + version + settings */}
@@ -164,12 +170,14 @@ const styles: Record<string, React.CSSProperties> = {
   logo: {
     height: '80px',
     objectFit: 'contain' as const,
+    mixBlendMode: 'lighten' as const,
   },
   centerSection: {
     flex: 1,
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
+    gap: '0.75rem',
   },
   pageTitle: {
     fontSize: '2.0rem',

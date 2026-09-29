@@ -15,6 +15,18 @@ export function statusColor(val: number, soll: number | null | undefined): strin
   return 'var(--color-danger)';
 }
 
+export interface Thresholds {
+  warning: number;
+  danger: number;
+}
+
+export function thresholdColor(val: number, thresholds: Thresholds | null | undefined): string {
+  if (!thresholds) return 'var(--color-success)';
+  if (val >= thresholds.danger) return 'var(--color-danger)';
+  if (val >= thresholds.warning) return 'var(--color-warning)';
+  return 'var(--color-success)';
+}
+
 export function autoLabelStep(range: number): number {
   if (range <= 0) return 1;
   const raw = range / 6;

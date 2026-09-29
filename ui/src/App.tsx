@@ -16,6 +16,7 @@ import { TopicAssignment } from './components/TopicAssignment';
 import { CalibrationPage } from './components/CalibrationPage';
 import { RohrverlaengerungPage } from './components/RohrverlaengerungPage';
 import { BohrenScreen, INJEKTIONSBOHREN_BOHREN } from './components/BohrenScreen';
+import { VerpressenScreen, INJEKTIONSBOHREN_VERPRESSEN } from './components/VerpressenScreen';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
@@ -153,14 +154,25 @@ export function App() {
         (d) => d.name === route.params.name,
       )?.vorgaben ?? null;
       if (setup.verfahren === 'injektionsbohren') {
-        content = (
-          <BohrenScreen
-            readings={readings}
-            vorgaben={deviceVorgaben}
-            config={INJEKTIONSBOHREN_BOHREN}
-            recordingState={recordingState}
-          />
-        );
+        if (recordingState.operatingMode === 'verpressen') {
+          content = (
+            <VerpressenScreen
+              readings={readings}
+              vorgaben={deviceVorgaben}
+              config={INJEKTIONSBOHREN_VERPRESSEN}
+              recordingState={recordingState}
+            />
+          );
+        } else {
+          content = (
+            <BohrenScreen
+              readings={readings}
+              vorgaben={deviceVorgaben}
+              config={INJEKTIONSBOHREN_BOHREN}
+              recordingState={recordingState}
+            />
+          );
+        }
       } else {
         content = (
           <ElementDetail
@@ -201,6 +213,7 @@ export function App() {
         onMicPress={voice.startListening}
         onMicRelease={voice.stopListening}
         commentQueueCount={commentQueue.pendingCount}
+        operatingMode={recordingState.operatingMode}
       />
       <VoiceFeedbackOverlay feedback={voice.feedback} />
       <UpdateBanner

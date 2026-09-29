@@ -5,6 +5,8 @@ import type { VorgabenData } from '../hooks/useImplenia';
 import { SensorGauge } from './SensorGauge';
 import { SensorBar } from './SensorBar';
 import { formatNumber } from '../utils/format';
+import { findSoll } from '../utils/sensors';
+import { useSensorValues } from '../hooks/useSensorValues';
 import { buildSchichten, collectVorgabeEntries } from '../utils/vorgaben';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 
@@ -39,15 +41,6 @@ interface Props {
   recordingState: RecordingState;
 }
 
-function findSoll(vorgaben: VorgabenData | null, sensorName: string): number | null {
-  if (!vorgaben) return null;
-  const fv = vorgaben.float_sensors?.[sensorName];
-  if (typeof fv === 'number' && Number.isFinite(fv)) return fv;
-  const iv = vorgaben.int_sensors?.[sensorName];
-  if (typeof iv === 'number' && Number.isFinite(iv)) return iv;
-  return null;
-}
-
 export function BohrenScreen({ readings, vorgaben, config, recordingState }: Props) {
   const geoRef = useRef<HTMLDivElement>(null);
   const [geoHeight, setGeoHeight] = useState(0);
@@ -68,19 +61,7 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
   const allEntries = useMemo(() => collectVorgabeEntries(vorgaben), [vorgaben]);
   const geologyProfile = useMemo(() => buildSchichten(allEntries), [allEntries]);
 
-  const sensorValues = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const r of readings.values()) {
-      const n = parseFloat(r.payload);
-      const val = Number.isFinite(n) ? n : 0;
-      map.set(r.topic, val);
-      const slashIdx = r.topic.lastIndexOf('/');
-      if (slashIdx >= 0) {
-        map.set(r.topic.substring(slashIdx + 1), val);
-      }
-    }
-    return map;
-  }, [readings]);
+  const sensorValues = useSensorValues(readings);
 
   const depth = sensorValues.get(config.depthSensor) ?? 0;
 

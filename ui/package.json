@@ -16,6 +16,7 @@
     "date-fns": "^4.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "uplot": "^1.6.32",
     "vosk-browser": "^0.0.8"
   },
   "devDependencies": {
