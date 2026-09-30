@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { beginRecording, endRecording, uploadSession, getRecordingState } from '../recording.js';
 import {
-  getSessions, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
+  getSessions, getSessionById, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
   unclipSessionReadings, setOperatingModeRow, getMostRecentSession,
 } from '../db.js';
 import {
@@ -125,7 +125,7 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
    * rig's own UI. It decides whether a closed Klemmbacke means a pipe change
    * (Bohren) or simply a held pipe string (Verpressen).
    */
-  app.put<{ Body: { mode?: string } }>('/api/recording/mode', async (request, reply) => {
+  app.put<{ Body: { mode?: string; sessionId?: number } }>('/api/recording/mode', async (request, reply) => {
     const mode = request.body?.mode;
     if (!mode || !isOperatingMode(mode)) {
       return reply.status(400).send({ error: 'Bitte „bohren" oder „verpressen" angeben.' });
@@ -135,7 +135,10 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       broadcastMessage({ type: 'operating-mode', mode });
       return reply.send({ mode });
     }
-    const recent = getMostRecentSession();
+    const targetId = request.body?.sessionId;
+    const recent = targetId != null
+      ? getSessionById(targetId)
+      : getMostRecentSession();
     if (recent && (recent.status === 'ended' || recent.status === 'uploading' || recent.status === 'partial')) {
       setOperatingModeRow(recent.id, mode);
       broadcastMessage({ type: 'recording-state', ...getRecordingState() });

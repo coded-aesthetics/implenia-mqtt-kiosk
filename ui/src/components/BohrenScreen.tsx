@@ -8,6 +8,7 @@ import { KlemmbackeIndicator } from './KlemmbackeIndicator';
 import { formatNumber } from '../utils/format';
 import { findSoll } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
+import { useClampState } from '../hooks/useClampState';
 import { buildSchichten, collectVorgabeEntries } from '../utils/vorgaben';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 
@@ -35,12 +36,6 @@ export interface BohrenConfig {
   bars: BarSlot[];
 }
 
-interface ClampConfig {
-  clampTopic: string | null;
-  openThreshold: number;
-  closeThreshold: number;
-}
-
 interface Props {
   readings: Map<string, SensorReading>;
   vorgaben: VorgabenData | null;
@@ -52,27 +47,8 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
   const geoRef = useRef<HTMLDivElement>(null);
   const [geoHeight, setGeoHeight] = useState(0);
 
-  const [clampConfig, setClampConfig] = useState<ClampConfig>({
-    clampTopic: null,
-    openThreshold: 50,
-    closeThreshold: 100,
-  });
-
   const rohrwechsel = recordingState.rohrwechsel;
   const operatingMode = recordingState.operatingMode;
-
-  useEffect(() => {
-    fetch('/api/config/rohrwechsel')
-      .then((r) => r.json())
-      .then((data) => {
-        setClampConfig({
-          clampTopic: data.clampTopic ?? null,
-          openThreshold: data.openThreshold ?? 50,
-          closeThreshold: data.closeThreshold ?? 100,
-        });
-      })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (!geoRef.current) return;
@@ -87,23 +63,9 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
   const geologyProfile = useMemo(() => buildSchichten(allEntries), [allEntries]);
 
   const sensorValues = useSensorValues(readings);
+  const { clampConfig, clampValue, isClampOpen } = useClampState(sensorValues);
 
   const depth = sensorValues.get(config.depthSensor) ?? 0;
-
-  const clampValue = useMemo(() => {
-    if (!clampConfig.clampTopic) return 0;
-    return sensorValues.get(clampConfig.clampTopic) ?? 0;
-  }, [sensorValues, clampConfig.clampTopic]);
-
-  const [isClampOpen, setIsClampOpen] = useState(true);
-
-  useEffect(() => {
-    if (clampValue >= clampConfig.closeThreshold) {
-      setIsClampOpen(false);
-    } else if (clampValue < clampConfig.openThreshold) {
-      setIsClampOpen(true);
-    }
-  }, [clampValue, clampConfig.closeThreshold, clampConfig.openThreshold]);
 
   return (
     <div style={styles.container}>

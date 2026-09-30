@@ -8,6 +8,7 @@ import { KlemmbackeIndicator } from './KlemmbackeIndicator';
 import { formatNumber } from '../utils/format';
 import { findSoll } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
+import { useClampState } from '../hooks/useClampState';
 
 export interface GaugeSlot {
   sensor: string;
@@ -34,12 +35,6 @@ export interface VerpressenConfig {
   chartScales?: ChartScale[];
 }
 
-interface ClampConfig {
-  clampTopic: string | null;
-  openThreshold: number;
-  closeThreshold: number;
-}
-
 interface Props {
   readings: Map<string, import('../hooks/useWebSocket').SensorReading>;
   vorgaben: VorgabenData | null;
@@ -51,45 +46,11 @@ const CHART_WINDOW_MINUTES = 5;
 const MAX_BUFFER_POINTS = CHART_WINDOW_MINUTES * 60 * 2;
 
 export function VerpressenScreen({ readings, vorgaben, config, recordingState: _recordingState }: Props) {
-  const [clampConfig, setClampConfig] = useState<ClampConfig>({
-    clampTopic: null,
-    openThreshold: 50,
-    closeThreshold: 100,
-  });
-
-  useEffect(() => {
-    fetch('/api/config/rohrwechsel')
-      .then((r) => r.json())
-      .then((data) => {
-        setClampConfig({
-          clampTopic: data.clampTopic ?? null,
-          openThreshold: data.openThreshold ?? 50,
-          closeThreshold: data.closeThreshold ?? 100,
-        });
-      })
-      .catch(() => {});
-  }, []);
-
   const sensorValues = useSensorValues(readings);
+  const { clampConfig, clampValue, isClampOpen } = useClampState(sensorValues);
 
   const depth = sensorValues.get(config.depthSensor) ?? 0;
   const volume = sensorValues.get(config.volumeSensor) ?? 0;
-
-  // Klemmbacke state with hysteresis
-  const clampValue = useMemo(() => {
-    if (!clampConfig.clampTopic) return 0;
-    return sensorValues.get(clampConfig.clampTopic) ?? 0;
-  }, [sensorValues, clampConfig.clampTopic]);
-
-  const [isClampOpen, setIsClampOpen] = useState(true);
-
-  useEffect(() => {
-    if (clampValue >= clampConfig.closeThreshold) {
-      setIsClampOpen(false);
-    } else if (clampValue < clampConfig.openThreshold) {
-      setIsClampOpen(true);
-    }
-  }, [clampValue, clampConfig.closeThreshold, clampConfig.openThreshold]);
 
   // Chart data accumulation — samples sensorValues at ~1Hz via useEffect
   const chartBufferRef = useRef<Map<string, Array<{ ts: number; value: number }>>>(new Map());

@@ -114,7 +114,7 @@ export class DataIngestion extends EventEmitter {
 
       if (key) {
         const volResult = this.activeSession.volumeTracker.observe(
-          key, numericPayload(corrected.payload),
+          key, valueNumeric ?? NaN,
         );
         if (volResult) {
           const volPayload = String(roundValue(volResult.volume));
