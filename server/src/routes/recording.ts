@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { beginRecording, endRecording, uploadSession, getRecordingState } from '../recording.js';
 import {
   getSessions, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
-  unclipSessionReadings,
+  unclipSessionReadings, setOperatingModeRow, getMostRecentSession,
 } from '../db.js';
 import {
   buildSessionExport,
@@ -130,14 +130,20 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
     if (!mode || !isOperatingMode(mode)) {
       return reply.status(400).send({ error: 'Bitte „bohren" oder „verpressen" angeben.' });
     }
-    if (!ingestion.operatingMode) {
-      return reply.status(409).send({
-        error: 'Es läuft keine Aufzeichnung. Bitte zuerst die Aufzeichnung starten.',
-      });
+    if (ingestion.operatingMode) {
+      ingestion.setOperatingMode(mode);
+      broadcastMessage({ type: 'operating-mode', mode });
+      return reply.send({ mode });
     }
-    ingestion.setOperatingMode(mode);
-    broadcastMessage({ type: 'operating-mode', mode });
-    return reply.send({ mode });
+    const recent = getMostRecentSession();
+    if (recent && (recent.status === 'ended' || recent.status === 'uploading' || recent.status === 'partial')) {
+      setOperatingModeRow(recent.id, mode);
+      broadcastMessage({ type: 'recording-state', ...getRecordingState() });
+      return reply.send({ mode });
+    }
+    return reply.status(409).send({
+      error: 'Es läuft keine Aufzeichnung. Bitte zuerst die Aufzeichnung starten.',
+    });
   });
 
   app.get('/api/recording/state', async (_request, reply) => {

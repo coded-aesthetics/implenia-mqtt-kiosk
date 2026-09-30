@@ -4,6 +4,7 @@ import type { SensorReading, RecordingState } from '../hooks/useWebSocket';
 import type { VorgabenData } from '../hooks/useImplenia';
 import { SensorGauge } from './SensorGauge';
 import { SensorBar } from './SensorBar';
+import { KlemmbackeIndicator } from './KlemmbackeIndicator';
 import { formatNumber } from '../utils/format';
 import { findSoll } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
@@ -34,6 +35,12 @@ export interface BohrenConfig {
   bars: BarSlot[];
 }
 
+interface ClampConfig {
+  clampTopic: string | null;
+  openThreshold: number;
+  closeThreshold: number;
+}
+
 interface Props {
   readings: Map<string, SensorReading>;
   vorgaben: VorgabenData | null;
@@ -44,10 +51,28 @@ interface Props {
 export function BohrenScreen({ readings, vorgaben, config, recordingState }: Props) {
   const geoRef = useRef<HTMLDivElement>(null);
   const [geoHeight, setGeoHeight] = useState(0);
-  const [ackedWarning, setAckedWarning] = useState<number | null>(null);
+
+  const [clampConfig, setClampConfig] = useState<ClampConfig>({
+    clampTopic: null,
+    openThreshold: 50,
+    closeThreshold: 100,
+  });
 
   const rohrwechsel = recordingState.rohrwechsel;
   const operatingMode = recordingState.operatingMode;
+
+  useEffect(() => {
+    fetch('/api/config/rohrwechsel')
+      .then((r) => r.json())
+      .then((data) => {
+        setClampConfig({
+          clampTopic: data.clampTopic ?? null,
+          openThreshold: data.openThreshold ?? 50,
+          closeThreshold: data.closeThreshold ?? 100,
+        });
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!geoRef.current) return;
@@ -64,6 +89,21 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
   const sensorValues = useSensorValues(readings);
 
   const depth = sensorValues.get(config.depthSensor) ?? 0;
+
+  const clampValue = useMemo(() => {
+    if (!clampConfig.clampTopic) return 0;
+    return sensorValues.get(clampConfig.clampTopic) ?? 0;
+  }, [sensorValues, clampConfig.clampTopic]);
+
+  const [isClampOpen, setIsClampOpen] = useState(true);
+
+  useEffect(() => {
+    if (clampValue >= clampConfig.closeThreshold) {
+      setIsClampOpen(false);
+    } else if (clampValue < clampConfig.openThreshold) {
+      setIsClampOpen(true);
+    }
+  }, [clampValue, clampConfig.closeThreshold, clampConfig.openThreshold]);
 
   return (
     <div style={styles.container}>
@@ -110,24 +150,25 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
             ))}
           </div>
 
-          {/* Klemmbacke indicator — between gauges and bars */}
-          {recordingState.active && operatingMode === 'bohren' && rohrwechsel && (
-            <div style={rohrwechsel.phase === 'rohrwechsel' ? styles.klemmStrip : styles.klemmStripOpen}>
-              <span
-                style={rohrwechsel.phase === 'rohrwechsel' ? styles.klemmDot : styles.klemmDotOpen}
-              />
-              {rohrwechsel.phase === 'rohrwechsel' ? (
-                <span>Rohrwechsel — Rohr {rohrwechsel.pipeCount + 1} einbauen</span>
-              ) : (
-                <span>Klemmbacke offen — Rohr {rohrwechsel.pipeCount}</span>
-              )}
-              {rohrwechsel.warning && rohrwechsel.warningSince !== ackedWarning && (
-                <span
-                  style={styles.klemmWarning}
-                  onClick={() => setAckedWarning(rohrwechsel.warningSince ?? null)}
-                >
-                  {rohrwechsel.warning}
-                </span>
+          {/* Klemmbacke + Rohr status — between gauges and bars */}
+          {clampConfig.clampTopic && (
+            <div style={styles.klemmRow}>
+              <div style={styles.klemmGauge}>
+                <KlemmbackeIndicator
+                  value={clampValue}
+                  unit="bar"
+                  openThreshold={clampConfig.openThreshold}
+                  closeThreshold={clampConfig.closeThreshold}
+                  isOpen={isClampOpen}
+                />
+              </div>
+              {recordingState.active && operatingMode === 'bohren' && rohrwechsel && (
+                <div style={rohrwechsel.phase === 'rohrwechsel' ? styles.rohrStatusActive : styles.rohrStatus}>
+                  <span style={styles.rohrNumber}>Rohr {rohrwechsel.phase === 'rohrwechsel' ? rohrwechsel.pipeCount + 1 : rohrwechsel.pipeCount}</span>
+                  {rohrwechsel.phase === 'rohrwechsel' && (
+                    <span style={styles.rohrPhase}>Nachlegen</span>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -242,6 +283,7 @@ const styles: Record<string, CSSProperties> = {
     overflow: 'visible',
     marginTop: '0.25rem',
     paddingTop: '0.75rem',
+    paddingBottom: '1rem',
   },
   geoPlaceholder: {
     flex: 1,
@@ -266,48 +308,44 @@ const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'center',
   },
-  klemmStrip: {
+  klemmRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: '0.5rem',
-    padding: '0.3rem 1rem',
-    borderRadius: '4px',
+    gap: '1.5rem',
+    flexShrink: 0,
+    padding: '0 1rem',
+  },
+  klemmGauge: {
+    flex: 1,
+    minWidth: 0,
+  },
+  rohrStatus: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    flexShrink: 0,
+    minWidth: '6rem',
+    color: 'var(--text-muted)',
+  },
+  rohrStatusActive: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    flexShrink: 0,
+    minWidth: '6rem',
+    padding: '0.4rem 0.75rem',
+    borderRadius: '8px',
     backgroundColor: 'rgba(230, 81, 0, 0.15)',
     color: '#ffb74d',
+  },
+  rohrNumber: {
+    fontSize: '1.4rem',
+    fontWeight: 800,
+    lineHeight: 1.2,
+  },
+  rohrPhase: {
     fontSize: '1rem',
     fontWeight: 600,
-    flexShrink: 0,
-  },
-  klemmStripOpen: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.5rem',
-    padding: '0.3rem 1rem',
-    borderRadius: '4px',
-    color: 'var(--text-muted)',
-    fontSize: '1rem',
-    fontWeight: 600,
-    flexShrink: 0,
-  },
-  klemmDot: {
-    width: '10px',
-    height: '10px',
-    borderRadius: '50%',
-    backgroundColor: '#ffb74d',
-    flexShrink: 0,
-  },
-  klemmDotOpen: {
-    width: '10px',
-    height: '10px',
-    borderRadius: '50%',
-    backgroundColor: 'var(--color-success)',
-    flexShrink: 0,
-  },
-  klemmWarning: {
-    marginLeft: 'auto',
-    color: '#e65100',
-    fontSize: '1rem',
-    cursor: 'pointer',
   },
   barStack: {
     display: 'flex',

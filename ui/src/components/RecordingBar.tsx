@@ -305,6 +305,22 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
       {status === 'ended' && (
         <div style={styles.recordingRow}>
           <span style={styles.count}>{recordingState.readingCount} Messwerte aufgezeichnet</span>
+          {operatingMode && (
+            <div style={styles.modeToggle}>
+              <button
+                style={operatingMode === 'bohren' ? styles.modeButtonActive : styles.modeButton}
+                onClick={() => setMode('bohren')}
+              >
+                B
+              </button>
+              <button
+                style={operatingMode === 'verpressen' ? styles.modeButtonActive : styles.modeButton}
+                onClick={() => setMode('verpressen')}
+              >
+                V
+              </button>
+            </div>
+          )}
           <button
             style={{ ...styles.button, ...styles.uploadButton }}
             onClick={upload}
@@ -361,6 +377,22 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
           <span style={styles.uploadPercent}>
             {Math.round((uploadProgress.sensorsCompleted / uploadProgress.sensorsTotal) * 100)}%
           </span>
+          {operatingMode && (
+            <div style={styles.modeToggle}>
+              <button
+                style={operatingMode === 'bohren' ? styles.modeButtonActive : styles.modeButton}
+                onClick={() => setMode('bohren')}
+              >
+                B
+              </button>
+              <button
+                style={operatingMode === 'verpressen' ? styles.modeButtonActive : styles.modeButton}
+                onClick={() => setMode('verpressen')}
+              >
+                V
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -377,6 +409,22 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
           <span style={styles.warningLabel}>
             {uploadProgress.sensorsFailed} Sensoren fehlgeschlagen
           </span>
+          {operatingMode && (
+            <div style={styles.modeToggle}>
+              <button
+                style={operatingMode === 'bohren' ? styles.modeButtonActive : styles.modeButton}
+                onClick={() => setMode('bohren')}
+              >
+                B
+              </button>
+              <button
+                style={operatingMode === 'verpressen' ? styles.modeButtonActive : styles.modeButton}
+                onClick={() => setMode('verpressen')}
+              >
+                V
+              </button>
+            </div>
+          )}
           <button
             style={{ ...styles.button, ...styles.retryButton }}
             onClick={upload}

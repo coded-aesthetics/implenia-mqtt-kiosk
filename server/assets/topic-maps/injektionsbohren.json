@@ -6,5 +6,7 @@
   "Maschine/Druck_Vorschub": "Vorschubdruck",
   "Maschine/Druck_Medium": "Suspensionsdruck",
   "Spuelpumpe/Durchfluss": "DurchflussB",
-  "Verpresspumpe/Durchfluss": "DurchflussV"
+  "Spuelpumpe/Volumen": "Q_Bohren",
+  "Verpresspumpe/Durchfluss": "DurchflussV",
+  "Verpresspumpe/Volumen": "Q_verpressen"
 }
