@@ -12,6 +12,7 @@ export interface Session {
   started_at: number;
   ended_at: number | null;
   status: 'recording' | 'ended' | 'uploading' | 'uploaded' | 'partial';
+  operating_mode: string;
 }
 
 export interface SessionStats {

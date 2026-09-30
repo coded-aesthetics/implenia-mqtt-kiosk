@@ -46,6 +46,8 @@ export interface ReplayState {
   currentOffsetMs: number;
   /** Total duration of the dump in ms. */
   durationMs: number;
+  /** Wall-clock timestamp of the last emitted message (e.g. `"15:42:40.190"`). */
+  currentTime: string | null;
 }
 
 /**
@@ -92,6 +94,9 @@ export class ReplaySource extends DataSource {
       durationMs: this.messages.length > 0
         ? this.messages[this.messages.length - 1].offsetMs
         : 0,
+      currentTime: this.position > 0
+        ? this.messages[this.position - 1].time
+        : null,
     };
   }
 

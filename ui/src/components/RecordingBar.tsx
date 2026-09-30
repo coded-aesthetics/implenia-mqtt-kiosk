@@ -131,7 +131,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
       const res = await fetch('/api/recording/mode', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, sessionId: recordingState.sessionId }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -221,6 +221,23 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     }
   }
 
+  const modeToggle = operatingMode ? (
+    <div style={styles.modeToggle}>
+      <button
+        style={operatingMode === 'bohren' ? styles.modeButtonActive : styles.modeButton}
+        onClick={() => setMode('bohren')}
+      >
+        B
+      </button>
+      <button
+        style={operatingMode === 'verpressen' ? styles.modeButtonActive : styles.modeButton}
+        onClick={() => setMode('verpressen')}
+      >
+        V
+      </button>
+    </div>
+  ) : null;
+
   return (
     <div style={styles.bar}>
       {error && <div style={styles.error}>{error}</div>}
@@ -269,22 +286,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
           <span style={styles.elapsed}>
             <ElapsedTime startedAt={recordingState.startedAt} />
           </span>
-          {operatingMode && (
-            <div style={styles.modeToggle}>
-              <button
-                style={operatingMode === 'bohren' ? styles.modeButtonActive : styles.modeButton}
-                onClick={() => setMode('bohren')}
-              >
-                B
-              </button>
-              <button
-                style={operatingMode === 'verpressen' ? styles.modeButtonActive : styles.modeButton}
-                onClick={() => setMode('verpressen')}
-              >
-                V
-              </button>
-            </div>
-          )}
+          {modeToggle}
           <button
             style={{ ...styles.button, ...styles.stopButton }}
             onClick={stopRecording}
@@ -305,6 +307,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
       {status === 'ended' && (
         <div style={styles.recordingRow}>
           <span style={styles.count}>{recordingState.readingCount} Messwerte aufgezeichnet</span>
+          {modeToggle}
           <button
             style={{ ...styles.button, ...styles.uploadButton }}
             onClick={upload}
@@ -361,6 +364,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
           <span style={styles.uploadPercent}>
             {Math.round((uploadProgress.sensorsCompleted / uploadProgress.sensorsTotal) * 100)}%
           </span>
+          {modeToggle}
         </div>
       )}
 
@@ -377,6 +381,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
           <span style={styles.warningLabel}>
             {uploadProgress.sensorsFailed} Sensoren fehlgeschlagen
           </span>
+          {modeToggle}
           <button
             style={{ ...styles.button, ...styles.retryButton }}
             onClick={upload}

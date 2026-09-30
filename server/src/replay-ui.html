@@ -242,6 +242,7 @@
     <div class="stats">
       <span><strong id="position">0</strong> / <span id="total">0</span> Nachr.</span>
       <span><strong id="readings">0</strong> Messwerte</span>
+      <span style="margin-left:auto">Aufnahme: <strong id="recTime" style="font-size:1.1rem">—</strong></span>
     </div>
   </div>
 
@@ -267,6 +268,7 @@ const timeEnd  = $('#timeEnd');
 const posEl    = $('#position');
 const totalEl  = $('#total');
 const readEl   = $('#readings');
+const recTime  = $('#recTime');
 const msgError = $('#msgError');
 const msgSuccess = $('#msgSuccess');
 const msgInfo  = $('#msgInfo');
@@ -325,6 +327,7 @@ function updateUI() {
   posEl.textContent = num(state.position);
   totalEl.textContent = num(state.totalMessages);
   readEl.textContent = num(state.readingCount || 0);
+  recTime.textContent = state.currentTime ?? '—';
 
   speedBtns.forEach(b => b.classList.toggle('active', String(state.speed) === b.dataset.speed));
 }

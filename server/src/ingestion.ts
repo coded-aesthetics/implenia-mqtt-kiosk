@@ -21,6 +21,7 @@ import {
   getRohrwechselConfig, isClampTopic, type RohrwechselConfig,
 } from './rohrwechsel-config.js';
 import { applyCalibration, calibrationFor, isNeutral } from './calibration.js';
+import { VolumeTracker, getVolumeMappings } from './volume-integration.js';
 
 const log = createLogger('ingestion');
 
@@ -42,6 +43,7 @@ interface ActiveSession {
   drill: DrillState;
   rohrwechsel: RohrwechselConfig;
   operatingMode: OperatingMode;
+  volumeTracker: VolumeTracker;
 }
 
 /** What a reading looks like after Rohrverlängerung handling. */
@@ -109,6 +111,16 @@ export class DataIngestion extends EventEmitter {
         valueText,
         { receivedAt: reading.receivedAt, valueRaw: corrected.valueRaw, phase: corrected.phase, clipped: corrected.clipped },
       );
+
+      if (key) {
+        const volResult = this.activeSession.volumeTracker.observe(
+          key, valueNumeric ?? NaN,
+        );
+        if (volResult) {
+          const volPayload = String(roundValue(volResult.volume));
+          this.emit('reading', { topic: volResult.topic, payload: volPayload, receivedAt: reading.receivedAt });
+        }
+      }
     }
   };
 
@@ -310,6 +322,7 @@ export class DataIngestion extends EventEmitter {
     if (this.activeSession) {
       clearSessionReadings(this.activeSession.id);
       this.activeSession.drill = initialDrillState();
+      this.activeSession.volumeTracker.reset();
     }
   }
 
@@ -328,6 +341,7 @@ export class DataIngestion extends EventEmitter {
       drill: restored ?? initialDrillState(),
       rohrwechsel: getRohrwechselConfig(),
       operatingMode: storedMode && isOperatingMode(storedMode) ? storedMode : 'bohren',
+      volumeTracker: new VolumeTracker(getVolumeMappings()),
     };
   }
 

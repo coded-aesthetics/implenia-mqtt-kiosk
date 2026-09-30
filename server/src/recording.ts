@@ -1,6 +1,6 @@
 import { fetchImplenia } from './implenia-api.js';
 import { fetchHerstellenSensors, type SensorDefs } from './herstellen-sensors.js';
-import { ingestion, type OperatingMode, type SensorMapEntry } from './ingestion.js';
+import { ingestion, isOperatingMode, type OperatingMode, type SensorMapEntry } from './ingestion.js';
 import type { DrillStatus } from './rohrwechsel.js';
 import { createLogger, onLogEntry, type LogEntry } from './logger.js';
 import { config } from './config.js';
@@ -334,6 +334,7 @@ export function getRecordingState(): RecordingState {
   if (recent && (recent.status === 'ended' || recent.status === 'uploading' || recent.status === 'partial')) {
     const count = getSessionReadingCount(recent.id);
     if (count > 0) {
+      const storedMode = recent.operating_mode;
       return {
         active: false,
         sessionId: recent.id,
@@ -341,7 +342,7 @@ export function getRecordingState(): RecordingState {
         startedAt: recent.started_at,
         readingCount: count,
         rohrwechsel: null,
-        operatingMode: null,
+        operatingMode: storedMode && isOperatingMode(storedMode) ? storedMode : null,
         clippedCount: getSessionStats(recent.id).clipped,
       };
     }
