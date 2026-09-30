@@ -7,12 +7,16 @@ interface Props {
 
 const COLORS: Record<OperatingMode, string> = {
   bohren: 'var(--color-accent)',
-  verpressen: '#6a1b9a',
+  austausch: '#6a1b9a',
+  einbauen: '#6a1b9a',
+  auffuellen: '#6a1b9a',
 };
 
 const LABELS: Record<OperatingMode, string> = {
   bohren: 'Bohren',
-  verpressen: 'Verpressen',
+  austausch: 'Austausch',
+  einbauen: 'Einbauen',
+  auffuellen: 'Auffüllen',
 };
 
 export function PhaseBadge({ mode }: Props) {

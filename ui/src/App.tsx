@@ -22,7 +22,7 @@ import { useCommentQueue } from './hooks/useCommentQueue';
 import type { ViewTab } from './components/ElementDetail';
 
 export function App() {
-  const { readings, deviceFrames, connectivity, recordingState, uploadProgress, updateAvailable, updateSource, updateApplying, replaySeeking } =
+  const { readings, deviceFrames, connectivity, recordingState, modeSuggestion, uploadProgress, updateAvailable, updateSource, updateApplying, replaySeeking } =
     useWebSocket();
   const route = useHashRouter();
   const config = useConfig();
@@ -154,7 +154,8 @@ export function App() {
         (d) => d.name === route.params.name,
       )?.vorgaben ?? null;
       if (setup.verfahren === 'injektionsbohren') {
-        if (recordingState.operatingMode === 'verpressen') {
+        const verpressenModes = ['austausch', 'einbauen', 'auffuellen'] as const;
+        if (recordingState.operatingMode && verpressenModes.includes(recordingState.operatingMode as typeof verpressenModes[number])) {
           content = (
             <VerpressenScreen
               readings={readings}
@@ -240,6 +241,7 @@ export function App() {
         currentPage={route.page}
         elementName={route.params.name}
         recordingState={recordingState}
+        modeSuggestion={modeSuggestion}
         uploadProgress={uploadProgress}
       />
     </div>

@@ -25,7 +25,7 @@ export interface RohrwechselStatus {
 }
 
 /** What the rig is doing. Only `bohren` treats a closed Klemmbacke as a pipe change. */
-export type OperatingMode = 'bohren' | 'verpressen';
+export type OperatingMode = 'bohren' | 'austausch' | 'einbauen' | 'auffuellen';
 
 export interface RecordingState {
   active: boolean;
@@ -55,11 +55,17 @@ export interface DeviceFrame {
   receivedAt: number;
 }
 
+export interface ModeSuggestion {
+  current: OperatingMode;
+  suggested: OperatingMode;
+}
+
 interface WebSocketState {
   readings: Map<string, SensorReading>;
   deviceFrames: Map<number, DeviceFrame>;
   connectivity: 'online' | 'offline' | 'unknown';
   recordingState: RecordingState;
+  modeSuggestion: ModeSuggestion | null;
   uploadProgress: UploadProgress | null;
   updateAvailable: string | null;
   updateSource: UpdateSource | null;
@@ -84,6 +90,7 @@ export function useWebSocket() {
     deviceFrames: new Map(),
     connectivity: 'unknown',
     recordingState: INITIAL_RECORDING,
+    modeSuggestion: null,
     uploadProgress: null,
     updateAvailable: null,
     updateSource: null,
@@ -186,6 +193,14 @@ export function useWebSocket() {
             setState((prev) => ({
               ...prev,
               recordingState: { ...prev.recordingState, operatingMode: msg.mode ?? null },
+              modeSuggestion: null,
+            }));
+            break;
+
+          case 'mode-suggestion':
+            setState((prev) => ({
+              ...prev,
+              modeSuggestion: { current: msg.current, suggested: msg.suggested },
             }));
             break;
 

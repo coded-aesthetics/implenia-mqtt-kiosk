@@ -135,49 +135,125 @@ describe('thresholds that do not fit the rig', () => {
   });
 });
 
-describe('while the rig is grouting, not drilling', () => {
-  // During Verpressen the Klemmbacke holds the pipe string steady — 81% of
-  // that phase on the G08 capture. Nothing is clipped then, so anything the
-  // state machine does to a reading is uploaded as it stands.
-  const verpressen = (st: DrillState, p: number, s = absolut, now = 0) =>
-    applyClampPressure(st, p, s, now, false).state;
+describe('while the rig is retracting pipes (Auffüllen)', () => {
+  // Auffüllen follows the same transition structure as Bohren (freeze during
+  // rohrwechsel, track during bohren), but reverses direction: pipe count
+  // decrements, offset must decrease, and depth accumulates via Math.min.
+  const retract = (st: DrillState, p: number, s = absolut, now = 0) =>
+    applyClampPressure(st, p, s, now, true).state;
+  const seenR = (st: DrillState, raw: number, s = absolut) =>
+    observeDepth(st, raw, s, true).state;
+  const readsR = (st: DrillState, raw: number, s = absolut) =>
+    observeDepth(st, raw, s, true).depth;
 
-  it('does not count a Bohrrohr that was never added', () => {
-    let s = armed();
-    s = verpressen(s, 180);
-    s = verpressen(s, 3);
-    expect(s.pipeCount).toBe(1);
-    expect(s.implausibleChanges).toBe(0);
+  /**
+   * Simulate a pipe removal: clamp closes (pipe handling), carriage
+   * repositions, clamp opens (retraction resumes, pipe count decremented).
+   */
+  function removePipe(state: DrillState, s = absolut, carriageAfter = 2.0): DrillState {
+    let st = retract(state, 180, s);    // clamp closes → rohrwechsel
+    if (s.depthMode === 'inkrementell') {
+      st = seenR(st, 1.0, s);          // carriage repositioning (frozen)
+      st = seenR(st, carriageAfter, s); // carriage at new position
+    }
+    return retract(st, 3, s);           // clamp opens → bohren, pipe -1
+  }
+
+  it('freezes the depth while the clamp is closed (pipe removal)', () => {
+    let s = seenR(armed(), 12.0, inkrementell);
+    s = seenR(s, 10.0, inkrementell);
+    expect(s.holeDepth).toBe(10.0);
+
+    // Clamp closes → rohrwechsel: depth frozen
+    s = retract(s, 180, inkrementell);
+    expect(readsR(s, 8.0, inkrementell)).toBe(10.0);
+    expect(readsR(s, 0.5, inkrementell)).toBe(10.0);
+  });
+
+  it('tracks depth while the clamp is open (active retraction)', () => {
+    const s = seenR(armed(), 12.0, inkrementell);
+    // Clamp is open (bohren phase) — depth decreases
+    expect(readsR(s, 10.5, inkrementell)).toBe(10.5);
+    expect(readsR(s, 9.0, inkrementell)).toBe(9.0);
+  });
+
+  it('only accumulates negative depth (shallower)', () => {
+    let s = seenR(armed(), 12.0, inkrementell);
+    s = seenR(s, 10.0, inkrementell);
+    expect(s.holeDepth).toBe(10.0);
+    s = seenR(s, 10.5, inkrementell);
+    expect(s.holeDepth).toBe(10.0);
+  });
+
+  it('counts a pipe removal when the clamp cycle completes', () => {
+    let s: DrillState = { ...armed(), offset: 10.0, holeDepth: 12.0, lastDepth: 12.0, lastRaw: 2.0, pipeCount: 6 };
+    // Retract while clamp open
+    s = seenR(s, 0.05, inkrementell);         // depth = 0.05 + 10.0 = 10.05
+    expect(s.pipeCount).toBe(6);
+
+    // Clamp closes: rohrwechsel (pipe removal starts)
+    s = retract(s, 180, inkrementell);
+    expect(s.pipeCount).toBe(6);              // not decremented yet
+
+    // Carriage repositions (frozen, lastRaw updates)
+    s = seenR(s, 2.0, inkrementell);
+
+    // Clamp opens: pipe removal complete, pipe count decremented
+    s = retract(s, 3, inkrementell);
+    expect(s.pipeCount).toBe(5);
+  });
+
+  it('keeps the depth continuous across a pipe removal (inkrementell)', () => {
+    let s: DrillState = { ...armed(), offset: 2.0, holeDepth: 4.0, lastDepth: 4.0, lastRaw: 2.0 };
+    s = seenR(s, 0.05, inkrementell);      // depth = 0.05 + 2.0 = 2.05
+    expect(s.holeDepth).toBe(2.05);
+
+    // Pipe removal cycle
+    s = removePipe(s, inkrementell);
+    expect(s.pipeCount).toBe(0);
+
+    // After removal: offset rebuilt, depth continuous
+    expect(readsR(s, 2.0, inkrementell)).toBeCloseTo(2.05, 6);
+    expect(readsR(s, 0.05, inkrementell)).toBeCloseTo(0.10, 6);
+  });
+
+  it('does not decrement pipe count below zero', () => {
+    let s: DrillState = { ...armed(), pipeCount: 0 };
+    s = retract(s, 180);   // clamp closes
+    s = retract(s, 3);     // clamp opens
+    expect(s.pipeCount).toBe(0);
+  });
+
+  it('tracks depth on an absolut rig during retraction', () => {
+    let s = seenR(armed(), 40.0);
+    s = seenR(s, 38.0);
+    expect(s.holeDepth).toBe(38.0);
+    // Brief deeper fluctuation does not affect holeDepth
+    s = seenR(s, 39.0);
+    expect(s.holeDepth).toBe(38.0);
+  });
+
+  it('says nothing about the first pipe removal (no baseline)', () => {
+    let s = seenR(armed(), 12.0, inkrementell);
+    s = seenR(s, 10.0, inkrementell);
+    s = retract(s, 180, inkrementell);    // first clamp close — no baseline
     expect(s.warning).toBeNull();
   });
 
-  it('keeps reporting the depth while the string is pulled', () => {
-    // The carriage travels up as pipe comes out, so the depth genuinely
-    // changes with the clamp closed. Freezing it at the hole bottom would
-    // upload a flat line for the whole grouting phase.
-    let s = seen(armed(), 12.0, inkrementell);
-    s = verpressen(s, 180, inkrementell);
-    expect(observeDepth(s, 9.5, inkrementell, false).depth).toBe(9.5);
-  });
+  it('refuses to invent an offset when nothing was removed', () => {
+    let s: DrillState = { ...armed(), offset: 2.0, holeDepth: 4.0, lastDepth: 4.0, pipeCount: 2, lastRaw: 2.0 };
 
-  it('does not walk the offset up on every clamp cycle', () => {
-    let s = seen(armed(), 12.0, inkrementell);
-    for (let i = 0; i < 5; i++) {
-      s = verpressen(s, 180, inkrementell);
-      s = observeDepth(s, 11 - i, inkrementell, false).state;
-      s = verpressen(s, 3, inkrementell);
-    }
-    expect(s.offset).toBe(0);
-    expect(s.pipeCount).toBe(1);
-  });
+    // Clamp closes → rohrwechsel
+    s = retract(s, 180, inkrementell);
+    // Carriage didn't move — still at 2.0 (frozen)
+    s = seenR(s, 2.0, inkrementell);
+    // Clamp opens → tries to rebuild offset
+    s = retract(s, 3, inkrementell);
 
-  it('does not check a pipe length against a grouting phase', () => {
-    // The baseline is dropped rather than carried: measuring the "pipe" either
-    // side of Verpressen would report a Rohrwechsel as implausible for no
-    // reason the worker can act on.
-    let s = seen(armed(), 12.0);
-    s = verpressen(s, 180);
-    expect(s.depthAtLastChange).toBeNull();
+    expect(s.offset).toBe(2.0);            // unchanged
+    expect(s.pipeCount).toBe(2);           // not decremented
+    expect(s.implausibleChanges).toBe(1);
+    expect(s.warning).toContain('kein Bohrrohr entfernt');
   });
 });
 

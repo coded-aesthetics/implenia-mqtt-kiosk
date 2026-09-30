@@ -244,24 +244,21 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
     calibration.clearCalibrationCache();
   });
 
-  it('does not clip during Verpressen, when the Klemmbacke simply holds the string', () => {
+  it('does not clip during Austausch or Einbauen', () => {
     const { ingestion } = ingestionMod;
     enableRohrwechsel();
 
     const sessionId = db.createSession('A-41', '{}');
     ingestion.startRecording(sessionId, sensorMap());
-    ingestion.setOperatingMode('verpressen');
+    ingestion.setOperatingMode('austausch');
 
     publish(DEPTH_TOPIC, '12.0');
-    publish(CLAMP_TOPIC, '180');   // closed — but it is holding, not changing a pipe
+    publish(CLAMP_TOPIC, '180');
     publish(RPM_TOPIC, '40');
     publish(DEPTH_TOPIC, '12.0');
 
     ingestion.stopRecording();
 
-    // On the G08 capture the clamp is closed for 81% of Verpressen. Clipping on
-    // it here would discard most of the grouting data — the data
-    // Injektionsbohren exists to record.
     expect(db.getSessionStats(sessionId).clipped).toBe(0);
     expect(db.getAllSessionReadings(sessionId).some((r) => r.topic === RPM_TOPIC)).toBe(true);
   });
@@ -272,18 +269,24 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
 
     const sessionId = db.createSession('A-42', '{}');
     ingestion.startRecording(sessionId, sensorMap());
-    ingestion.setOperatingMode('verpressen');
 
+    // Arm during bohren
     publish(CLAMP_TOPIC, '2');
-    publish(CLAMP_TOPIC, '180');
-    publish(RPM_TOPIC, '40');        // kept: grouting
+    publish(RPM_TOPIC, '39');        // kept: drilling, bohren phase
+
+    // Switch to austausch (passive — no clipping)
+    ingestion.setOperatingMode('austausch');
+    publish(RPM_TOPIC, '40');        // kept: no clipping in austausch
+
+    // Switch back to bohren — clamp close arrives
     ingestion.setOperatingMode('bohren');
-    publish(RPM_TOPIC, '41');        // clipped: the clamp is still closed
+    publish(CLAMP_TOPIC, '180');     // closes: rohrwechsel
+    publish(RPM_TOPIC, '41');        // clipped
     ingestion.stopRecording();
 
     const rpm = db.getSessionReadingsDetailed(sessionId).filter((r) => r.topic === RPM_TOPIC);
     expect(rpm.map((r) => `${r.valueNumeric}:${r.uploadStatus}`).sort())
-      .toEqual(['40:pending', '41:clipped']);
+      .toEqual(['39:pending', '40:pending', '41:clipped']);
   });
 
   it('gives clipped readings back when the threshold was wrong', () => {
@@ -322,41 +325,34 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
     ).toBe(true);
   });
 
-  it('does not freeze the depth while the rig is grouting', () => {
+  it('tracks depth during Auffüllen and clips during pipe removal', () => {
     const { ingestion } = ingestionMod;
-    rwConfig.setRohrwechselConfig({
-      clampTopic: CLAMP_TOPIC,
-      depthMode: 'inkrementell',
-      pipeLength: 2,
-      closeThreshold: 100,
-      openThreshold: 50,
-      tolerance: 0.3,
-    });
+    enableRohrwechsel();
 
     const sessionId = db.createSession('A-44', '{}');
     ingestion.startRecording(sessionId, sensorMap());
-    ingestion.setOperatingMode('verpressen');
+    ingestion.setOperatingMode('auffuellen');
 
+    // bohren phase (clamp open) — active retraction, depth tracked, not clipped
     publish(CLAMP_TOPIC, '2');
     publish(DEPTH_TOPIC, '12.0');
-    publish(CLAMP_TOPIC, '180');    // holding the string, as it does all through Verpressen
-    publish(DEPTH_TOPIC, '10.5');   // string being pulled: the depth really is changing
-    publish(DEPTH_TOPIC, '9.0');
+    publish(DEPTH_TOPIC, '10.5');
+    // Clamp closes → rohrwechsel (pipe removal) — clipped
+    publish(CLAMP_TOPIC, '180');
+    publish(DEPTH_TOPIC, '10.5');   // absolut: rig holds still, clipped
+    // Clamp opens → bohren, retraction resumes
     publish(CLAMP_TOPIC, '3');
-    publish(DEPTH_TOPIC, '7.5');
+    publish(DEPTH_TOPIC, '8.5');
     ingestion.stopRecording();
 
-    // Nothing is clipped during Verpressen, so every one of these is uploaded.
-    // Frozen at the hole bottom they would be a flat 12 m line, and the pipe
-    // count and the offset would have walked up with each clamp cycle.
+    // Retraction readings uploaded; pipe-removal readings clipped
     expect(
       db.getAllSessionReadings(sessionId)
         .filter((r) => r.topic === DEPTH_TOPIC)
         .map((r) => r.valueNumeric),
-    ).toEqual([12.0, 10.5, 9.0, 7.5]);
-    expect(db.getSessionStats(sessionId).clipped).toBe(0);
-
-    enableRohrwechsel();
+    ).toEqual([12.0, 10.5, 8.5]);
+    // Clipped: clamp close (180) + depth during rohrwechsel = 2
+    expect(db.getSessionStats(sessionId).clipped).toBe(2);
   });
 
   it('reads a payload the recording path would accept as a number', () => {
