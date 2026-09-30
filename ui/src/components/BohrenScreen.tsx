@@ -32,6 +32,7 @@ export interface BarSlot {
 
 export interface BohrenConfig {
   depthSensor: string;
+  volumeSensor: string;
   gauges: GaugeSlot[];
   bars: BarSlot[];
 }
@@ -66,6 +67,9 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
   const { clampConfig, clampValue, isClampOpen } = useClampState(sensorValues);
 
   const depth = sensorValues.get(config.depthSensor) ?? 0;
+  const volume = sensorValues.get(config.volumeSensor) ?? 0;
+
+  const showRohr = recordingState.active && operatingMode === 'bohren' && rohrwechsel;
 
   return (
     <div style={styles.container}>
@@ -94,8 +98,40 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
           {!geologyProfile && <div style={styles.geoPlaceholder} />}
         </div>
 
-        {/* Right area: gauges + bars */}
+        {/* Right area: status row + gauges + bars */}
         <div style={styles.rightArea}>
+          {/* Status row: Gesamtvolumen | Klemmbacke + Rohr */}
+          <div style={styles.statusRow}>
+            <div style={styles.volumeCell}>
+              <div style={styles.heroLabel}>Gesamtvolumen</div>
+              <div style={styles.heroValueRow}>
+                <span style={styles.heroValue}>{formatNumber(volume)}</span>
+                <span style={styles.heroUnit}>l</span>
+              </div>
+            </div>
+            <div style={styles.klemmRohrCell}>
+              {clampConfig.clampTopic && (
+                <div style={styles.klemmGauge}>
+                  <KlemmbackeIndicator
+                    value={clampValue}
+                    unit="bar"
+                    openThreshold={clampConfig.openThreshold}
+                    closeThreshold={clampConfig.closeThreshold}
+                    isOpen={isClampOpen}
+                  />
+                </div>
+              )}
+              {showRohr && (
+                <div style={rohrwechsel.phase === 'rohrwechsel' ? styles.rohrStatusActive : styles.rohrStatus}>
+                  <span style={styles.rohrNumber}>Rohr {rohrwechsel.phase === 'rohrwechsel' ? rohrwechsel.pipeCount + 1 : rohrwechsel.pipeCount}</span>
+                  {rohrwechsel.phase === 'rohrwechsel' && (
+                    <span style={styles.rohrPhase}>Nachlegen</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
           <div style={styles.gaugeRow}>
             {config.gauges.map((g) => (
               <div key={g.sensor} style={styles.gaugeCell}>
@@ -111,29 +147,6 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
               </div>
             ))}
           </div>
-
-          {/* Klemmbacke + Rohr status — between gauges and bars */}
-          {clampConfig.clampTopic && (
-            <div style={styles.klemmRow}>
-              <div style={styles.klemmGauge}>
-                <KlemmbackeIndicator
-                  value={clampValue}
-                  unit="bar"
-                  openThreshold={clampConfig.openThreshold}
-                  closeThreshold={clampConfig.closeThreshold}
-                  isOpen={isClampOpen}
-                />
-              </div>
-              {recordingState.active && operatingMode === 'bohren' && rohrwechsel && (
-                <div style={rohrwechsel.phase === 'rohrwechsel' ? styles.rohrStatusActive : styles.rohrStatus}>
-                  <span style={styles.rohrNumber}>Rohr {rohrwechsel.phase === 'rohrwechsel' ? rohrwechsel.pipeCount + 1 : rohrwechsel.pipeCount}</span>
-                  {rohrwechsel.phase === 'rohrwechsel' && (
-                    <span style={styles.rohrPhase}>Nachlegen</span>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
 
           <div style={styles.barStack}>
             {config.bars.map((b) => (
@@ -156,6 +169,7 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
 
 export const INJEKTIONSBOHREN_BOHREN: BohrenConfig = {
   depthSensor: 'Tiefe',
+  volumeSensor: 'Q_Bohren',
   gauges: [
     { sensor: 'Druck_innen', label: 'I.Drehm. / Hammer', unit: 'Nm', min: 0, max: 300, vorgabeName: 'IDrehmoment' },
     { sensor: 'Druck_aussen', label: 'A.Drehm. / Vorschub', unit: 'Nm', min: 0, max: 300, vorgabeName: 'ADrehmoment' },
@@ -164,7 +178,6 @@ export const INJEKTIONSBOHREN_BOHREN: BohrenConfig = {
   bars: [
     { sensor: 'Ziehgeschwindigkeit', label: 'Vorschub', unit: 'cm/min', min: 0, max: 60, vorgabeName: 'Vorschubgeschw.' },
     { sensor: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', min: 0, max: 70, vorgabeName: 'Suspensionsdruck' },
-    { sensor: 'Verpresspumpe/Durchfluss', label: 'Durchfluss V', unit: 'l/min', min: 0, max: 300, vorgabeName: 'DurchflussV' },
     { sensor: 'Spuelpumpe/Durchfluss', label: 'Durchfluss B', unit: 'l/min', min: 0, max: 300, vorgabeName: 'DurchflussB' },
   ],
 };
@@ -258,6 +271,55 @@ const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     overflow: 'hidden',
   },
+  statusRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '1rem',
+    flexShrink: 0,
+    padding: '0 1rem',
+  },
+  volumeCell: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    minWidth: 0,
+  },
+  heroLabel: {
+    fontSize: 'var(--font-base)',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.04em',
+  },
+  heroValueRow: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+    gap: '0.25rem',
+  },
+  heroValue: {
+    fontSize: '3rem',
+    fontWeight: 800,
+    lineHeight: 1,
+    fontVariantNumeric: 'tabular-nums',
+    color: 'var(--text-primary)',
+  },
+  heroUnit: {
+    fontSize: '1.4rem',
+    color: 'var(--text-muted)',
+    fontWeight: 600,
+  },
+  klemmRohrCell: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '1rem',
+    flexShrink: 0,
+  },
+  klemmGauge: {
+    width: 360,
+    flexShrink: 0,
+  },
   gaugeRow: {
     display: 'flex',
     justifyContent: 'center',
@@ -269,17 +331,6 @@ const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-  },
-  klemmRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '1.5rem',
-    flexShrink: 0,
-    padding: '0 1rem',
-  },
-  klemmGauge: {
-    flex: 1,
-    minWidth: 0,
   },
   rohrStatus: {
     display: 'flex',
