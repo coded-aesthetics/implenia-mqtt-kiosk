@@ -244,7 +244,7 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
     calibration.clearCalibrationCache();
   });
 
-  it('does not clip during Austausch or Einbauen', () => {
+  it('does not clip in Austausch when the clamp has never been armed', () => {
     const { ingestion } = ingestionMod;
     enableRohrwechsel();
 
@@ -263,7 +263,28 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
     expect(db.getAllSessionReadings(sessionId).some((r) => r.topic === RPM_TOPIC)).toBe(true);
   });
 
-  it('clips again as soon as the worker switches back to Bohren', () => {
+  it('clips during Austausch when the clamp is armed', () => {
+    const { ingestion } = ingestionMod;
+    enableRohrwechsel();
+
+    const sessionId = db.createSession('A-41b', '{}');
+    ingestion.startRecording(sessionId, sensorMap());
+
+    // Arm during bohren
+    publish(CLAMP_TOPIC, '2');
+
+    ingestion.setOperatingMode('austausch');
+    publish(DEPTH_TOPIC, '12.0');
+    publish(CLAMP_TOPIC, '180');     // closes: rohrwechsel
+    publish(RPM_TOPIC, '40');        // clipped
+    publish(DEPTH_TOPIC, '12.0');
+
+    ingestion.stopRecording();
+
+    expect(db.getSessionStats(sessionId).clipped).toBeGreaterThan(0);
+  });
+
+  it('clips during Austausch and resumes after clamp opens', () => {
     const { ingestion } = ingestionMod;
     enableRohrwechsel();
 
@@ -274,9 +295,14 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
     publish(CLAMP_TOPIC, '2');
     publish(RPM_TOPIC, '39');        // kept: drilling, bohren phase
 
-    // Switch to austausch (passive — no clipping)
+    // Switch to austausch — clamp close triggers rohrwechsel
     ingestion.setOperatingMode('austausch');
-    publish(RPM_TOPIC, '40');        // kept: no clipping in austausch
+    publish(CLAMP_TOPIC, '180');     // closes: rohrwechsel
+    publish(RPM_TOPIC, '40');        // clipped
+
+    // Clamp opens — back to active work
+    publish(CLAMP_TOPIC, '2');
+    publish(RPM_TOPIC, '42');        // kept: clamp open
 
     // Switch back to bohren — clamp close arrives
     ingestion.setOperatingMode('bohren');
@@ -286,7 +312,7 @@ describe('Rohrverlängerung through the ingestion pipeline', () => {
 
     const rpm = db.getSessionReadingsDetailed(sessionId).filter((r) => r.topic === RPM_TOPIC);
     expect(rpm.map((r) => `${r.valueNumeric}:${r.uploadStatus}`).sort())
-      .toEqual(['39:pending', '40:pending', '41:clipped']);
+      .toEqual(['39:pending', '40:clipped', '41:clipped', '42:pending']);
   });
 
   it('gives clipped readings back when the threshold was wrong', () => {

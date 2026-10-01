@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react';
-import type { RecordingState, UploadProgress, OperatingMode, ModeSuggestion } from '../hooks/useWebSocket';
-import { MODE_LABELS, isVerpressenMode, hasPipeHandling } from '../utils/operating-mode';
+import type { RecordingState, UploadProgress, OperatingMode } from '../hooks/useWebSocket';
+import { isVerpressenMode, hasPipeHandling } from '../utils/operating-mode';
 
 interface Props {
   currentPage: string;
   elementName?: string;
   recordingState: RecordingState;
-  modeSuggestion: ModeSuggestion | null;
   uploadProgress: UploadProgress | null;
 }
 
@@ -20,7 +19,7 @@ interface ExportOption {
   exported: boolean;
 }
 
-export function RecordingBar({ currentPage, elementName, recordingState, modeSuggestion, uploadProgress }: Props) {
+export function RecordingBar({ currentPage, elementName, recordingState, uploadProgress }: Props) {
   const rohrwechsel = recordingState.rohrwechsel;
   const operatingMode = recordingState.operatingMode;
   const [loading, setLoading] = useState(false);
@@ -28,10 +27,6 @@ export function RecordingBar({ currentPage, elementName, recordingState, modeSug
   const [lastUploadResult, setLastUploadResult] = useState<'uploaded' | 'partial' | null>(null);
   const [emptyWarning, setEmptyWarning] = useState(false);
   const [exportOptions, setExportOptions] = useState<ExportOption[]>([]);
-  // Which warning the worker has tapped away, by the time it was raised. A
-  // warning outlives the Rohrwechsel it describes — settings can only be
-  // opened once the pipe is in — but it must not sit there in red forever.
-  const [ackedWarning, setAckedWarning] = useState<number | null>(null);
   const [unclipPending, setUnclipPending] = useState(false);
   const [unclipped, setUnclipped] = useState<number | null>(null);
   // Bumped after a download so the ✓ marks appear without a page reload.
@@ -54,7 +49,6 @@ export function RecordingBar({ currentPage, elementName, recordingState, modeSug
       setEmptyWarning(false);
       setUnclipPending(false);
       setUnclipped(null);
-      setAckedWarning(null);
     }
   }, [recordingState.active]);
 
@@ -244,46 +238,6 @@ export function RecordingBar({ currentPage, elementName, recordingState, modeSug
   return (
     <div style={styles.bar}>
       {error && <div style={styles.error}>{error}</div>}
-
-      {recordingState.active && modeSuggestion && (
-        <div style={styles.modeSuggestionBanner}>
-          <span>
-            Tiefe {modeSuggestion.suggested === 'auffuellen' ? 'sinkt' : 'steigt'} —{' '}
-            {MODE_LABELS[modeSuggestion.suggested]} aktiv?
-          </span>
-          <button
-            style={styles.modeSuggestionButton}
-            onClick={() => setMode(modeSuggestion.suggested)}
-          >
-            Zu {MODE_LABELS[modeSuggestion.suggested]} wechseln
-          </button>
-        </div>
-      )}
-
-      {/* Rohrverlängerung banner — only on non-bohren pages; the BohrenScreen
-          has its own inline Klemmbacke indicator. */}
-      {currentPage !== 'bohren' && recordingState.active && operatingMode && hasPipeHandling(operatingMode) && rohrwechsel?.phase === 'rohrwechsel' && (
-        <div style={styles.rohrwechselBanner}>
-          <span style={styles.pauseIcon}>❚❚</span>
-          <span>
-            Rohrwechsel — Messwerte werden nicht aufgezeichnet.{' '}
-            {operatingMode === 'auffuellen'
-              ? `Rohr ${rohrwechsel.pipeCount} entfernen.`
-              : `Rohr ${rohrwechsel.pipeCount + 1} einbauen.`}
-          </span>
-        </div>
-      )}
-
-      {currentPage !== 'bohren' && recordingState.active && operatingMode && hasPipeHandling(operatingMode) && rohrwechsel?.warning
-        && rohrwechsel.warningSince !== ackedWarning && (
-        <div
-          style={styles.rohrwechselWarning}
-          onClick={() => setAckedWarning(rohrwechsel.warningSince ?? null)}
-        >
-          <span style={styles.warningIcon}>!</span>
-          <span>{rohrwechsel.warning} (Tippen zum Ausblenden)</span>
-        </div>
-      )}
 
       {status === 'idle' && (currentPage === 'element' || currentPage === 'bohren') && (
         <button
@@ -629,66 +583,5 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     backgroundColor: 'var(--color-accent)',
     color: '#ffffff',
-  },
-  modeSuggestionBanner: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '1rem',
-    width: '100%',
-    padding: '0.4rem 1rem',
-    marginBottom: '0.25rem',
-    borderRadius: '6px',
-    backgroundColor: '#1565c0',
-    color: '#ffffff',
-    fontSize: '1.1rem',
-    fontWeight: 700,
-    textAlign: 'center',
-  },
-  modeSuggestionButton: {
-    border: 'none',
-    borderRadius: '6px',
-    padding: '0.5rem 1.5rem',
-    minHeight: '64px',
-    fontSize: '1.1rem',
-    fontWeight: 700,
-    cursor: 'pointer',
-    backgroundColor: '#ffffff',
-    color: '#1565c0',
-    flexShrink: 0,
-  },
-  rohrwechselBanner: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '0.5rem',
-    width: '100%',
-    padding: '0.25rem 1rem',
-    marginBottom: '0.25rem',
-    borderRadius: '6px',
-    backgroundColor: '#e65100',
-    color: '#ffffff',
-    fontSize: '1.1rem',
-    fontWeight: 700,
-    textAlign: 'center',
-  },
-  pauseIcon: {
-    fontSize: '1.4rem',
-    letterSpacing: '0.1em',
-    flexShrink: 0,
-  },
-  rohrwechselWarning: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.75rem',
-    width: '100%',
-    padding: '0.5rem 1rem',
-    marginBottom: '0.5rem',
-    borderRadius: '8px',
-    backgroundColor: '#b71c1c',
-    color: '#ffffff',
-    fontSize: '1.1rem',
-    fontWeight: 600,
-    lineHeight: 1.3,
   },
 };

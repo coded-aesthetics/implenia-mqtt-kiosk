@@ -120,10 +120,6 @@ export function setupWebSocket(app: FastifyInstance): void {
     broadcast({ type: 'operating-mode', mode });
   });
 
-  ingestion.on('mode-suggestion', (suggestion: { current: string; suggested: string }) => {
-    broadcast({ type: 'mode-suggestion', ...suggestion });
-  });
-
   connectivity.on('change', (state: ConnectivityState) => {
     broadcast({ type: 'connectivity', state });
   });

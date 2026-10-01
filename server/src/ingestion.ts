@@ -55,13 +55,12 @@ export function normalizeOperatingMode(value: string): OperatingMode | null {
   return LEGACY_MODE_MAP[value] ?? null;
 }
 
-export function hasPipeHandling(mode: OperatingMode): boolean {
-  return mode === 'bohren' || mode === 'auffuellen';
+export function isRetracting(mode: OperatingMode): boolean {
+  return mode === 'austausch' || mode === 'einbauen' || mode === 'auffuellen';
 }
 
-interface ModeSuggestion {
-  depthAnchor: number | null;
-  suggested: OperatingMode | null;
+export function hasPipeHandling(mode: OperatingMode): boolean {
+  return mode === 'bohren' || mode === 'austausch' || mode === 'einbauen' || mode === 'auffuellen';
 }
 
 interface ActiveSession {
@@ -71,7 +70,6 @@ interface ActiveSession {
   rohrwechsel: RohrwechselConfig;
   operatingMode: OperatingMode;
   volumeTracker: VolumeTracker;
-  modeSuggestion: ModeSuggestion;
 }
 
 /** What a reading looks like after Rohrverlängerung handling. */
@@ -110,14 +108,19 @@ export class DataIngestion extends EventEmitter {
   private source: DataSource;
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
   private activeSession: ActiveSession | null = null;
+  private pendingMode: OperatingMode | null = null;
   private started = false;
 
   private readonly onReading = (reading: SensorReading): void => {
     // Synthetic control topic: replay files can embed mode-switch events.
     if (reading.topic === 'kiosk/operating-mode') {
       const mode = reading.payload.trim();
-      if (this.activeSession && isOperatingMode(mode)) {
+      if (!isOperatingMode(mode)) return;
+      if (this.activeSession) {
         this.setOperatingMode(mode);
+      } else {
+        this.pendingMode = mode;
+        this.emit('operating-mode', mode);
       }
       return;
     }
@@ -193,11 +196,8 @@ export class DataIngestion extends EventEmitter {
     const cfg = session.rohrwechsel;
     const mode = session.operatingMode;
 
-    const retracting = mode === 'auffuellen';
+    const retracting = isRetracting(mode);
 
-    // Austausch and Einbauen have no pipe handling — skip the clamp logic.
-    // Depth still runs through observeDepth so the offset is applied and
-    // the accumulated holeDepth carries over from Bohren.
     if (hasPipeHandling(mode) && isClampTopic(reading.topic, cfg.clampTopic)) {
       // Deliberately the raw value: the thresholds are set by watching what
       // the clamp actually publishes, so a calibration meant for a sensor of
@@ -244,7 +244,6 @@ export class DataIngestion extends EventEmitter {
       session.drill = state;
 
       if (depth !== null) {
-        this.checkModeSuggestion(session, depth);
         const rounded = roundValue(depth);
         return {
           payload: String(rounded),
@@ -271,43 +270,6 @@ export class DataIngestion extends EventEmitter {
     const mode = this.activeSession?.operatingMode;
     if (mode && hasPipeHandling(mode)) return isClipped(state);
     return false;
-  }
-
-  private static readonly MODE_DRIFT_THRESHOLD = 0.3;
-
-  /**
-   * Check whether the depth trend contradicts the operating mode and nudge the
-   * worker if it does. Fires at most once per mode — a mode switch or an
-   * accepted suggestion resets the anchor.
-   */
-  private checkModeSuggestion(session: ActiveSession, depth: number): void {
-    const ms = session.modeSuggestion;
-    if (ms.suggested !== null) return;
-
-    if (ms.depthAnchor === null) {
-      ms.depthAnchor = depth;
-      return;
-    }
-
-    const delta = depth - ms.depthAnchor;
-    const threshold = DataIngestion.MODE_DRIFT_THRESHOLD;
-    const mode = session.operatingMode;
-    let suggested: OperatingMode | null = null;
-
-    if (!hasPipeHandling(mode)) {
-      if (delta < -threshold) suggested = 'auffuellen';
-      else if (delta > threshold) suggested = 'bohren';
-    } else if (mode === 'bohren' && delta < -threshold) {
-      suggested = 'auffuellen';
-    } else if (mode === 'auffuellen' && delta > threshold) {
-      suggested = 'bohren';
-    }
-
-    if (suggested) {
-      ms.suggested = suggested;
-      log.info('Mode suggestion: %s (depth drifted %s m)', `${mode} → ${suggested}`, delta.toFixed(2));
-      this.emit('mode-suggestion', { current: mode, suggested });
-    }
   }
 
   constructor(source: DataSource) {
@@ -354,7 +316,7 @@ export class DataIngestion extends EventEmitter {
 
   /** What the rig is doing, or null when nothing is being recorded. */
   get operatingMode(): OperatingMode | null {
-    return this.activeSession?.operatingMode ?? null;
+    return this.activeSession?.operatingMode ?? this.pendingMode;
   }
 
   /**
@@ -375,7 +337,6 @@ export class DataIngestion extends EventEmitter {
       phaseSince: null,
       depthAtLastChange: null,
     };
-    session.modeSuggestion = { depthAnchor: null, suggested: null };
     setOperatingModeRow(session.id, mode);
     log.info('Operating mode for session %d is now %s', session.id, mode);
     this.emit('operating-mode', mode);
@@ -425,10 +386,11 @@ export class DataIngestion extends EventEmitter {
       sensorMap,
       drill: restored ?? initialDrillState(),
       rohrwechsel: getRohrwechselConfig(),
-      operatingMode: (storedMode ? normalizeOperatingMode(storedMode) : null) ?? 'bohren',
+      operatingMode: (storedMode ? normalizeOperatingMode(storedMode) : null)
+        ?? this.pendingMode ?? 'bohren',
       volumeTracker: new VolumeTracker(getVolumeMappings()),
-      modeSuggestion: { depthAnchor: null, suggested: null },
     };
+    this.pendingMode = null;
   }
 
   stopRecording(): void {
