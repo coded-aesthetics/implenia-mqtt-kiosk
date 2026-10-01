@@ -240,7 +240,7 @@ export function applyClampPressure(
         : null;
     const warning = delta === null
       ? null
-      : (retracting ? describePulled(delta, settings) : describeDrilled(delta, settings));
+      : describeProgress(delta, settings, retracting ? 'ziehen' : 'bohren');
 
     return {
       state: {
@@ -304,67 +304,34 @@ export function applyClampPressure(
 }
 
 /**
- * What to tell the worker about the depth drilled since the last Rohrwechsel,
- * or null when it is what it should be.
+ * What to tell the worker about the depth covered since the last Rohrwechsel,
+ * or null when it is within tolerance. Works for both drilling (bohren) and
+ * retracting (auffuellen) — only the German verb differs.
  */
-function describeDrilled(drilled: number, settings: RohrwechselSettings): string | null {
-  if (Math.abs(drilled - settings.pipeLength) <= settings.tolerance) return null;
+function describeProgress(
+  distance: number,
+  settings: RohrwechselSettings,
+  direction: 'bohren' | 'ziehen',
+): string | null {
+  if (Math.abs(distance - settings.pipeLength) <= settings.tolerance) return null;
 
-  if (drilled < settings.tolerance) {
-    // Includes the negative case: a Schlittenweg read as an absolute depth
-    // runs backwards at every change.
-    // Two changes in a row with nothing drilled in between is what a threshold
-    // sitting inside the clamp's normal pressure range looks like.
+  const verb = direction === 'bohren' ? 'gebohrt' : 'gezogen';
+  const progressWord = direction === 'bohren' ? 'Bohrfortschritt' : 'Ziehfortschritt';
+
+  if (distance < settings.tolerance) {
     return (
-      'Rohrwechsel ohne Bohrfortschritt erkannt. Möglicherweise ist der Schwellwert ' +
+      `Rohrwechsel ohne ${progressWord} erkannt. Möglicherweise ist der Schwellwert ` +
       'der Klemmbacke falsch eingestellt — bitte in den Einstellungen unter ' +
       '„Rohrverlängerung" prüfen.'
     );
   }
 
   const base =
-    `Seit dem letzten Rohrwechsel wurden ${formatMeters(drilled)} m gebohrt, ` +
+    `Seit dem letzten Rohrwechsel wurden ${formatMeters(distance)} m ${verb}, ` +
     `erwartet sind ${formatMeters(settings.pipeLength)} m (Rohrlänge). `;
 
-  // A consistent over- or under-reading of the same factor is a calibration
-  // problem, so turn the complaint into the correction to make. The machine
-  // works in already-calibrated values, so what it can offer is the factor to
-  // multiply the existing one by — which is all the screen needs.
-  if (drilled > 0) {
-    const factor = settings.pipeLength / drilled;
-    return (
-      base +
-      'Wenn das bei jedem Rohr so ist, stimmt die Kalibrierung der Bohrtiefe nicht — ' +
-      `der Faktor müsste mit ${factor.toLocaleString('de-DE', {
-        minimumFractionDigits: 3, maximumFractionDigits: 3,
-      })} multipliziert werden (Einstellungen → Kalibrierung).`
-    );
-  }
-
-  return base + 'Bitte die Aufzeichnung und die Einstellung der Tiefenmessung prüfen.';
-}
-
-/**
- * The Verpressen counterpart of `describeDrilled`: what to tell the worker
- * about the depth *pulled* since the last pipe removal.
- */
-function describePulled(pulled: number, settings: RohrwechselSettings): string | null {
-  if (Math.abs(pulled - settings.pipeLength) <= settings.tolerance) return null;
-
-  if (pulled < settings.tolerance) {
-    return (
-      'Rohrwechsel ohne Ziehfortschritt erkannt. Möglicherweise ist der Schwellwert ' +
-      'der Klemmbacke falsch eingestellt — bitte in den Einstellungen unter ' +
-      '„Rohrverlängerung" prüfen.'
-    );
-  }
-
-  const base =
-    `Seit dem letzten Rohrwechsel wurden ${formatMeters(pulled)} m gezogen, ` +
-    `erwartet sind ${formatMeters(settings.pipeLength)} m (Rohrlänge). `;
-
-  if (pulled > 0) {
-    const factor = settings.pipeLength / pulled;
+  if (distance > 0) {
+    const factor = settings.pipeLength / distance;
     return (
       base +
       'Wenn das bei jedem Rohr so ist, stimmt die Kalibrierung der Bohrtiefe nicht — ' +

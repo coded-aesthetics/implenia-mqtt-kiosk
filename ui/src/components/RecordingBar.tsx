@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { RecordingState, UploadProgress, OperatingMode, ModeSuggestion } from '../hooks/useWebSocket';
+import { MODE_LABELS, isVerpressenMode, hasPipeHandling } from '../utils/operating-mode';
 
 interface Props {
   currentPage: string;
@@ -18,13 +19,6 @@ interface ExportOption {
   /** Already written to a file. Until every stream is, the data is only here. */
   exported: boolean;
 }
-
-const MODE_LABELS: Record<OperatingMode, string> = {
-  bohren: 'Bohren',
-  austausch: 'Austausch',
-  einbauen: 'Einbauen',
-  auffuellen: 'Auffüllen',
-};
 
 export function RecordingBar({ currentPage, elementName, recordingState, modeSuggestion, uploadProgress }: Props) {
   const rohrwechsel = recordingState.rohrwechsel;
@@ -229,7 +223,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, modeSug
     }
   }
 
-  const isVerpressen = operatingMode === 'austausch' || operatingMode === 'einbauen' || operatingMode === 'auffuellen';
+  const inVerpressen = isVerpressenMode(operatingMode);
   const modeToggle = operatingMode ? (
     <div style={styles.modeToggle}>
       <button
@@ -239,8 +233,8 @@ export function RecordingBar({ currentPage, elementName, recordingState, modeSug
         B
       </button>
       <button
-        style={isVerpressen ? styles.modeButtonActive : styles.modeButton}
-        onClick={() => setMode('austausch')}
+        style={inVerpressen ? styles.modeButtonActive : styles.modeButton}
+        onClick={() => { if (!inVerpressen) setMode('austausch'); }}
       >
         V
       </button>
@@ -268,7 +262,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, modeSug
 
       {/* Rohrverlängerung banner — only on non-bohren pages; the BohrenScreen
           has its own inline Klemmbacke indicator. */}
-      {currentPage !== 'bohren' && recordingState.active && (operatingMode === 'bohren' || operatingMode === 'auffuellen') && rohrwechsel?.phase === 'rohrwechsel' && (
+      {currentPage !== 'bohren' && recordingState.active && operatingMode && hasPipeHandling(operatingMode) && rohrwechsel?.phase === 'rohrwechsel' && (
         <div style={styles.rohrwechselBanner}>
           <span style={styles.pauseIcon}>❚❚</span>
           <span>
@@ -280,7 +274,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, modeSug
         </div>
       )}
 
-      {currentPage !== 'bohren' && recordingState.active && (operatingMode === 'bohren' || operatingMode === 'auffuellen') && rohrwechsel?.warning
+      {currentPage !== 'bohren' && recordingState.active && operatingMode && hasPipeHandling(operatingMode) && rohrwechsel?.warning
         && rohrwechsel.warningSince !== ackedWarning && (
         <div
           style={styles.rohrwechselWarning}
@@ -305,7 +299,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, modeSug
         <div style={styles.recordingRow}>
           <span style={styles.redDot} />
           <span style={styles.recordingLabel}>
-            {(operatingMode === 'bohren' || operatingMode === 'auffuellen') && rohrwechsel?.phase === 'rohrwechsel'
+            {operatingMode && hasPipeHandling(operatingMode) && rohrwechsel?.phase === 'rohrwechsel'
               ? 'Pausiert'
               : 'Aufzeichnung'}
           </span>
@@ -655,7 +649,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: 'none',
     borderRadius: '6px',
     padding: '0.5rem 1.5rem',
-    minHeight: '48px',
+    minHeight: '64px',
     fontSize: '1.1rem',
     fontWeight: 700,
     cursor: 'pointer',

@@ -9,6 +9,7 @@ import { formatNumber } from '../utils/format';
 import { findSoll } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
 import { useClampState } from '../hooks/useClampState';
+import { MODE_LABELS, VERPRESSEN_MODES } from '../utils/operating-mode';
 
 export interface GaugeSlot {
   sensor: string;
@@ -54,16 +55,24 @@ export function VerpressenScreen({ readings, vorgaben, config, recordingState }:
 
   const depth = sensorValues.get(config.depthSensor) ?? 0;
   const volume = sensorValues.get(config.volumeSensor) ?? 0;
+  const [modeError, setModeError] = useState<string | null>(null);
 
   const setMode = useCallback(async (mode: OperatingMode) => {
     if (mode === operatingMode) return;
+    setModeError(null);
     try {
-      await fetch('/api/recording/mode', {
+      const res = await fetch('/api/recording/mode', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode, sessionId: recordingState.sessionId }),
       });
-    } catch { /* swallow — mode badge shows the state */ }
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `Fehler ${res.status}`);
+      }
+    } catch (err) {
+      setModeError((err as Error).message);
+    }
   }, [operatingMode, recordingState.sessionId]);
 
   // Chart data accumulation — samples sensorValues at ~1Hz via useEffect
@@ -151,15 +160,16 @@ export function VerpressenScreen({ readings, vorgaben, config, recordingState }:
       {/* Row 2: Sub-step buttons */}
       {recordingState.active && (
         <div style={styles.modeRow}>
-          {(['austausch', 'einbauen', 'auffuellen'] as const).map((m) => (
+          {VERPRESSEN_MODES.map((m) => (
             <button
               key={m}
               style={operatingMode === m ? styles.modeButtonActive : styles.modeButton}
               onClick={() => setMode(m)}
             >
-              {{ austausch: 'Austausch', einbauen: 'Einbauen', auffuellen: 'Auffüllen' }[m]}
+              {MODE_LABELS[m]}
             </button>
           ))}
+          {modeError && <span style={styles.modeError}>{modeError}</span>}
         </div>
       )}
 
@@ -308,7 +318,7 @@ const styles: Record<string, CSSProperties> = {
   modeButton: {
     flex: 1,
     maxWidth: '14rem',
-    minHeight: '3.5rem',
+    minHeight: '4rem',
     border: '2px solid var(--surface-3)',
     borderRadius: 'var(--radius)',
     background: 'var(--surface-2)',
@@ -322,7 +332,7 @@ const styles: Record<string, CSSProperties> = {
   modeButtonActive: {
     flex: 1,
     maxWidth: '14rem',
-    minHeight: '3.5rem',
+    minHeight: '4rem',
     border: '2px solid #6a1b9a',
     borderRadius: 'var(--radius)',
     background: 'rgba(106, 27, 154, 0.25)',
@@ -332,6 +342,13 @@ const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
+  },
+  modeError: {
+    fontSize: '1rem',
+    color: '#f44336',
+    fontWeight: 600,
+    width: '100%',
+    textAlign: 'center',
   },
   gaugeRow: {
     display: 'flex',

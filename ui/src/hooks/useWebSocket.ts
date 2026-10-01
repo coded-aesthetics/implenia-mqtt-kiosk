@@ -167,6 +167,7 @@ export function useWebSocket() {
                 operatingMode: msg.operatingMode ?? null,
                 clippedCount: msg.clippedCount ?? 0,
               },
+              modeSuggestion: msg.active ? prev.modeSuggestion : null,
             }));
             break;
 

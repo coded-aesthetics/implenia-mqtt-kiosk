@@ -19,6 +19,7 @@ import { BohrenScreen, INJEKTIONSBOHREN_BOHREN } from './components/BohrenScreen
 import { VerpressenScreen, INJEKTIONSBOHREN_VERPRESSEN } from './components/VerpressenScreen';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
+import { isVerpressenMode } from './utils/operating-mode';
 import type { ViewTab } from './components/ElementDetail';
 
 export function App() {
@@ -154,8 +155,7 @@ export function App() {
         (d) => d.name === route.params.name,
       )?.vorgaben ?? null;
       if (setup.verfahren === 'injektionsbohren') {
-        const verpressenModes = ['austausch', 'einbauen', 'auffuellen'] as const;
-        if (recordingState.operatingMode && verpressenModes.includes(recordingState.operatingMode as typeof verpressenModes[number])) {
+        if (isVerpressenMode(recordingState.operatingMode)) {
           content = (
             <VerpressenScreen
               readings={readings}

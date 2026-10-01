@@ -42,8 +42,21 @@ export type OperatingMode = 'bohren' | 'austausch' | 'einbauen' | 'auffuellen';
 
 const OPERATING_MODES: ReadonlySet<string> = new Set(['bohren', 'austausch', 'einbauen', 'auffuellen']);
 
+const LEGACY_MODE_MAP: Record<string, OperatingMode> = {
+  verpressen: 'austausch',
+};
+
 export function isOperatingMode(value: string): value is OperatingMode {
   return OPERATING_MODES.has(value);
+}
+
+export function normalizeOperatingMode(value: string): OperatingMode | null {
+  if (isOperatingMode(value)) return value;
+  return LEGACY_MODE_MAP[value] ?? null;
+}
+
+export function hasPipeHandling(mode: OperatingMode): boolean {
+  return mode === 'bohren' || mode === 'auffuellen';
 }
 
 interface ModeSuggestion {
@@ -185,7 +198,7 @@ export class DataIngestion extends EventEmitter {
     // Austausch and Einbauen have no pipe handling — skip the clamp logic.
     // Depth still runs through observeDepth so the offset is applied and
     // the accumulated holeDepth carries over from Bohren.
-    if (mode !== 'austausch' && mode !== 'einbauen' && isClampTopic(reading.topic, cfg.clampTopic)) {
+    if (hasPipeHandling(mode) && isClampTopic(reading.topic, cfg.clampTopic)) {
       // Deliberately the raw value: the thresholds are set by watching what
       // the clamp actually publishes, so a calibration meant for a sensor of
       // the same name must not move them underneath the technician.
@@ -256,7 +269,7 @@ export class DataIngestion extends EventEmitter {
    */
   private clips(state: DrillState): boolean {
     const mode = this.activeSession?.operatingMode;
-    if (mode === 'bohren' || mode === 'auffuellen') return isClipped(state);
+    if (mode && hasPipeHandling(mode)) return isClipped(state);
     return false;
   }
 
@@ -281,7 +294,7 @@ export class DataIngestion extends EventEmitter {
     const mode = session.operatingMode;
     let suggested: OperatingMode | null = null;
 
-    if (mode === 'austausch' || mode === 'einbauen') {
+    if (!hasPipeHandling(mode)) {
       if (delta < -threshold) suggested = 'auffuellen';
       else if (delta > threshold) suggested = 'bohren';
     } else if (mode === 'bohren' && delta < -threshold) {
@@ -358,6 +371,7 @@ export class DataIngestion extends EventEmitter {
     // causes immediate clipping.
     session.drill = {
       ...session.drill,
+      phase: 'bohren',
       phaseSince: null,
       depthAtLastChange: null,
     };
@@ -411,7 +425,7 @@ export class DataIngestion extends EventEmitter {
       sensorMap,
       drill: restored ?? initialDrillState(),
       rohrwechsel: getRohrwechselConfig(),
-      operatingMode: storedMode && isOperatingMode(storedMode) ? storedMode : 'bohren',
+      operatingMode: (storedMode ? normalizeOperatingMode(storedMode) : null) ?? 'bohren',
       volumeTracker: new VolumeTracker(getVolumeMappings()),
       modeSuggestion: { depthAnchor: null, suggested: null },
     };
