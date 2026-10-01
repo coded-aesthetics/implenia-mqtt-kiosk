@@ -1,6 +1,6 @@
-import { useMemo, useRef, useEffect, useState } from 'react';
+import { useMemo, useRef, useEffect, useState, useCallback } from 'react';
 import type { CSSProperties } from 'react';
-import type { RecordingState } from '../hooks/useWebSocket';
+import type { RecordingState, OperatingMode } from '../hooks/useWebSocket';
 import type { VorgabenData } from '../hooks/useImplenia';
 import { SensorGauge } from './SensorGauge';
 import { SensorChart, type ChartSeries, type ChartScale } from './SensorChart';
@@ -9,6 +9,7 @@ import { formatNumber } from '../utils/format';
 import { findSoll } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
 import { useClampState } from '../hooks/useClampState';
+import { MODE_LABELS, VERPRESSEN_MODES } from '../utils/operating-mode';
 
 export interface GaugeSlot {
   sensor: string;
@@ -45,12 +46,34 @@ interface Props {
 const CHART_WINDOW_MINUTES = 5;
 const MAX_BUFFER_POINTS = CHART_WINDOW_MINUTES * 60 * 2;
 
-export function VerpressenScreen({ readings, vorgaben, config, recordingState: _recordingState }: Props) {
+export function VerpressenScreen({ readings, vorgaben, config, recordingState }: Props) {
   const sensorValues = useSensorValues(readings);
   const { clampConfig, clampValue, isClampOpen } = useClampState(sensorValues);
 
+  const rohrwechsel = recordingState.rohrwechsel;
+  const operatingMode = recordingState.operatingMode;
+
   const depth = sensorValues.get(config.depthSensor) ?? 0;
   const volume = sensorValues.get(config.volumeSensor) ?? 0;
+  const [modeError, setModeError] = useState<string | null>(null);
+
+  const setMode = useCallback(async (mode: OperatingMode) => {
+    if (mode === operatingMode) return;
+    setModeError(null);
+    try {
+      const res = await fetch('/api/recording/mode', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, sessionId: recordingState.sessionId }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `Fehler ${res.status}`);
+      }
+    } catch (err) {
+      setModeError((err as Error).message);
+    }
+  }, [operatingMode, recordingState.sessionId]);
 
   // Chart data accumulation — samples sensorValues at ~1Hz via useEffect
   const chartBufferRef = useRef<Map<string, Array<{ ts: number; value: number }>>>(new Map());
@@ -111,7 +134,7 @@ export function VerpressenScreen({ readings, vorgaben, config, recordingState: _
             <span style={styles.heroUnit}>l</span>
           </div>
         </div>
-        <div style={styles.heroCell}>
+        <div style={styles.klemmRohrCell}>
           {clampConfig.clampTopic ? (
             <KlemmbackeIndicator
               value={clampValue}
@@ -123,10 +146,34 @@ export function VerpressenScreen({ readings, vorgaben, config, recordingState: _
           ) : (
             <div style={styles.heroLabel}>Klemmbacke nicht konfiguriert</div>
           )}
+          {recordingState.active && operatingMode === 'auffuellen' && rohrwechsel && (
+            <div style={rohrwechsel.phase === 'rohrwechsel' ? styles.rohrStatusActive : styles.rohrStatus}>
+              <span style={styles.rohrNumber}>Rohr {rohrwechsel.pipeCount}</span>
+              {rohrwechsel.phase === 'rohrwechsel' && (
+                <span style={styles.rohrPhase}>Entfernen</span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Row 2: Speed dials */}
+      {/* Row 2: Sub-step buttons */}
+      {recordingState.active && (
+        <div style={styles.modeRow}>
+          {VERPRESSEN_MODES.map((m) => (
+            <button
+              key={m}
+              style={operatingMode === m ? styles.modeButtonActive : styles.modeButton}
+              onClick={() => setMode(m)}
+            >
+              {MODE_LABELS[m]}
+            </button>
+          ))}
+          {modeError && <span style={styles.modeError}>{modeError}</span>}
+        </div>
+      )}
+
+      {/* Row 3: Speed dials */}
       <div style={styles.gaugeRow}>
         {config.gauges.map((g) => (
           <div key={g.sensor} style={styles.gaugeCell}>
@@ -143,7 +190,7 @@ export function VerpressenScreen({ readings, vorgaben, config, recordingState: _
         ))}
       </div>
 
-      {/* Row 3: Chart */}
+      {/* Row 4: Chart */}
       <div style={styles.chartRow}>
         <SensorChart
           series={chartSeries}
@@ -201,6 +248,42 @@ const styles: Record<string, CSSProperties> = {
     alignItems: 'center',
     padding: '0.25rem 0',
   },
+  klemmRohrCell: {
+    flex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '1rem',
+    padding: '0.25rem 0',
+  },
+  rohrStatus: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    flexShrink: 0,
+    minWidth: '6rem',
+    color: 'var(--text-muted)',
+  },
+  rohrStatusActive: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    flexShrink: 0,
+    minWidth: '6rem',
+    padding: '0.4rem 0.75rem',
+    borderRadius: '8px',
+    backgroundColor: 'rgba(230, 81, 0, 0.15)',
+    color: '#ffb74d',
+  },
+  rohrNumber: {
+    fontSize: '1.4rem',
+    fontWeight: 800,
+    lineHeight: 1.2,
+  },
+  rohrPhase: {
+    fontSize: '1rem',
+    fontWeight: 600,
+  },
   heroLabel: {
     fontSize: 'var(--font-base)',
     fontWeight: 600,
@@ -225,6 +308,47 @@ const styles: Record<string, CSSProperties> = {
     fontSize: '1.4rem',
     color: 'var(--text-muted)',
     fontWeight: 600,
+  },
+  modeRow: {
+    display: 'flex',
+    gap: '0.5rem',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  modeButton: {
+    flex: 1,
+    maxWidth: '14rem',
+    minHeight: '4rem',
+    border: '2px solid var(--surface-3)',
+    borderRadius: 'var(--radius)',
+    background: 'var(--surface-2)',
+    color: 'var(--text-muted)',
+    fontSize: 'var(--font-base)',
+    fontWeight: 700,
+    cursor: 'pointer',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  modeButtonActive: {
+    flex: 1,
+    maxWidth: '14rem',
+    minHeight: '4rem',
+    border: '2px solid #6a1b9a',
+    borderRadius: 'var(--radius)',
+    background: 'rgba(106, 27, 154, 0.25)',
+    color: '#ce93d8',
+    fontSize: 'var(--font-base)',
+    fontWeight: 700,
+    cursor: 'pointer',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  modeError: {
+    fontSize: '1rem',
+    color: '#f44336',
+    fontWeight: 600,
+    width: '100%',
+    textAlign: 'center',
   },
   gaugeRow: {
     display: 'flex',

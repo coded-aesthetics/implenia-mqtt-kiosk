@@ -19,10 +19,11 @@ import { BohrenScreen, INJEKTIONSBOHREN_BOHREN } from './components/BohrenScreen
 import { VerpressenScreen, INJEKTIONSBOHREN_VERPRESSEN } from './components/VerpressenScreen';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
+import { isVerpressenMode } from './utils/operating-mode';
 import type { ViewTab } from './components/ElementDetail';
 
 export function App() {
-  const { readings, deviceFrames, connectivity, recordingState, uploadProgress, updateAvailable, updateSource, updateApplying, replaySeeking } =
+  const { readings, deviceFrames, connectivity, recordingState, modeSuggestion, uploadProgress, updateAvailable, updateSource, updateApplying, replaySeeking } =
     useWebSocket();
   const route = useHashRouter();
   const config = useConfig();
@@ -154,7 +155,7 @@ export function App() {
         (d) => d.name === route.params.name,
       )?.vorgaben ?? null;
       if (setup.verfahren === 'injektionsbohren') {
-        if (recordingState.operatingMode === 'verpressen') {
+        if (isVerpressenMode(recordingState.operatingMode)) {
           content = (
             <VerpressenScreen
               readings={readings}
@@ -240,6 +241,7 @@ export function App() {
         currentPage={route.page}
         elementName={route.params.name}
         recordingState={recordingState}
+        modeSuggestion={modeSuggestion}
         uploadProgress={uploadProgress}
       />
     </div>

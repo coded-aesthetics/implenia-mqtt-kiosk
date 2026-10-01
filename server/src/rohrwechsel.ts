@@ -192,23 +192,23 @@ export interface ClampResult {
 /**
  * Feed a Klemmbacke pressure reading to the machine.
  *
- * Closing starts the clipping window and checks the depth drilled since the
- * last change. Opening ends it, counts the new pipe, and — in `inkrementell` —
+ * Closing starts the clipping window and checks the depth covered since the
+ * last change. Opening ends it, counts the pipe, and — in `inkrementell` —
  * rebuilds the offset from where the carriage actually ended up.
  *
- * `drilling` is what the rig is doing, and it changes what a closed clamp
- * *means*. While grouting it holds the string steady for most of the phase
- * (81% of it on the G08 capture) and no Bohrrohr is being added: the phase is
- * still tracked, so clipping resumes correctly the moment the worker switches
- * back to Bohren, but nothing is counted, no depth is corrected and nothing is
- * called implausible — there is no pipe to check.
+ * The transition structure is the same for drilling and retracting (Auffüllen):
+ *   - clamp closes → rohrwechsel-start (pipe handling begins)
+ *   - clamp opens  → rohrwechsel-ende  (active work resumes)
+ *
+ * `retracting` controls the direction: pipe count increments vs. decrements,
+ * offset must increase vs. decrease, and which plausibility description to use.
  */
 export function applyClampPressure(
   state: DrillState,
   pressure: number,
   settings: RohrwechselSettings,
   now: number,
-  drilling = true,
+  retracting = false,
 ): ClampResult {
   if (!Number.isFinite(pressure)) return { state, transition: null };
 
@@ -221,11 +221,6 @@ export function applyClampPressure(
   if (seen.phase === 'bohren') {
     if (pressure < settings.closeThreshold) return { state: seen, transition: null };
 
-    // Not armed yet: this clamp has never been seen open, so "closed" may
-    // simply be what every reading looks like against thresholds meant for a
-    // different rig. Clipping on that would swallow the entire session, so
-    // hold off and — once it is clear this is not just a recording that began
-    // mid-Rohrwechsel — say so.
     if (!seen.clampSeenOpen) {
       const stuck =
         seen.clampSince !== null && now - seen.clampSince >= THRESHOLD_WARNING_AFTER_MS;
@@ -236,24 +231,23 @@ export function applyClampPressure(
       };
     }
 
-    // Only from the second change onwards. The first has no baseline —
-    // recording may have started with pipes already in the ground, and a
-    // warning about that would be noise, not information.
-    const drilled =
-      drilling && seen.depthAtLastChange !== null && seen.lastDepth !== null
-        ? seen.lastDepth - seen.depthAtLastChange
+    // bohren → rohrwechsel: clamp closes.
+    const delta =
+      seen.depthAtLastChange !== null && seen.lastDepth !== null
+        ? (retracting
+          ? seen.depthAtLastChange - seen.lastDepth
+          : seen.lastDepth - seen.depthAtLastChange)
         : null;
-    const warning = drilled === null ? null : describeDrilled(drilled, settings);
+    const warning = delta === null
+      ? null
+      : describeProgress(delta, settings, retracting ? 'ziehen' : 'bohren');
 
     return {
       state: {
         ...seen,
         phase: 'rohrwechsel',
         phaseSince: now,
-        // Cleared while grouting: a baseline taken before or during Verpressen
-        // says nothing about the next pipe, and checking against it would
-        // report a Rohrwechsel as implausible for no reason.
-        depthAtLastChange: drilling ? (seen.lastDepth ?? seen.depthAtLastChange) : null,
+        depthAtLastChange: seen.lastDepth ?? seen.depthAtLastChange,
         warning,
         warningSince: warning ? now : null,
         implausibleChanges: seen.implausibleChanges + (warning ? 1 : 0),
@@ -262,50 +256,41 @@ export function applyClampPressure(
     };
   }
 
+  // rohrwechsel → bohren: clamp opens.
   if (pressure >= settings.openThreshold) return { state: seen, transition: null };
 
   const reopened: DrillState = {
     ...seen,
     phase: 'bohren',
     phaseSince: now,
-    // Carried across the transition deliberately: the worker was busy with a
-    // Bohrrohr while it was up, and going into the settings is something they
-    // can only do once the pipe is in. `warningSince` bounds it — the screen
-    // lets an acknowledged warning be tapped away.
     warning: seen.warning,
     warningSince: seen.warningSince,
-    pipeCount: drilling ? seen.pipeCount + 1 : seen.pipeCount,
+    pipeCount: Math.max(0, seen.pipeCount + (retracting ? -1 : 1)),
   };
-
-  // No Bohrrohr was added: while grouting the clamp cycles to *remove* pipe,
-  // so rebuilding the offset from the carriage would push the depth the wrong
-  // way with every cycle — and those depths are uploaded, because nothing is
-  // clipped during Verpressen.
-  if (!drilling) return { state: reopened, transition: 'rohrwechsel-ende' };
 
   if (settings.depthMode !== 'inkrementell' || seen.lastRaw === null) {
     return { state: reopened, transition: 'rohrwechsel-ende' };
   }
 
-  // The clamp has opened: the new pipe is in and the string is coupled again.
-  // The bit never moved, so wherever the carriage sits now must map to the
-  // depth we froze.
   const newOffset = seen.holeDepth - seen.lastRaw;
 
-  // A Rohrverlängerung can only ever push the offset up. A step of zero or
-  // less means this was not one — most likely the string being pulled back
-  // out, which cycles the clamp the same way. Keeping the old offset lets the
-  // depth follow the carriage back up, which is roughly right, instead of
-  // inventing a jump.
-  if (newOffset <= seen.offset) {
+  // Drilling: offset must increase (pipe added → more string in the ground).
+  // Retracting: offset must decrease (pipe removed → less string).
+  const validChange = retracting
+    ? newOffset < seen.offset
+    : newOffset > seen.offset;
+
+  if (!validChange) {
     return {
       state: {
         ...reopened,
         pipeCount: seen.pipeCount,
         implausibleChanges: seen.implausibleChanges + 1,
-        warning:
-          'Klemmbacke war zu, aber es wurde kein neues Bohrrohr erkannt. Die Bohrtiefe ' +
-          'läuft unverändert weiter — bitte die angezeigte Tiefe prüfen.',
+        warning: retracting
+          ? 'Klemmbacke war zu, aber es wurde kein Bohrrohr entfernt. Die Bohrtiefe ' +
+            'läuft unverändert weiter — bitte die angezeigte Tiefe prüfen.'
+          : 'Klemmbacke war zu, aber es wurde kein neues Bohrrohr erkannt. Die Bohrtiefe ' +
+            'läuft unverändert weiter — bitte die angezeigte Tiefe prüfen.',
         warningSince: now,
       },
       transition: 'rohrwechsel-ende',
@@ -319,34 +304,34 @@ export function applyClampPressure(
 }
 
 /**
- * What to tell the worker about the depth drilled since the last Rohrwechsel,
- * or null when it is what it should be.
+ * What to tell the worker about the depth covered since the last Rohrwechsel,
+ * or null when it is within tolerance. Works for both drilling (bohren) and
+ * retracting (auffuellen) — only the German verb differs.
  */
-function describeDrilled(drilled: number, settings: RohrwechselSettings): string | null {
-  if (Math.abs(drilled - settings.pipeLength) <= settings.tolerance) return null;
+function describeProgress(
+  distance: number,
+  settings: RohrwechselSettings,
+  direction: 'bohren' | 'ziehen',
+): string | null {
+  if (Math.abs(distance - settings.pipeLength) <= settings.tolerance) return null;
 
-  if (drilled < settings.tolerance) {
-    // Includes the negative case: a Schlittenweg read as an absolute depth
-    // runs backwards at every change.
-    // Two changes in a row with nothing drilled in between is what a threshold
-    // sitting inside the clamp's normal pressure range looks like.
+  const verb = direction === 'bohren' ? 'gebohrt' : 'gezogen';
+  const progressWord = direction === 'bohren' ? 'Bohrfortschritt' : 'Ziehfortschritt';
+
+  if (distance < settings.tolerance) {
     return (
-      'Rohrwechsel ohne Bohrfortschritt erkannt. Möglicherweise ist der Schwellwert ' +
+      `Rohrwechsel ohne ${progressWord} erkannt. Möglicherweise ist der Schwellwert ` +
       'der Klemmbacke falsch eingestellt — bitte in den Einstellungen unter ' +
       '„Rohrverlängerung" prüfen.'
     );
   }
 
   const base =
-    `Seit dem letzten Rohrwechsel wurden ${formatMeters(drilled)} m gebohrt, ` +
+    `Seit dem letzten Rohrwechsel wurden ${formatMeters(distance)} m ${verb}, ` +
     `erwartet sind ${formatMeters(settings.pipeLength)} m (Rohrlänge). `;
 
-  // A consistent over- or under-reading of the same factor is a calibration
-  // problem, so turn the complaint into the correction to make. The machine
-  // works in already-calibrated values, so what it can offer is the factor to
-  // multiply the existing one by — which is all the screen needs.
-  if (drilled > 0) {
-    const factor = settings.pipeLength / drilled;
+  if (distance > 0) {
+    const factor = settings.pipeLength / distance;
     return (
       base +
       'Wenn das bei jedem Rohr so ist, stimmt die Kalibrierung der Bohrtiefe nicht — ' +
@@ -370,24 +355,27 @@ export interface DepthResult {
  *
  * In `absolut` that is the reading itself. In `inkrementell` it is the reading
  * plus the accumulated offset, and during a Rohrwechsel it is the frozen hole
- * bottom — the carriage is travelling up the mast and its position is not a
- * depth at all.
+ * depth — the carriage is repositioning and its position is not a depth.
  *
- * Freezing is the one thing that must not happen while `drilling` is false:
- * during Verpressen the string is being pulled *out*, so the depth genuinely
- * changes while the clamp is closed, and holding it at the hole bottom would
- * upload a flat line for the whole grouting phase.
+ * Both drilling and retracting (Auffüllen) freeze during rohrwechsel (clamp
+ * closed — pipe handling). Depth accumulates in one direction only: deeper
+ * while drilling (`max`), shallower while retracting (`min`).
  */
 export function observeDepth(
   state: DrillState,
   raw: number,
   settings: RohrwechselSettings,
-  drilling = true,
+  retracting = false,
 ): DepthResult {
   if (!Number.isFinite(raw)) return { state, depth: state.lastDepth };
 
+  const accumulateDepth = (d: number) =>
+    state.lastDepth === null
+      ? d
+      : retracting ? Math.min(state.holeDepth, d) : Math.max(state.holeDepth, d);
+
   if (settings.depthMode === 'inkrementell') {
-    if (drilling && state.phase === 'rohrwechsel') {
+    if (state.phase === 'rohrwechsel') {
       return { state: { ...state, lastRaw: raw }, depth: state.holeDepth };
     }
     const depth = raw + state.offset;
@@ -396,18 +384,19 @@ export function observeDepth(
         ...state,
         lastRaw: raw,
         lastDepth: depth,
-        holeDepth: Math.max(state.holeDepth, depth),
+        holeDepth: accumulateDepth(depth),
       },
       depth,
     };
   }
 
+  // absolut: the rig holds still during rohrwechsel. Nothing to freeze.
   return {
     state: {
       ...state,
       lastRaw: raw,
       lastDepth: raw,
-      holeDepth: Math.max(state.holeDepth, raw),
+      holeDepth: accumulateDepth(raw),
     },
     depth: raw,
   };

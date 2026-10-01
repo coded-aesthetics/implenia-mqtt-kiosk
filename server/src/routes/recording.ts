@@ -128,7 +128,7 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
   app.put<{ Body: { mode?: string; sessionId?: number } }>('/api/recording/mode', async (request, reply) => {
     const mode = request.body?.mode;
     if (!mode || !isOperatingMode(mode)) {
-      return reply.status(400).send({ error: 'Bitte „bohren" oder „verpressen" angeben.' });
+      return reply.status(400).send({ error: 'Bitte einen gültigen Modus angeben (bohren, austausch, einbauen, auffuellen).' });
     }
     if (ingestion.operatingMode) {
       ingestion.setOperatingMode(mode);

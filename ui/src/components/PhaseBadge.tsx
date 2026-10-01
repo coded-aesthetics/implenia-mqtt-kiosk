@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { OperatingMode } from '../hooks/useWebSocket';
+import { MODE_LABELS } from '../utils/operating-mode';
 
 interface Props {
   mode: OperatingMode;
@@ -7,18 +8,15 @@ interface Props {
 
 const COLORS: Record<OperatingMode, string> = {
   bohren: 'var(--color-accent)',
-  verpressen: '#6a1b9a',
-};
-
-const LABELS: Record<OperatingMode, string> = {
-  bohren: 'Bohren',
-  verpressen: 'Verpressen',
+  austausch: '#6a1b9a',
+  einbauen: '#6a1b9a',
+  auffuellen: '#6a1b9a',
 };
 
 export function PhaseBadge({ mode }: Props) {
   return (
     <span style={{ ...styles.badge, backgroundColor: COLORS[mode] }}>
-      {LABELS[mode]}
+      {MODE_LABELS[mode]}
     </span>
   );
 }
