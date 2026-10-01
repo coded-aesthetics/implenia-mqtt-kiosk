@@ -16,19 +16,18 @@ interface Props {
   labelStep?: number;
   /** SVG width/height in px — the gauge scales to fit (default 240). */
   size?: number;
+  /** Render as a 180° semicircle arc instead of the default 270°. Label is omitted — render it externally. */
+  half?: boolean;
+  /** Hide the label text inside the dial (render it externally instead). */
+  hideLabel?: boolean;
 }
 
 const DEG = Math.PI / 180;
 const START = 225;
 const END = -45;
-const SPAN = START - END;
 
 function px(cx: number, r: number, a: number) { return cx + r * Math.cos(a * DEG); }
 function py(cy: number, r: number, a: number) { return cy - r * Math.sin(a * DEG); }
-
-function valToAngle(v: number, min: number, max: number) {
-  return START - clampFrac(v, min, max) * SPAN;
-}
 
 function arc(cx: number, cy: number, r: number, from: number, to: number) {
   const x1 = px(cx, r, from), y1 = py(cy, r, from);
@@ -37,13 +36,19 @@ function arc(cx: number, cy: number, r: number, from: number, to: number) {
   return `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`;
 }
 
-export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, labelStep: labelStepProp, size = 240 }: Props) {
+export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, labelStep: labelStepProp, size = 240, half, hideLabel }: Props) {
   const labelStep = labelStepProp ?? autoLabelStep(max - min);
 
   const elements = useMemo(() => {
     const cx = 100, cy = 100;
     const rInner = 58, rOuter = 74, rLabels = 86, rRim = rOuter + 3;
-    const valAngle = valToAngle(value, min, max);
+
+    const aStart = half ? 180 : START;
+    const aEnd = half ? 0 : END;
+    const aSpan = aStart - aEnd;
+    const toAngle = (v: number) => aStart - clampFrac(v, min, max) * aSpan;
+
+    const valAngle = toAngle(value);
     const sc = statusColor(value, soll);
     const parts: React.ReactNode[] = [];
     let k = 0;
@@ -51,10 +56,10 @@ export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, la
     for (let i = 0; i <= ticks; i++) {
       const frac = i / ticks;
       const tickVal = min + frac * (max - min);
-      const a = valToAngle(tickVal, min, max);
+      const a = toAngle(tickVal);
       const isMajor = Math.abs(tickVal % labelStep) < 0.001 || Math.abs(tickVal % labelStep - labelStep) < 0.001;
       const ri = isMajor ? rInner - 4 : rInner;
-      const filled = a <= START && a >= valAngle;
+      const filled = a <= aStart && a >= valAngle;
       const tickColor = filled ? sc : 'var(--text-dim)';
       const tickAlpha = filled ? (isMajor ? 0.95 : 0.7) : 0.5;
       const tickW = isMajor ? 2.5 : (filled ? 1.5 : 1.2);
@@ -73,16 +78,16 @@ export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, la
 
       parts.push(
         <path key={k++}
-          d={arc(cx, cy, rRim, valToAngle(o25l, min, max), valToAngle(o25h, min, max))}
+          d={arc(cx, cy, rRim, toAngle(o25l), toAngle(o25h))}
           fill="none" stroke="var(--color-warning)" strokeWidth={3} strokeLinecap="round"
         />,
         <path key={k++}
-          d={arc(cx, cy, rRim, valToAngle(o10l, min, max), valToAngle(o10h, min, max))}
+          d={arc(cx, cy, rRim, toAngle(o10l), toAngle(o10h))}
           fill="none" stroke="var(--color-success)" strokeWidth={3} strokeLinecap="round"
         />,
       );
 
-      const sollA = valToAngle(soll, min, max);
+      const sollA = toAngle(soll);
       const baseR = rRim + 1.5, tipR = rRim - 7, spread = 2.2;
       const tip = `${px(cx, tipR, sollA)},${py(cy, tipR, sollA)}`;
       const b1 = `${px(cx, baseR, sollA + spread)},${py(cy, baseR, sollA + spread)}`;
@@ -94,7 +99,7 @@ export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, la
     for (let v = min; v <= max + 0.001; v += labelStep) labels.push(Math.round(v * 100) / 100);
 
     for (const lv of labels) {
-      const a = valToAngle(lv, min, max);
+      const a = toAngle(lv);
       const lx = px(cx, rLabels, a), ly = py(cy, rLabels, a);
       let rot = -a + 90;
       if (rot < -90) rot += 180;
@@ -109,27 +114,49 @@ export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, la
       );
     }
 
-    parts.push(
-      <text key={k++}
-        x={cx} y={cy - 6} fill="#ffffff"
-        fontSize={32} fontWeight={800} textAnchor="middle" dominantBaseline="auto"
-        style={tabNums}
-      >
-        {formatNumber(value)}
-      </text>,
-      <text key={k++} x={cx} y={cy + 14} fill="var(--text-muted)" fontSize={12} textAnchor="middle">
-        {unit}
-      </text>,
-      <text key={k++} x={cx} y={cy + 28} fill="var(--text-muted)" fontSize={10} textAnchor="middle">
-        {label}
-      </text>,
-    );
+    if (half) {
+      parts.push(
+        <text key={k++}
+          x={cx} y={cy - 18} fill="#ffffff"
+          fontSize={32} fontWeight={800} textAnchor="middle" dominantBaseline="auto"
+          style={tabNums}
+        >
+          {formatNumber(value)}
+        </text>,
+        <text key={k++} x={cx} y={cy - 2} fill="var(--text-muted)" fontSize={12} textAnchor="middle">
+          {unit}
+        </text>,
+      );
+    } else {
+      parts.push(
+        <text key={k++}
+          x={cx} y={cy - 6} fill="#ffffff"
+          fontSize={32} fontWeight={800} textAnchor="middle" dominantBaseline="auto"
+          style={tabNums}
+        >
+          {formatNumber(value)}
+        </text>,
+        <text key={k++} x={cx} y={cy + 14} fill="var(--text-muted)" fontSize={12} textAnchor="middle">
+          {unit}
+        </text>,
+      );
+      if (!hideLabel) {
+        parts.push(
+          <text key={k++} x={cx} y={cy + 28} fill="var(--text-muted)" fontSize={10} textAnchor="middle">
+            {label}
+          </text>,
+        );
+      }
+    }
 
     return parts;
-  }, [value, min, max, soll, label, unit, ticks, labelStep]);
+  }, [value, min, max, soll, label, unit, ticks, labelStep, half, hideLabel]);
+
+  const vbH = half ? 115 : 200;
+  const svgH = half ? Math.round(size * vbH / 200) : size;
 
   return (
-    <svg viewBox="0 0 200 200" width={size} height={size} style={gaugeStyle}>
+    <svg viewBox={`0 0 200 ${vbH}`} width={size} height={svgH} style={gaugeStyle}>
       {elements}
     </svg>
   );

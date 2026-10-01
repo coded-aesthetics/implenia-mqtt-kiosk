@@ -33,7 +33,9 @@ export interface BarSlot {
 export interface BohrenConfig {
   depthSensor: string;
   volumeSensor: string;
-  gauges: GaugeSlot[];
+  leftGauges: GaugeSlot[];
+  centerGauge: GaugeSlot;
+  rightGauges: GaugeSlot[];
   bars: BarSlot[];
 }
 
@@ -132,20 +134,59 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
             </div>
           </div>
 
-          <div style={styles.gaugeRow}>
-            {config.gauges.map((g) => (
-              <div key={g.sensor} style={styles.gaugeCell}>
-                <SensorGauge
-                  value={sensorValues.get(g.sensor) ?? 0}
-                  min={g.min}
-                  max={g.max}
-                  label={g.label}
-                  unit={g.unit}
-                  soll={findSoll(vorgaben, g.vorgabeName ?? g.sensor)}
-                  size={250}
-                />
-              </div>
-            ))}
+          <div style={styles.gaugeLayout}>
+            {/* Left stack: half dials */}
+            <div style={styles.gaugeStack}>
+              {config.leftGauges.map((g) => (
+                <div key={g.sensor} style={styles.gaugeLabelWrap}>
+                  <SensorGauge
+                    value={sensorValues.get(g.sensor) ?? 0}
+                    min={g.min}
+                    max={g.max}
+                    label={g.label}
+                    unit={g.unit}
+                    soll={findSoll(vorgaben, g.vorgabeName ?? g.sensor)}
+                    size={228}
+                    half
+                  />
+                  <span style={styles.gaugeLabelText}>{g.label}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Center: full dial */}
+            <div style={styles.gaugeCenterWrap}>
+              <SensorGauge
+                value={sensorValues.get(config.centerGauge.sensor) ?? 0}
+                min={config.centerGauge.min}
+                max={config.centerGauge.max}
+                label={config.centerGauge.label}
+                unit={config.centerGauge.unit}
+                soll={findSoll(vorgaben, config.centerGauge.vorgabeName ?? config.centerGauge.sensor)}
+                size={250}
+                hideLabel
+              />
+              <span style={styles.centerGaugeLabelText}>{config.centerGauge.label}</span>
+            </div>
+
+            {/* Right stack: half dials */}
+            <div style={styles.gaugeStack}>
+              {config.rightGauges.map((g) => (
+                <div key={g.sensor} style={styles.gaugeLabelWrap}>
+                  <SensorGauge
+                    value={sensorValues.get(g.sensor) ?? 0}
+                    min={g.min}
+                    max={g.max}
+                    label={g.label}
+                    unit={g.unit}
+                    soll={findSoll(vorgaben, g.vorgabeName ?? g.sensor)}
+                    size={228}
+                    half
+                  />
+                  <span style={styles.gaugeLabelText}>{g.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div style={styles.barStack}>
@@ -170,10 +211,14 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
 export const INJEKTIONSBOHREN_BOHREN: BohrenConfig = {
   depthSensor: 'Tiefe',
   volumeSensor: 'Q_Bohren',
-  gauges: [
-    { sensor: 'Druck_innen', label: 'I.Drehm. / Hammer', unit: 'Nm', min: 0, max: 300, vorgabeName: 'IDrehmoment' },
-    { sensor: 'Druck_aussen', label: 'A.Drehm. / Vorschub', unit: 'Nm', min: 0, max: 300, vorgabeName: 'ADrehmoment' },
-    { sensor: 'Drehzahl', label: 'Drehzahl', unit: '1/min', min: 0, max: 100 },
+  leftGauges: [
+    { sensor: 'Druck_Hammer', label: 'Druck Hammer', unit: 'bar', min: 0, max: 300, vorgabeName: 'Druck Hammer' },
+    { sensor: 'Druck_Vorschub', label: 'Vorschubdruck', unit: 'bar', min: 0, max: 300, vorgabeName: 'Vorschubdruck' },
+  ],
+  centerGauge: { sensor: 'Drehzahl', label: 'Drehzahl', unit: '1/min', min: 0, max: 100 },
+  rightGauges: [
+    { sensor: 'Druck_innen', label: 'Drehm. Innen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'IDrehmoment' },
+    { sensor: 'Druck_aussen', label: 'Drehm. Aussen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'ADrehmoment' },
   ],
   bars: [
     { sensor: 'Ziehgeschwindigkeit', label: 'Vorschub', unit: 'cm/min', min: 0, max: 60, vorgabeName: 'Vorschubgeschw.' },
@@ -320,17 +365,46 @@ const styles: Record<string, CSSProperties> = {
     width: 360,
     flexShrink: 0,
   },
-  gaugeRow: {
+  gaugeLayout: {
     display: 'flex',
+    alignItems: 'center',
     justifyContent: 'center',
-    gap: '1rem',
+    gap: '0.5rem',
     flexShrink: 0,
-    paddingBottom: '0.25rem',
   },
-  gaugeCell: {
+  gaugeStack: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
+    gap: '0.25rem',
+  },
+  gaugeCenterWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  gaugeLabelWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+  },
+  gaugeLabelText: {
+    fontSize: '1rem',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.04em',
+    marginTop: '-0.5rem',
+  },
+  centerGaugeLabelText: {
+    fontSize: '1rem',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.04em',
+    marginTop: '-2.5rem',
   },
   rohrStatus: {
     display: 'flex',

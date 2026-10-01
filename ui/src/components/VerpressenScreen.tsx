@@ -50,16 +50,12 @@ export function VerpressenScreen({ readings, vorgaben, config, recordingState }:
   const sensorValues = useSensorValues(readings);
   const { clampConfig, clampValue, isClampOpen } = useClampState(sensorValues);
 
-  const rohrwechsel = recordingState.rohrwechsel;
   const operatingMode = recordingState.operatingMode;
 
   const depth = sensorValues.get(config.depthSensor) ?? 0;
   const volume = sensorValues.get(config.volumeSensor) ?? 0;
-  const [modeError, setModeError] = useState<string | null>(null);
-
   const setMode = useCallback(async (mode: OperatingMode) => {
     if (mode === operatingMode) return;
-    setModeError(null);
     try {
       const res = await fetch('/api/recording/mode', {
         method: 'PUT',
@@ -70,8 +66,8 @@ export function VerpressenScreen({ readings, vorgaben, config, recordingState }:
         const data = await res.json();
         throw new Error(data.error || `Fehler ${res.status}`);
       }
-    } catch (err) {
-      setModeError((err as Error).message);
+    } catch {
+      // Errors will get dedicated guidance UI later
     }
   }, [operatingMode, recordingState.sessionId]);
 
@@ -146,34 +142,10 @@ export function VerpressenScreen({ readings, vorgaben, config, recordingState }:
           ) : (
             <div style={styles.heroLabel}>Klemmbacke nicht konfiguriert</div>
           )}
-          {recordingState.active && operatingMode === 'auffuellen' && rohrwechsel && (
-            <div style={rohrwechsel.phase === 'rohrwechsel' ? styles.rohrStatusActive : styles.rohrStatus}>
-              <span style={styles.rohrNumber}>Rohr {rohrwechsel.pipeCount}</span>
-              {rohrwechsel.phase === 'rohrwechsel' && (
-                <span style={styles.rohrPhase}>Entfernen</span>
-              )}
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Row 2: Sub-step buttons */}
-      {recordingState.active && (
-        <div style={styles.modeRow}>
-          {VERPRESSEN_MODES.map((m) => (
-            <button
-              key={m}
-              style={operatingMode === m ? styles.modeButtonActive : styles.modeButton}
-              onClick={() => setMode(m)}
-            >
-              {MODE_LABELS[m]}
-            </button>
-          ))}
-          {modeError && <span style={styles.modeError}>{modeError}</span>}
-        </div>
-      )}
-
-      {/* Row 3: Speed dials */}
+      {/* Row 2: Speed dials */}
       <div style={styles.gaugeRow}>
         {config.gauges.map((g) => (
           <div key={g.sensor} style={styles.gaugeCell}>
@@ -185,19 +157,36 @@ export function VerpressenScreen({ readings, vorgaben, config, recordingState }:
               unit={g.unit}
               soll={findSoll(vorgaben, g.vorgabeName ?? g.sensor)}
               size={235}
+              hideLabel
             />
+            <span style={styles.gaugeLabelText}>{g.label}</span>
           </div>
         ))}
       </div>
 
-      {/* Row 4: Chart */}
+      {/* Row 3: Mode buttons (side) + Chart */}
       <div style={styles.chartRow}>
-        <SensorChart
-          series={chartSeries}
-          scales={config.chartScales}
-          windowMinutes={CHART_WINDOW_MINUTES}
-          height={200}
-        />
+        {recordingState.active && (
+          <div style={styles.modeSidebar}>
+            {VERPRESSEN_MODES.map((m) => (
+              <button
+                key={m}
+                style={operatingMode === m ? styles.modeButtonActive : styles.modeButton}
+                onClick={() => setMode(m)}
+              >
+                {MODE_LABELS[m]}
+              </button>
+            ))}
+          </div>
+        )}
+        <div style={styles.chartFill}>
+          <SensorChart
+            series={chartSeries}
+            scales={config.chartScales}
+            windowMinutes={CHART_WINDOW_MINUTES}
+            height={200}
+          />
+        </div>
       </div>
     </div>
   );
@@ -209,14 +198,14 @@ export const INJEKTIONSBOHREN_VERPRESSEN: VerpressenConfig = {
   gauges: [
     { sensor: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', min: 0, max: 70, vorgabeName: 'Suspensionsdruck' },
     { sensor: 'Verpresspumpe/Durchfluss', label: 'Durchfluss V', unit: 'l/min', min: 0, max: 300, vorgabeName: 'DurchflussV' },
-    { sensor: 'Druck_innen', label: 'I.Drehmoment', unit: 'Nm', min: 0, max: 300, vorgabeName: 'IDrehmoment' },
-    { sensor: 'Druck_aussen', label: 'A.Drehmoment', unit: 'Nm', min: 0, max: 300, vorgabeName: 'ADrehmoment' },
+    { sensor: 'Druck_innen', label: 'Drehm. Innen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'IDrehmoment' },
+    { sensor: 'Druck_aussen', label: 'Drehm. Aussen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'ADrehmoment' },
   ],
   chartTraces: [
     { sensor: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', color: '#42a5f5', scale: 'bar' },
     { sensor: 'Verpresspumpe/Durchfluss', label: 'Durchfluss V', unit: 'l/min', color: '#66bb6a', scale: 'high' },
-    { sensor: 'Druck_innen', label: 'I.Drehmoment', unit: 'Nm', color: '#ffa726', scale: 'high' },
-    { sensor: 'Druck_aussen', label: 'A.Drehmoment', unit: 'Nm', color: '#ef5350', scale: 'high' },
+    { sensor: 'Druck_innen', label: 'Drehm. Innen', unit: 'Nm', color: '#ffa726', scale: 'high' },
+    { sensor: 'Druck_aussen', label: 'Drehm. Aussen', unit: 'Nm', color: '#ef5350', scale: 'high' },
   ],
   chartScales: [
     { key: 'bar', min: 0, max: 80, side: 1 },
@@ -256,34 +245,6 @@ const styles: Record<string, CSSProperties> = {
     gap: '1rem',
     padding: '0.25rem 0',
   },
-  rohrStatus: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    flexShrink: 0,
-    minWidth: '6rem',
-    color: 'var(--text-muted)',
-  },
-  rohrStatusActive: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    flexShrink: 0,
-    minWidth: '6rem',
-    padding: '0.4rem 0.75rem',
-    borderRadius: '8px',
-    backgroundColor: 'rgba(230, 81, 0, 0.15)',
-    color: '#ffb74d',
-  },
-  rohrNumber: {
-    fontSize: '1.4rem',
-    fontWeight: 800,
-    lineHeight: 1.2,
-  },
-  rohrPhase: {
-    fontSize: '1rem',
-    fontWeight: 600,
-  },
   heroLabel: {
     fontSize: 'var(--font-base)',
     fontWeight: 600,
@@ -309,16 +270,16 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--text-muted)',
     fontWeight: 600,
   },
-  modeRow: {
+  modeSidebar: {
     display: 'flex',
+    flexDirection: 'column',
     gap: '0.5rem',
     justifyContent: 'center',
     flexShrink: 0,
   },
   modeButton: {
-    flex: 1,
-    maxWidth: '14rem',
-    minHeight: '4rem',
+    minWidth: '8rem',
+    minHeight: '3.5rem',
     border: '2px solid var(--surface-3)',
     borderRadius: 'var(--radius)',
     background: 'var(--surface-2)',
@@ -330,9 +291,8 @@ const styles: Record<string, CSSProperties> = {
     letterSpacing: '0.04em',
   },
   modeButtonActive: {
-    flex: 1,
-    maxWidth: '14rem',
-    minHeight: '4rem',
+    minWidth: '8rem',
+    minHeight: '3.5rem',
     border: '2px solid #6a1b9a',
     borderRadius: 'var(--radius)',
     background: 'rgba(106, 27, 154, 0.25)',
@@ -342,13 +302,6 @@ const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
-  },
-  modeError: {
-    fontSize: '1rem',
-    color: '#f44336',
-    fontWeight: 600,
-    width: '100%',
-    textAlign: 'center',
   },
   gaugeRow: {
     display: 'flex',
@@ -361,9 +314,24 @@ const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'center',
   },
+  gaugeLabelText: {
+    fontSize: '1rem',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.04em',
+    marginTop: '-2.5rem',
+  },
   chartRow: {
     flex: 1,
     minHeight: 0,
+    display: 'flex',
+    gap: '0.75rem',
+    alignItems: 'stretch',
+  },
+  chartFill: {
+    flex: 1,
+    minWidth: 0,
     display: 'flex',
     alignItems: 'stretch',
   },

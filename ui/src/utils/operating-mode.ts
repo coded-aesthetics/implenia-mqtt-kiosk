@@ -14,5 +14,5 @@ export function isVerpressenMode(mode: OperatingMode | null | undefined): boolea
 }
 
 export function hasPipeHandling(mode: OperatingMode): boolean {
-  return mode === 'bohren' || mode === 'auffuellen';
+  return mode === 'bohren' || mode === 'austausch' || mode === 'einbauen' || mode === 'auffuellen';
 }
