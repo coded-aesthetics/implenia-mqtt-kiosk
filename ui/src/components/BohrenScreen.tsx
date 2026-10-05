@@ -229,23 +229,23 @@ export const INJEKTIONSBOHREN_BOHREN: BohrenConfig = {
 
 const geoStyles = {
   depthTick: {
-    color: '#ffffff',
+    color: 'var(--text-primary)',
     fontSize: 14,
     fontWeight: 600,
   } as CSSProperties,
   depthLine: {
-    borderTopColor: '#ffffff',
+    borderTopColor: 'var(--text-primary)',
   } as CSSProperties,
   label: {
     fontSize: 14,
     fontWeight: 700,
   } as CSSProperties,
   depthIndicatorLine: {
-    borderTopColor: '#ff4444',
+    borderTopColor: 'var(--color-danger)',
     borderTopWidth: 2,
   } as CSSProperties,
   depthIndicatorLabel: {
-    color: '#ff4444',
+    color: 'var(--color-danger)',
     fontSize: 14,
     fontWeight: 700,
   } as CSSProperties,
@@ -290,11 +290,11 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 800,
     lineHeight: 1,
     fontVariantNumeric: 'tabular-nums',
-    color: '#ffffff',
+    color: 'var(--text-primary)',
   },
   depthUnit: {
     fontSize: '1.4rem',
-    color: '#8899aa',
+    color: 'var(--text-muted)',
     fontWeight: 600,
   },
   geoContainer: {
@@ -422,8 +422,8 @@ const styles: Record<string, CSSProperties> = {
     minWidth: '6rem',
     padding: '0.4rem 0.75rem',
     borderRadius: '8px',
-    backgroundColor: 'rgba(230, 81, 0, 0.15)',
-    color: '#ffb74d',
+    backgroundColor: 'var(--color-warning-tint)',
+    color: 'var(--color-warning-text)',
   },
   rohrNumber: {
     fontSize: '1.4rem',

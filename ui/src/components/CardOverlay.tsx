@@ -32,7 +32,7 @@ export function CardOverlay({ overlay, onDismiss }: { overlay: OverlayState; onD
     <div
       style={{
         ...overlayStyles.backdrop,
-        backgroundColor: isError ? 'rgba(183, 28, 28, 0.95)' : 'rgba(27, 94, 32, 0.95)',
+        backgroundColor: isError ? 'var(--color-danger-overlay)' : 'var(--color-success-overlay)',
       }}
       onClick={(e) => { e.stopPropagation(); onDismiss(); }}
     >

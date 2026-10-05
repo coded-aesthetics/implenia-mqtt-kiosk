@@ -24,10 +24,10 @@ export const COMMENT_STATUS: Record<
   { label: string; color: string }
 > = {
   transcribing: { label: 'Transkribiert...', color: '#e65100' }, // --color-warning
-  ready: { label: 'Bereit', color: '#1976d2' },                  // --color-accent
-  sending: { label: 'Sendet...', color: '#1976d2' },             // --color-accent
-  sent: { label: 'Gesendet', color: '#4caf50' },                 // --color-success
-  error: { label: 'Fehler', color: '#f44336' },                  // --color-danger
+  ready: { label: 'Bereit', color: '#1565c0' },                  // --color-accent
+  sending: { label: 'Sendet...', color: '#1565c0' },             // --color-accent
+  sent: { label: 'Gesendet', color: '#2e7d32' },                 // --color-success
+  error: { label: 'Fehler', color: '#d32f2f' },                  // --color-danger
 };
 
 /**
@@ -207,7 +207,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--color-danger)',
     marginBottom: 'var(--space-sm)',
     padding: 'var(--space-sm) var(--space-md)',
-    backgroundColor: '#f4433611',
+    backgroundColor: 'var(--color-danger-tint)',
     borderRadius: 'var(--radius-sm)',
   },
   textarea: {
@@ -243,11 +243,11 @@ const styles: Record<string, React.CSSProperties> = {
   },
   editButton: {
     backgroundColor: 'var(--color-accent)',
-    color: 'var(--text-primary)',
+    color: '#fff',
   },
   saveButton: {
     backgroundColor: 'var(--color-success)',
-    color: 'var(--text-primary)',
+    color: '#fff',
   },
   cancelButton: {
     backgroundColor: 'var(--surface-4)',
@@ -255,10 +255,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   retryButton: {
     backgroundColor: 'var(--color-warning)',
-    color: 'var(--text-primary)',
+    color: '#fff',
   },
   deleteButton: {
     backgroundColor: 'var(--color-danger)',
-    color: 'var(--text-primary)',
+    color: '#fff',
   },
 };

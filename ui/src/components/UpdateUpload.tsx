@@ -63,7 +63,7 @@ export function UpdateUpload() {
       {message && (
         <div style={{
           ...styles.message,
-          color: message.error ? '#f44336' : '#4caf50',
+          color: message.error ? 'var(--color-danger)' : 'var(--color-success)',
         }}>
           {message.text}
         </div>
@@ -105,7 +105,7 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: 'var(--tap-min)',
     minWidth: 'var(--tap-min)',
     backgroundColor: 'var(--color-accent)',
-    color: 'var(--text-primary)',
+    color: '#fff',
     width: '100%',
   },
   message: {

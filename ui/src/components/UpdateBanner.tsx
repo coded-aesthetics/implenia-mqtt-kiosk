@@ -17,7 +17,7 @@ export function UpdateBanner({ version, source, applying, recordingActive }: Pro
 
   if (applying) {
     return (
-      <div style={{ ...styles.banner, backgroundColor: '#1565c0' }}>
+      <div style={{ ...styles.banner, backgroundColor: 'var(--color-accent)' }}>
         <span style={styles.text}>
           Update wird installiert... Die App startet gleich neu.
         </span>
@@ -70,8 +70,8 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: '1rem',
     padding: '0.75rem 1.5rem',
-    backgroundColor: '#e65100',
-    color: '#ffffff',
+    backgroundColor: 'var(--color-warning)',
+    color: '#fff',
     flexWrap: 'wrap',
   },
   text: {
@@ -82,8 +82,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '0.5rem 1.5rem',
     fontSize: '1rem',
     fontWeight: 600,
-    backgroundColor: '#ffffff',
-    color: '#e65100',
+    backgroundColor: '#fff',
+    color: 'var(--color-warning)',
     border: 'none',
     borderRadius: '6px',
     cursor: 'pointer',

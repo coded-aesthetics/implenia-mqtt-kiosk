@@ -179,8 +179,9 @@ export function VerbindungConfig({ config, devMode = false }: Props) {
             <span style={styles.label}>API-Schlüssel</span>
             <span style={{
               ...styles.statusBadge,
-              backgroundColor: validation.status === 'error' ? '#b71c1c'
-                : config.hasApiKey ? '#1b5e20' : '#b71c1c',
+              backgroundColor: validation.status === 'error' ? 'var(--color-danger)'
+                : config.hasApiKey ? 'var(--color-success)' : 'var(--color-danger)',
+              color: '#fff',
             }}>
               {validation.status === 'checking' ? 'Wird geprüft...'
                 : validation.status === 'error' ? validation.message
@@ -241,7 +242,8 @@ export function VerbindungConfig({ config, devMode = false }: Props) {
             <span style={styles.label}>Server-Adresse</span>
             <span style={{
               ...styles.statusBadge,
-              backgroundColor: config.apiUrl ? '#1b5e20' : '#b71c1c',
+              backgroundColor: config.apiUrl ? 'var(--color-success)' : 'var(--color-danger)',
+              color: '#fff',
             }}>
               {config.apiUrl
                 ? (() => {

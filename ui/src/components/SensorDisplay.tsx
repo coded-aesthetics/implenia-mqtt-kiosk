@@ -41,10 +41,10 @@ function SensorTile({ reading }: { reading: SensorReading }) {
       prevTs.current = reading.receivedAt;
       const el = tileRef.current;
       if (el) {
-        el.style.backgroundColor = '#2a2a4a';
+        el.style.backgroundColor = 'var(--border)';
         requestAnimationFrame(() => {
           el.style.transition = 'background-color 0.6s ease';
-          el.style.backgroundColor = '#16213e';
+          el.style.backgroundColor = 'var(--surface-2)';
         });
       }
     }
@@ -91,7 +91,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '1rem',
   },
   tile: {
-    backgroundColor: '#16213e',
+    backgroundColor: 'var(--surface-2)',
     borderRadius: '12px',
     padding: '1.5rem',
     minHeight: '140px',
@@ -106,7 +106,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   label: {
     fontSize: '0.9rem',
-    color: '#8899aa',
+    color: 'var(--text-muted)',
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
     marginBottom: '0.5rem',
@@ -114,18 +114,18 @@ const styles: Record<string, React.CSSProperties> = {
   value: {
     fontSize: '2.5rem',
     fontWeight: 700,
-    color: '#ffffff',
+    color: 'var(--text-primary)',
     lineHeight: 1.2,
   },
   unit: {
     fontSize: '1.2rem',
     fontWeight: 400,
-    color: '#8899aa',
+    color: 'var(--text-muted)',
     marginLeft: '0.3rem',
   },
   timestamp: {
     fontSize: '0.75rem',
-    color: '#556677',
+    color: 'var(--text-dim)',
     marginTop: '0.5rem',
   },
   empty: {
@@ -134,6 +134,6 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     height: '50vh',
     fontSize: '1.2rem',
-    color: '#556677',
+    color: 'var(--text-dim)',
   },
 };

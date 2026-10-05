@@ -163,7 +163,8 @@ export function DeviceConfig({ devMode, deviceFrames, pendingDeleteId, onPending
           <span style={styles.label}>Geräte &amp; Sensorzuordnung</span>
           <span style={{
             ...styles.statusBadge,
-            backgroundColor: devices.length > 0 ? '#1b5e20' : '#b71c1c',
+            backgroundColor: devices.length > 0 ? 'var(--color-success)' : 'var(--color-danger)',
+            color: '#fff',
           }}>
             {devices.length > 0 ? `${devices.length} Gerät${devices.length > 1 ? 'e' : ''}` : 'Keine Geräte'}
           </span>
@@ -180,12 +181,12 @@ export function DeviceConfig({ devMode, deviceFrames, pendingDeleteId, onPending
                 <div style={styles.deviceHeader}>
                   <span style={{
                     ...styles.connectionDot,
-                    backgroundColor: device.connected ? '#4caf50' : '#f44336',
+                    backgroundColor: device.connected ? 'var(--color-success)' : 'var(--color-danger)',
                   }} />
                   <span style={styles.deviceLabel}>{device.label}</span>
                   <span style={{
                     ...styles.typeBadge,
-                    backgroundColor: device.type === 'simulator' ? '#6a1b9a' : 'var(--color-accent)',
+                    backgroundColor: device.type === 'simulator' ? 'var(--color-phase-alt)' : 'var(--color-accent)',
                   }}>
                     {device.type === 'simulator' ? 'SIM' : 'ELWS'}
                   </span>
@@ -312,7 +313,7 @@ export function DeviceConfig({ devMode, deviceFrames, pendingDeleteId, onPending
         {message && (
           <div style={{
             ...styles.message,
-            color: message.error ? '#f44336' : '#4caf50',
+            color: message.error ? 'var(--color-danger)' : 'var(--color-success)',
           }}>
             {message.text}
           </div>
@@ -390,7 +391,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   typeBadge: {
     fontSize: 'var(--font-sm)',
-    color: 'var(--text-primary)',
+    color: '#fff',
     padding: '2px 8px',
     borderRadius: '4px',
     fontWeight: 700,
@@ -480,7 +481,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 'var(--font-sm)',
     fontWeight: 600,
     backgroundColor: 'var(--color-accent)',
-    color: 'var(--text-primary)',
+    color: '#fff',
     border: 'none',
     cursor: 'pointer',
     minHeight: 'var(--tap-sm)',
@@ -502,7 +503,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   saveButton: {
     backgroundColor: 'var(--color-accent)',
-    color: 'var(--text-primary)',
+    color: '#fff',
     flex: 1,
   },
   cancelButton: {
@@ -529,7 +530,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   mappingButton: {
     backgroundColor: 'var(--color-accent)',
-    color: 'var(--text-primary)',
+    color: '#fff',
     flex: 1,
   },
   message: {
