@@ -285,41 +285,44 @@ export async function uploadSession(
 
     const allIds = group.readings.map((r) => r.id);
 
-    // Split readings into uploadable (has a value) and empty (null from NaN/empty MQTT payloads)
     const isStringSensor = group.sensorType === 'string';
-    const emptyIds: number[] = [];
 
     // Deduplicate by timestamp — at high ingest rates (replay 60x, fast MQTT)
     // multiple readings can share the same millisecond. The backend's ON CONFLICT
     // rejects batches with duplicate dates, so we keep the last value per timestamp.
-    const byDate = new Map<string, number | string>();
+    const byDate = new Map<string, number | string | null>();
     for (const r of group.readings) {
       const raw = r.valueNumeric ?? r.valueText ?? null;
-      if (raw === null) {
-        emptyIds.push(r.id);
+      byDate.set(
+        new Date(r.receivedAt).toISOString(),
+        raw === null ? null : isStringSensor ? String(raw) : raw,
+      );
+    }
+
+    // Null readings mark sensor outages — keep the first and last of each
+    // consecutive null run so the gap boundaries are visible in the backend,
+    // but don't send every null at full ingest rate.
+    const deduped = Array.from(byDate, ([date, value]) => ({ date, value }));
+    const uploadable: { date: string; value: number | string | null }[] = [];
+    for (let i = 0; i < deduped.length; i++) {
+      const r = deduped[i];
+      if (r.value !== null) {
+        uploadable.push(r);
       } else {
-        byDate.set(
-          new Date(r.receivedAt).toISOString(),
-          isStringSensor ? String(raw) : raw,
-        );
+        const prevNull = i > 0 && deduped[i - 1].value === null;
+        const nextNull = i < deduped.length - 1 && deduped[i + 1].value === null;
+        // Keep first null (prev is non-null or start) and last null (next is non-null or end)
+        if (!prevNull || !nextNull) {
+          uploadable.push(r);
+        }
       }
     }
-    const uploadable = Array.from(byDate, ([date, value]) => ({ date, value }));
 
-    // Mark empty readings as uploaded — there is nothing to send
-    if (emptyIds.length > 0) {
-      markSessionReadingsUploaded(emptyIds);
-    }
-
-    // Skip API call if no readings carry a value
     if (uploadable.length === 0) {
       sensorsCompleted++;
-      log.info('Sensor %s (%s): skipped %d empty readings', sensorName(group.sensorId), group.sensorType, emptyIds.length);
+      markSessionReadingsUploaded(allIds);
       continue;
     }
-
-    const emptySet = new Set(emptyIds);
-    const valueIds = allIds.filter((id) => !emptySet.has(id));
     try {
       // Upload in chunks — the backend rejects payloads above its body-size limit
       const CHUNK_SIZE = 5000;
@@ -330,10 +333,10 @@ export async function uploadSession(
           { method: 'POST', body: { readings: chunk } },
         );
       }
-      markSessionReadingsUploaded(valueIds);
+      markSessionReadingsUploaded(allIds);
       sensorsCompleted++;
     } catch (err) {
-      markSessionReadingsFailed(valueIds);
+      markSessionReadingsFailed(allIds);
       sensorsFailed++;
       log.error(
         'Upload failed for sensor %s (%s, %d readings): %s',
