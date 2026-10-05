@@ -338,8 +338,26 @@ export class DataIngestion extends EventEmitter {
       depthAtLastChange: null,
     };
     setOperatingModeRow(session.id, mode);
+    this.recordStatusReading(session);
     log.info('Operating mode for session %d is now %s', session.id, mode);
     this.emit('operating-mode', mode);
+  }
+
+  /**
+   * Record the current operating mode as a `Status` sensor reading.
+   *
+   * The Injektionsbohren protocol in implenia-web segments all KPIs by
+   * phase using Status == 0 (bohren) / Status == 1 (verpressen). Without
+   * these readings the protocol has no phase data and returns hasData: false.
+   */
+  private recordStatusReading(session: ActiveSession): void {
+    const mapping = session.sensorMap.get('status');
+    if (!mapping) return;
+    const statusValue = session.operatingMode === 'bohren' ? 0 : 1;
+    insertSessionReading(
+      session.id, 'kiosk/status', mapping.sensorId, mapping.sensorType,
+      statusValue, null,
+    );
   }
 
   /** Rohrverlängerung state of the running session, or null when idle. */
@@ -391,6 +409,7 @@ export class DataIngestion extends EventEmitter {
       volumeTracker: new VolumeTracker(getVolumeMappings()),
     };
     this.pendingMode = null;
+    this.recordStatusReading(this.activeSession);
   }
 
   stopRecording(): void {

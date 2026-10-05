@@ -83,7 +83,7 @@ const SENSOR_TYPE_MAP: Record<string, string> = {
 export async function beginRecording(elementName: string): Promise<{ sessionId: number }> {
   const existing = getActiveSession();
   if (existing) {
-    throw new Error(`Already recording session ${existing.id} for "${existing.element_name}"`);
+    throw new Error(`Aufzeichnung ${existing.id} für „${existing.element_name}" läuft bereits.`);
   }
 
   // Fetch herstellen sensors (all element sensors minus vorgaben sensors)
@@ -213,7 +213,7 @@ export function resumeRecording(): { sessionId: number } | null {
 export function endRecording(): { sessionId: number } {
   const session = getActiveSession();
   if (!session) {
-    throw new Error('No active recording session');
+    throw new Error('Keine aktive Aufzeichnung.');
   }
 
   ingestion.stopRecording();
@@ -250,7 +250,7 @@ export async function uploadSession(
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<{ status: Session['status'] }> {
   const session = getSessionById(sessionId);
-  if (!session) throw new Error(`Session ${sessionId} not found`);
+  if (!session) throw new Error(`Aufzeichnung ${sessionId} nicht gefunden.`);
 
   // Reset any previously failed readings so they get retried
   resetFailedReadings(sessionId);
