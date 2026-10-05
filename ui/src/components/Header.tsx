@@ -30,7 +30,7 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
   }, []);
 
   const isOnline = connectivity === 'online';
-  const connColor = isOnline ? '#4caf50' : connectivity === 'offline' ? '#f44336' : '#9e9e9e';
+  const connColor = isOnline ? 'var(--color-success)' : connectivity === 'offline' ? 'var(--color-danger)' : 'var(--color-neutral)';
   const connLabel = connectivity === 'unknown' ? 'Verbinde...' : isOnline ? 'Verbunden' : 'Offline';
 
   return (
@@ -137,8 +137,8 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: '0.5rem 1.5rem',
-    backgroundColor: '#0f0f23',
-    borderBottom: '1px solid #2a2a4a',
+    backgroundColor: 'var(--surface-0)',
+    borderBottom: '1px solid var(--border)',
     minHeight: '64px',
   },
   leftSection: {
@@ -154,8 +154,10 @@ const styles: Record<string, React.CSSProperties> = {
     height: '48px',
     fontSize: '1.5rem',
     fontWeight: 700,
-    color: '#ffffff',
-    backgroundColor: '#16213e',
+    lineHeight: 1,
+    padding: 0,
+    color: 'var(--text-primary)',
+    backgroundColor: 'var(--surface-2)',
     border: 'none',
     borderRadius: '8px',
     cursor: 'pointer',
@@ -170,7 +172,7 @@ const styles: Record<string, React.CSSProperties> = {
   logo: {
     height: '80px',
     objectFit: 'contain' as const,
-    mixBlendMode: 'lighten' as const,
+    borderRadius: '8px',
   },
   centerSection: {
     flex: 1,
@@ -182,7 +184,7 @@ const styles: Record<string, React.CSSProperties> = {
   pageTitle: {
     fontSize: '2.0rem',
     fontWeight: 600,
-    color: '#eee',
+    color: 'var(--text-primary)',
     letterSpacing: '0.02em',
   },
   rightSection: {
@@ -200,16 +202,16 @@ const styles: Record<string, React.CSSProperties> = {
   },
   statusText: {
     fontSize: '0.95rem',
-    color: '#aaaaaa',
+    color: 'var(--text-muted)',
   },
   divider: {
     width: '1px',
     height: '20px',
-    backgroundColor: '#2a2a4a',
+    backgroundColor: 'var(--border)',
   },
   versionText: {
     fontSize: '0.9rem',
-    color: '#aaaadd',
+    color: 'var(--text-muted)',
   },
   settingsButton: {
     position: 'relative' as const,
@@ -219,15 +221,15 @@ const styles: Record<string, React.CSSProperties> = {
     width: '48px',
     height: '48px',
     borderRadius: '8px',
-    color: '#8899aa',
+    color: 'var(--text-muted)',
     textDecoration: 'none',
     cursor: 'pointer',
     border: 'none',
     background: 'transparent',
   },
   settingsActive: {
-    backgroundColor: '#1a1a3e',
-    color: '#ffffff',
+    backgroundColor: 'var(--surface-3)',
+    color: 'var(--text-primary)',
   },
   micButton: {
     display: 'flex',
@@ -236,8 +238,8 @@ const styles: Record<string, React.CSSProperties> = {
     width: '48px',
     height: '48px',
     borderRadius: '50%',
-    color: '#8899aa',
-    backgroundColor: '#16213e',
+    color: 'var(--text-muted)',
+    backgroundColor: 'var(--surface-2)',
     border: '2px solid transparent',
     cursor: 'pointer',
     flexShrink: 0,
@@ -245,21 +247,21 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: 'inherit',
   },
   micListening: {
-    color: '#f44336',
-    borderColor: '#f44336',
-    backgroundColor: '#2a1520',
+    color: 'var(--color-danger)',
+    borderColor: 'var(--color-danger)',
+    backgroundColor: 'var(--surface-0)',
     animation: 'pulse 1.5s ease-in-out infinite',
   },
   micPassive: {
-    color: '#4a90d9',
-    borderColor: '#4a90d9',
-    backgroundColor: '#162040',
+    color: 'var(--color-accent)',
+    borderColor: 'var(--color-accent)',
+    backgroundColor: 'var(--surface-0)',
     animation: 'pulse 3s ease-in-out infinite',
   },
   micDictating: {
-    color: '#e6a700',
-    borderColor: '#e6a700',
-    backgroundColor: '#2a2010',
+    color: 'var(--color-caution)',
+    borderColor: 'var(--color-caution)',
+    backgroundColor: 'var(--surface-0)',
     animation: 'pulse 1.5s ease-in-out infinite',
   },
   commentQueueButton: {
@@ -270,15 +272,15 @@ const styles: Record<string, React.CSSProperties> = {
     width: '48px',
     height: '48px',
     borderRadius: '8px',
-    color: '#e6a700',
+    color: 'var(--color-caution)',
     backgroundColor: 'transparent',
     border: 'none',
     cursor: 'pointer',
     flexShrink: 0,
   },
   commentQueueActive: {
-    backgroundColor: '#1a1a3e',
-    color: '#ffffff',
+    backgroundColor: 'var(--surface-3)',
+    color: 'var(--text-primary)',
   },
   queueBadge: {
     position: 'absolute' as const,
@@ -287,8 +289,8 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: '18px',
     height: '18px',
     borderRadius: '9px',
-    backgroundColor: '#e6a700',
-    color: '#000000',
+    backgroundColor: 'var(--color-caution)',
+    color: 'var(--text-primary)',
     fontSize: '11px',
     fontWeight: 700,
     display: 'flex',
@@ -304,8 +306,8 @@ const styles: Record<string, React.CSSProperties> = {
     width: '18px',
     height: '18px',
     borderRadius: '50%',
-    backgroundColor: '#f44336',
-    color: '#ffffff',
+    backgroundColor: 'var(--color-danger)',
+    color: '#fff',
     fontSize: '12px',
     fontWeight: 700,
     display: 'flex',

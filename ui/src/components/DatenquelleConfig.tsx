@@ -36,7 +36,7 @@ export function DatenquelleConfig({ devMode, deviceFrames }: Props) {
           <div style={styles.statusRow}>
             <span style={styles.label}>Datenquelle</span>
             {!transportConfigured && (
-              <span style={{ ...styles.statusBadge, backgroundColor: '#e65100' }}>
+              <span style={{ ...styles.statusBadge, backgroundColor: 'var(--color-warning)', color: '#fff' }}>
                 Nicht gewählt
               </span>
             )}

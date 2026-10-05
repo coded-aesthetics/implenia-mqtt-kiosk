@@ -198,7 +198,7 @@ const styles: Record<string, React.CSSProperties> = {
   primaryButton: {
     minHeight: 'var(--tap-min)', padding: '0 var(--space-xl)',
     fontSize: 'var(--font-md)', fontWeight: 700, fontFamily: 'inherit',
-    color: 'var(--text-primary)', backgroundColor: 'var(--color-accent)',
+    color: '#fff', backgroundColor: 'var(--color-accent)',
     border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer',
   },
   secondaryButton: {

@@ -8,9 +8,9 @@ interface Props {
 
 const COLORS: Record<OperatingMode, string> = {
   bohren: 'var(--color-accent)',
-  austausch: '#6a1b9a',
-  einbauen: '#6a1b9a',
-  auffuellen: '#6a1b9a',
+  austausch: 'var(--color-phase-alt)',
+  einbauen: 'var(--color-phase-alt)',
+  auffuellen: 'var(--color-phase-alt)',
 };
 
 export function PhaseBadge({ mode }: Props) {
@@ -30,7 +30,7 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
-    color: '#ffffff',
+    color: '#fff',
     lineHeight: 1.4,
   },
 };

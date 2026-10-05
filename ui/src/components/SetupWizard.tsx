@@ -599,7 +599,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 'var(--font-md)',
     fontWeight: 700,
     fontFamily: 'inherit',
-    color: 'var(--text-primary)',
+    color: '#fff',
     backgroundColor: 'var(--color-accent)',
     border: 'none',
     borderRadius: 'var(--radius-md)',

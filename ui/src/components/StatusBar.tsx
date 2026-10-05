@@ -15,7 +15,7 @@ export function StatusBar({ connectivity, updateAvailable }: Props) {
       .catch(() => {});
   }, []);
   const isOnline = connectivity === 'online';
-  const connColor = isOnline ? '#4caf50' : connectivity === 'offline' ? '#f44336' : '#9e9e9e';
+  const connColor = isOnline ? 'var(--color-success)' : connectivity === 'offline' ? 'var(--color-danger)' : 'var(--color-neutral)';
   const connLabel = connectivity === 'unknown' ? 'Verbinde...' : isOnline ? 'Verbunden' : 'Offline';
 
   return (
@@ -41,8 +41,8 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: '0.75rem 1.5rem',
-    backgroundColor: '#0f0f23',
-    borderBottom: '1px solid #2a2a4a',
+    backgroundColor: 'var(--surface-0)',
+    borderBottom: '1px solid var(--border)',
     flexWrap: 'wrap',
     gap: '0.5rem',
     minHeight: '48px',
@@ -63,16 +63,16 @@ const styles: Record<string, React.CSSProperties> = {
   },
   text: {
     fontSize: '0.9rem',
-    color: '#cccccc',
+    color: 'var(--text-secondary)',
   },
   versionText: {
     fontSize: '0.8rem',
-    color: '#aaaaee',
+    color: 'var(--text-muted)',
   },
   badge: {
     fontSize: '0.75rem',
-    color: '#ffffff',
-    backgroundColor: '#e65100',
+    color: '#fff',
+    backgroundColor: 'var(--color-warning)',
     padding: '2px 8px',
     borderRadius: '10px',
     fontWeight: 600,

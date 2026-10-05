@@ -293,10 +293,10 @@ const styles: Record<string, CSSProperties> = {
   modeButtonActive: {
     minWidth: '8rem',
     minHeight: '3.5rem',
-    border: '2px solid #6a1b9a',
+    border: '2px solid var(--color-phase-alt)',
     borderRadius: 'var(--radius)',
-    background: 'rgba(106, 27, 154, 0.25)',
-    color: '#ce93d8',
+    background: 'var(--color-phase-alt-bg)',
+    color: 'var(--color-phase-alt-text)',
     fontSize: 'var(--font-base)',
     fontWeight: 700,
     cursor: 'pointer',

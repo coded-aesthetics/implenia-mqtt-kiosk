@@ -312,7 +312,7 @@ const styles: Record<string, React.CSSProperties> = {
   presetButtonActive: {
     flex: 1, minHeight: 'var(--tap-min)', padding: 'var(--space-md)',
     fontSize: 'var(--font-base)', fontWeight: 700, fontFamily: 'inherit',
-    backgroundColor: 'var(--color-accent)', color: 'var(--text-primary)',
+    backgroundColor: 'var(--color-accent)', color: '#fff',
     border: 'none', cursor: 'pointer',
   },
   live: {
@@ -322,13 +322,13 @@ const styles: Record<string, React.CSSProperties> = {
   },
   liveMissing: {
     padding: 'var(--space-md)', fontSize: 'var(--font-base)', lineHeight: 1.4,
-    color: 'var(--text-primary)', backgroundColor: 'var(--color-warning)',
+    color: '#fff', backgroundColor: 'var(--color-warning)',
     borderRadius: 'var(--radius-sm)',
   },
   primaryButton: {
     minHeight: 'var(--tap-min)', padding: '0 var(--space-xl)',
     fontSize: 'var(--font-md)', fontWeight: 700, fontFamily: 'inherit',
-    color: 'var(--text-primary)', backgroundColor: 'var(--color-accent)',
+    color: '#fff', backgroundColor: 'var(--color-accent)',
     border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer',
   },
   success: {

@@ -48,7 +48,7 @@ export function VoiceCard() {
         onClick={toggleVoice}
         style={{
           ...styles.toggleButton,
-          backgroundColor: voiceEnabled ? '#1b5e20' : '#2a2a4a',
+          backgroundColor: voiceEnabled ? 'var(--color-success-muted)' : 'var(--border)',
         }}
       >
         <span style={{
@@ -65,7 +65,7 @@ export function VoiceCard() {
 
       {/* Wake word sub-setting (only shown when voice is enabled) */}
       {voiceEnabled && (
-        <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #2a3f5f' }}>
+        <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
           <div style={styles.statusRow}>
             <span style={{ ...styles.label, fontSize: '1rem' }}>Aktivwort-Modus</span>
           </div>
@@ -73,7 +73,7 @@ export function VoiceCard() {
             onClick={toggleMagicWord}
             style={{
               ...styles.toggleButton,
-              backgroundColor: magicWord ? '#1b5e20' : '#2a2a4a',
+              backgroundColor: magicWord ? 'var(--color-success-muted)' : 'var(--border)',
             }}
           >
             <span style={{

@@ -299,12 +299,12 @@ export function ChannelPicker({ devices, deviceFrames, mappings, onClose, onMapp
               <div style={styles.deviceSectionHeader}>
                 <span style={{
                   ...styles.connectionDot,
-                  backgroundColor: device.connected ? '#4caf50' : '#f44336',
+                  backgroundColor: device.connected ? 'var(--color-success)' : 'var(--color-danger)',
                 }} />
                 <span style={styles.deviceSectionLabel}>{device.label}</span>
                 <span style={{
                   ...styles.typeBadgeSmall,
-                  backgroundColor: device.type === 'simulator' ? '#6a1b9a' : 'var(--color-accent)',
+                  backgroundColor: device.type === 'simulator' ? 'var(--color-phase-alt)' : 'var(--color-accent)',
                 }}>
                   {device.type === 'simulator' ? 'SIM' : 'ELWS'}
                 </span>
@@ -528,7 +528,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   typeBadgeSmall: {
     fontSize: 'var(--font-sm)',
-    color: 'var(--text-primary)',
+    color: '#fff',
     padding: '2px 8px',
     borderRadius: '4px',
     fontWeight: 700,

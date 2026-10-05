@@ -100,7 +100,7 @@ export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: P
     return (
       <div style={styles.center}>
         <div style={styles.notice}>
-          <div style={{ ...styles.noticeIcon, backgroundColor: '#e65100' }}>⚠</div>
+          <div style={{ ...styles.noticeIcon, backgroundColor: 'var(--color-warning)' }}>⚠</div>
           <div style={styles.noticeText}>Verbindungsproblem</div>
           <div style={styles.noticeSubtext}>{shift.error}</div>
           <a
@@ -124,7 +124,7 @@ export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: P
     return (
       <div style={styles.center}>
         <div style={styles.notice}>
-          <div style={{ ...styles.noticeIcon, backgroundColor: '#e65100' }}>⚠</div>
+          <div style={{ ...styles.noticeIcon, backgroundColor: 'var(--color-warning)' }}>⚠</div>
           <div style={styles.noticeText}>
             Kein Schichtauftrag für heute
           </div>
@@ -202,8 +202,8 @@ const styles: Record<string, React.CSSProperties> = {
     width: '64px',
     height: '64px',
     borderRadius: '50%',
-    backgroundColor: '#f44336',
-    color: '#ffffff',
+    backgroundColor: 'var(--color-danger)',
+    color: '#fff',
     fontSize: '2rem',
     fontWeight: 700,
     display: 'flex',
@@ -212,23 +212,23 @@ const styles: Record<string, React.CSSProperties> = {
   },
   noticeText: {
     fontSize: '1.3rem',
-    color: '#cccccc',
+    color: 'var(--text-secondary)',
     fontWeight: 600,
   },
   noticeSubtext: {
     fontSize: '1rem',
-    color: '#8899aa',
+    color: 'var(--text-muted)',
     textAlign: 'center' as const,
     maxWidth: '400px',
     lineHeight: 1.5,
   },
   configLink: {
     fontSize: '1.1rem',
-    color: '#1976d2',
+    color: 'var(--color-accent)',
     textDecoration: 'none',
     padding: '0.75rem 2rem',
     borderRadius: '8px',
-    backgroundColor: '#16213e',
+    backgroundColor: 'var(--surface-2)',
     fontWeight: 600,
     minHeight: '56px',
     display: 'flex',
@@ -236,11 +236,11 @@ const styles: Record<string, React.CSSProperties> = {
   },
   loadingText: {
     fontSize: '1.2rem',
-    color: '#556677',
+    color: 'var(--text-dim)',
   },
   emptyText: {
     fontSize: '1.2rem',
-    color: '#556677',
+    color: 'var(--text-dim)',
   },
   grid: {
     display: 'grid',
@@ -249,7 +249,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: '100%',
   },
   tile: {
-    backgroundColor: '#324272',
+    backgroundColor: 'var(--surface-4)',
     borderRadius: '12px',
     padding: '2rem',
     minHeight: '120px',
@@ -258,7 +258,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     cursor: 'pointer',
     border: '2px solid transparent',
-    color: '#ffffff',
+    color: 'var(--text-primary)',
     textAlign: 'center' as const,
     minWidth: '64px',
     fontSize: 'inherit',
@@ -272,13 +272,13 @@ const styles: Record<string, React.CSSProperties> = {
   },
   divider: {
     fontSize: '1rem',
-    color: '#556677',
+    color: 'var(--text-dim)',
     margin: '0.25rem 0',
   },
   importButton: {
     fontSize: '1.1rem',
-    color: '#ffffff',
-    backgroundColor: '#2e7d32',
+    color: '#fff',
+    backgroundColor: 'var(--color-success-strong)',
     border: 'none',
     borderRadius: '8px',
     padding: '0.75rem 2rem',
@@ -290,7 +290,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   importError: {
     fontSize: 'var(--font-sm)',
-    color: '#f44336',
+    color: 'var(--color-danger)',
     maxWidth: '360px',
     textAlign: 'center' as const,
     lineHeight: 1.4,
@@ -302,12 +302,12 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '1rem',
     marginBottom: '1rem',
     padding: '0.5rem 1rem',
-    backgroundColor: '#1b3a1b',
+    backgroundColor: 'var(--color-success-muted)',
     borderRadius: '8px',
   },
   importBadgeText: {
     fontSize: '1rem',
-    color: '#81c784',
+    color: 'var(--color-success)',
     fontWeight: 600,
   },
   clearButton: {

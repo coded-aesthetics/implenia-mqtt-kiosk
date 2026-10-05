@@ -117,7 +117,7 @@ export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, la
     if (half) {
       parts.push(
         <text key={k++}
-          x={cx} y={cy - 18} fill="#ffffff"
+          x={cx} y={cy - 18} fill="var(--text-primary)"
           fontSize={32} fontWeight={800} textAnchor="middle" dominantBaseline="auto"
           style={tabNums}
         >
@@ -130,7 +130,7 @@ export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, la
     } else {
       parts.push(
         <text key={k++}
-          x={cx} y={cy - 6} fill="#ffffff"
+          x={cx} y={cy - 6} fill="var(--text-primary)"
           fontSize={32} fontWeight={800} textAnchor="middle" dominantBaseline="auto"
           style={tabNums}
         >

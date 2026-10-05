@@ -48,7 +48,7 @@ export function SensorBar({ value, min, max, label, unit, soll, labelStep: label
     parts.push(
       <text key={k++}
         x={VAL_X} y={BAR_Y + BAR_H / 2}
-        fill="#ffffff" fontSize={16} fontWeight={700}
+        fill="var(--text-primary)" fontSize={16} fontWeight={700}
         textAnchor="end" dominantBaseline="central"
         style={tabNums}
       >{formatNumber(value)}</text>

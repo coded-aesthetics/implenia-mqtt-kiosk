@@ -57,12 +57,16 @@ function buildData(series: ChartSeries[]): uPlot.AlignedData {
   return aligned;
 }
 
-const AXIS_STYLE = {
-  stroke: 'rgba(255,255,255,0.45)',
-  grid: { stroke: 'rgba(255,255,255,0.06)', width: 1 },
-  ticks: { stroke: 'rgba(255,255,255,0.1)', width: 1 },
-  font: '11px Inter, system-ui, sans-serif',
-} as const;
+function resolveAxisStyle(el: HTMLElement) {
+  const cs = getComputedStyle(el);
+  const v = (name: string) => cs.getPropertyValue(name).trim() || '#888';
+  return {
+    stroke: v('--axis-color'),
+    grid: { stroke: v('--axis-grid'), width: 1 },
+    ticks: { stroke: v('--axis-ticks'), width: 1 },
+    font: '11px Inter, system-ui, sans-serif',
+  };
+}
 
 export function SensorChart({ series, scales: scalesProp, windowMinutes = 5, height = 200 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -92,6 +96,8 @@ export function SensorChart({ series, scales: scalesProp, windowMinutes = 5, hei
     const el = containerRef.current;
     const width = el.clientWidth;
 
+    const axisStyle = resolveAxisStyle(el);
+
     const yScales: Record<string, uPlot.Scale> = {};
     const yAxes: uPlot.Axis[] = [];
 
@@ -108,7 +114,7 @@ export function SensorChart({ series, scales: scalesProp, windowMinutes = 5, hei
         yAxes.push({
           scale: sc.key,
           side: sc.side ?? (isFirst ? 3 : 1),
-          ...AXIS_STYLE,
+          ...axisStyle,
           ...(!isFirst && { grid: { show: false }, ticks: { show: false } }),
           splits: () => splits,
           values: (_u, vals) => vals.map((v) => formatNumber(v, 0)),
@@ -118,7 +124,7 @@ export function SensorChart({ series, scales: scalesProp, windowMinutes = 5, hei
       yScales.y = { auto: true };
       yAxes.push({
         scale: 'y',
-        ...AXIS_STYLE,
+        ...axisStyle,
         values: (_u, vals) => vals.map((v) => formatNumber(v, 0)),
       });
     }
@@ -142,7 +148,7 @@ export function SensorChart({ series, scales: scalesProp, windowMinutes = 5, hei
       },
       axes: [
         {
-          ...AXIS_STYLE,
+          ...axisStyle,
           values: (_u, vals) => vals.map((v) =>
             new Date(v * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
           ),
