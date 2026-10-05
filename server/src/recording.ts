@@ -287,20 +287,24 @@ export async function uploadSession(
 
     // Split readings into uploadable (has a value) and empty (null from NaN/empty MQTT payloads)
     const isStringSensor = group.sensorType === 'string';
-    const uploadable: { date: string; value: number | string }[] = [];
     const emptyIds: number[] = [];
 
+    // Deduplicate by timestamp — at high ingest rates (replay 60x, fast MQTT)
+    // multiple readings can share the same millisecond. The backend's ON CONFLICT
+    // rejects batches with duplicate dates, so we keep the last value per timestamp.
+    const byDate = new Map<string, number | string>();
     for (const r of group.readings) {
       const raw = r.valueNumeric ?? r.valueText ?? null;
       if (raw === null) {
         emptyIds.push(r.id);
       } else {
-        uploadable.push({
-          date: new Date(r.receivedAt).toISOString(),
-          value: isStringSensor ? String(raw) : raw,
-        });
+        byDate.set(
+          new Date(r.receivedAt).toISOString(),
+          isStringSensor ? String(raw) : raw,
+        );
       }
     }
+    const uploadable = Array.from(byDate, ([date, value]) => ({ date, value }));
 
     // Mark empty readings as uploaded — there is nothing to send
     if (emptyIds.length > 0) {
@@ -314,15 +318,20 @@ export async function uploadSession(
       continue;
     }
 
+    const valueIds = allIds.filter((id) => !emptyIds.includes(id));
     try {
-      await fetchImplenia(
-        `/api/v1/sensor-${group.sensorType}/${group.sensorId}/batch`,
-        { method: 'POST', body: { readings: uploadable } },
-      );
-      markSessionReadingsUploaded(allIds.filter((id) => !emptyIds.includes(id)));
+      // Upload in chunks — the backend rejects payloads above its body-size limit
+      const CHUNK_SIZE = 5000;
+      for (let i = 0; i < uploadable.length; i += CHUNK_SIZE) {
+        const chunk = uploadable.slice(i, i + CHUNK_SIZE);
+        await fetchImplenia(
+          `/api/v1/sensor-${group.sensorType}/${group.sensorId}/batch`,
+          { method: 'POST', body: { readings: chunk } },
+        );
+      }
+      markSessionReadingsUploaded(valueIds);
       sensorsCompleted++;
     } catch (err) {
-      const valueIds = allIds.filter((id) => !emptyIds.includes(id));
       markSessionReadingsFailed(valueIds);
       sensorsFailed++;
       log.error(

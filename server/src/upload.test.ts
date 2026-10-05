@@ -32,10 +32,12 @@ function createSessionWithReadings(
   };
   const sessionId = db.createSession('test-element', JSON.stringify(sensorMap));
   db.endSession(sessionId);
-  for (const r of readings) {
+  const baseTime = Date.now();
+  for (let i = 0; i < readings.length; i++) {
+    const r = readings[i];
     db.insertSessionReading(
       sessionId, 'testsensor', 'sensor-abc', 'float',
-      r.valueNumeric, r.valueText,
+      r.valueNumeric, r.valueText, { receivedAt: baseTime + i },
     );
   }
   return sessionId;
@@ -90,5 +92,39 @@ describe('uploadSession', () => {
     expect(stats.uploaded).toBe(2);
     expect(stats.pending).toBe(0);
     expect(stats.failed).toBe(0);
+  });
+
+  it('deduplicates readings with the same timestamp, keeping the last value', async () => {
+    apiFn.mockClear();
+    apiFn.mockResolvedValueOnce({});
+
+    const sensorMap = {
+      testsensor: { sensorId: 'sensor-abc', sensorType: 'float' },
+    };
+    const sessionId = db.createSession('test-dedup', JSON.stringify(sensorMap));
+    db.endSession(sessionId);
+
+    const now = Date.now();
+    // Three readings sharing the same millisecond timestamp
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 1.0, null, { receivedAt: now });
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 2.0, null, { receivedAt: now });
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 3.0, null, { receivedAt: now });
+    // One reading at a different timestamp
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 4.0, null, { receivedAt: now + 1 });
+
+    await recording.uploadSession(sessionId);
+
+    expect(apiFn).toHaveBeenCalledOnce();
+    const [, opts] = apiFn.mock.calls[0];
+    const payload = opts.body.readings as Array<{ date: string; value: number }>;
+    expect(payload).toHaveLength(2);
+    // Last value for the duplicate timestamp wins
+    expect(payload[0].value).toBe(3.0);
+    expect(payload[1].value).toBe(4.0);
+
+    // All 4 DB rows marked as uploaded
+    const stats = db.getSessionStats(sessionId);
+    expect(stats.uploaded).toBe(4);
+    expect(stats.pending).toBe(0);
   });
 });
