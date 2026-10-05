@@ -430,18 +430,15 @@ export class DataIngestion extends EventEmitter {
   private onSeekStart = (): void => { this.resetForSeek(); };
 
   private onReplayStart = (): void => {
-    if (this.activeSession) return;
-    const sessionId = createSession('replay', JSON.stringify({}));
-    this.startRecording(sessionId, new Map());
-    log.info('Started replay session %d', sessionId);
+    // Replay just streams MQTT data — the user starts recording via the UI
+    // with a real element name, which fetches the sensor map from the API.
+    // Auto-creating a session here produced an empty sensor map, so every
+    // reading got sensor_id = NULL and upload silently sent nothing.
+    log.info('Replay started — data is flowing, start recording via the UI to capture it');
   };
 
   private onReplayStop = (): void => {
-    if (!this.activeSession) return;
-    const sessionId = this.activeSession.id;
-    this.stopRecording();
-    endSession(sessionId);
-    log.info('Ended replay session %d', sessionId);
+    log.info('Replay stopped');
   };
 
   start(): void {
