@@ -353,12 +353,13 @@ export class DataIngestion extends EventEmitter {
   private recordStatusReading(session: ActiveSession): void {
     const mapping = session.sensorMap.get('status');
     if (!mapping) return;
-    const STATUS_BOHREN = 0;
-    const STATUS_VERPRESSEN = 1;
-    const STATUS_OTHER = 2;
-    const statusValue = session.operatingMode === 'bohren' ? STATUS_BOHREN
-      : session.operatingMode === 'austausch' ? STATUS_VERPRESSEN
-      : STATUS_OTHER;
+    const STATUS_MAP: Record<OperatingMode, number> = {
+      bohren: 0,
+      austausch: 1,
+      einbauen: 2,
+      auffuellen: 3,
+    };
+    const statusValue = STATUS_MAP[session.operatingMode];
     insertSessionReading(
       session.id, 'kiosk/status', mapping.sensorId, mapping.sensorType,
       statusValue, null,
