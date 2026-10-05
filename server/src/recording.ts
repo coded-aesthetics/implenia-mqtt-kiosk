@@ -318,7 +318,8 @@ export async function uploadSession(
       continue;
     }
 
-    const valueIds = allIds.filter((id) => !emptyIds.includes(id));
+    const emptySet = new Set(emptyIds);
+    const valueIds = allIds.filter((id) => !emptySet.has(id));
     try {
       // Upload in chunks — the backend rejects payloads above its body-size limit
       const CHUNK_SIZE = 5000;
