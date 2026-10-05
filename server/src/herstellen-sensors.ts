@@ -75,10 +75,10 @@ export async function fetchHerstellenSensors(elementName: string): Promise<Senso
   // mixed devices where only some sensors have been migrated.
   const [allDefs, vorgabenDefs] = await Promise.all([
     fetchImplenia<SensorDefs>(
-      `/api/v1/measuring-device/self/child/name:${encoded}`,
+      `/api/v1/measuring-device/self/child/name:${encoded}?include_meta=true`,
     ),
     fetchImplenia<SensorDefs>(
-      `/api/v1/measuring-device/self/child/name:${encoded}/child/name:vorgaben`,
+      `/api/v1/measuring-device/self/child/name:${encoded}/child/name:vorgaben?include_meta=true`,
     ).catch(() => ({} as SensorDefs)),
   ]);
 

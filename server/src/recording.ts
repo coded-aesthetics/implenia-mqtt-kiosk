@@ -83,7 +83,7 @@ const SENSOR_TYPE_MAP: Record<string, string> = {
 export async function beginRecording(elementName: string): Promise<{ sessionId: number }> {
   const existing = getActiveSession();
   if (existing) {
-    throw new Error(`Already recording session ${existing.id} for "${existing.element_name}"`);
+    throw new Error(`Aufzeichnung ${existing.id} für „${existing.element_name}" läuft bereits.`);
   }
 
   // Fetch herstellen sensors (all element sensors minus vorgaben sensors)
@@ -213,7 +213,7 @@ export function resumeRecording(): { sessionId: number } | null {
 export function endRecording(): { sessionId: number } {
   const session = getActiveSession();
   if (!session) {
-    throw new Error('No active recording session');
+    throw new Error('Keine aktive Aufzeichnung.');
   }
 
   ingestion.stopRecording();
@@ -250,11 +250,23 @@ export async function uploadSession(
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<{ status: Session['status'] }> {
   const session = getSessionById(sessionId);
-  if (!session) throw new Error(`Session ${sessionId} not found`);
+  if (!session) throw new Error(`Aufzeichnung ${sessionId} nicht gefunden.`);
 
   // Reset any previously failed readings so they get retried
   resetFailedReadings(sessionId);
   updateSessionStatus(sessionId, 'uploading');
+
+  // Build reverse map: sensorId → human-readable name from the persisted sensor map
+  const sensorNames = new Map<string, string>();
+  if (session.sensor_map) {
+    try {
+      const map = JSON.parse(session.sensor_map) as Record<string, { sensorId?: string }>;
+      for (const [name, entry] of Object.entries(map)) {
+        if (entry?.sensorId) sensorNames.set(entry.sensorId, name);
+      }
+    } catch {}
+  }
+  const sensorName = (id: string) => sensorNames.get(id) ?? id;
 
   const groups = getSessionUploadGroups(sessionId);
   const sensorsTotal = groups.length;
@@ -271,29 +283,65 @@ export async function uploadSession(
     };
     onProgress?.(progress);
 
-    // Build batch payload — string sensors must send string values
+    const allIds = group.readings.map((r) => r.id);
+
     const isStringSensor = group.sensorType === 'string';
-    const readings = group.readings.map((r) => {
+
+    // Deduplicate by timestamp — at high ingest rates (replay 60x, fast MQTT)
+    // multiple readings can share the same millisecond. The backend's ON CONFLICT
+    // rejects batches with duplicate dates, so we keep the last value per timestamp.
+    const byDate = new Map<string, number | string | null>();
+    for (const r of group.readings) {
       const raw = r.valueNumeric ?? r.valueText ?? null;
-      return {
-        date: new Date(r.receivedAt).toISOString(),
-        value: isStringSensor && raw !== null ? String(raw) : raw,
-      };
-    });
-
-    const ids = group.readings.map((r) => r.id);
-
-    try {
-      await fetchImplenia(
-        `/api/v1/sensor-${group.sensorType}/${group.sensorId}/batch`,
-        { method: 'POST', body: { readings } },
+      byDate.set(
+        new Date(r.receivedAt).toISOString(),
+        raw === null ? null : isStringSensor ? String(raw) : raw,
       );
-      markSessionReadingsUploaded(ids);
+    }
+
+    // Null readings mark sensor outages — keep the first and last of each
+    // consecutive null run so the gap boundaries are visible in the backend,
+    // but don't send every null at full ingest rate.
+    const deduped = Array.from(byDate, ([date, value]) => ({ date, value }));
+    const uploadable: { date: string; value: number | string | null }[] = [];
+    for (let i = 0; i < deduped.length; i++) {
+      const r = deduped[i];
+      if (r.value !== null) {
+        uploadable.push(r);
+      } else {
+        const prevNull = i > 0 && deduped[i - 1].value === null;
+        const nextNull = i < deduped.length - 1 && deduped[i + 1].value === null;
+        // Keep first null (prev is non-null or start) and last null (next is non-null or end)
+        if (!prevNull || !nextNull) {
+          uploadable.push(r);
+        }
+      }
+    }
+
+    if (uploadable.length === 0) {
+      sensorsCompleted++;
+      markSessionReadingsUploaded(allIds);
+      continue;
+    }
+    try {
+      // Upload in chunks — the backend rejects payloads above its body-size limit
+      const CHUNK_SIZE = 5000;
+      for (let i = 0; i < uploadable.length; i += CHUNK_SIZE) {
+        const chunk = uploadable.slice(i, i + CHUNK_SIZE);
+        await fetchImplenia(
+          `/api/v1/sensor-${group.sensorType}/${group.sensorId}/batch`,
+          { method: 'POST', body: { readings: chunk } },
+        );
+      }
+      markSessionReadingsUploaded(allIds);
       sensorsCompleted++;
     } catch (err) {
-      markSessionReadingsFailed(ids);
+      markSessionReadingsFailed(allIds);
       sensorsFailed++;
-      log.error('Upload failed for sensor %s: %s', group.sensorId, (err as Error).message);
+      log.error(
+        'Upload failed for sensor %s (%s, %d readings): %s',
+        sensorName(group.sensorId), group.sensorType, uploadable.length, (err as Error).message,
+      );
     }
   }
 
