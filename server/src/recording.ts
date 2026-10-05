@@ -256,6 +256,18 @@ export async function uploadSession(
   resetFailedReadings(sessionId);
   updateSessionStatus(sessionId, 'uploading');
 
+  // Build reverse map: sensorId → human-readable name from the persisted sensor map
+  const sensorNames = new Map<string, string>();
+  if (session.sensor_map) {
+    try {
+      const map = JSON.parse(session.sensor_map) as Record<string, { sensorId?: string }>;
+      for (const [name, entry] of Object.entries(map)) {
+        if (entry?.sensorId) sensorNames.set(entry.sensorId, name);
+      }
+    } catch {}
+  }
+  const sensorName = (id: string) => sensorNames.get(id) ?? id;
+
   const groups = getSessionUploadGroups(sessionId);
   const sensorsTotal = groups.length;
   let sensorsCompleted = 0;
@@ -271,29 +283,52 @@ export async function uploadSession(
     };
     onProgress?.(progress);
 
-    // Build batch payload — string sensors must send string values
-    const isStringSensor = group.sensorType === 'string';
-    const readings = group.readings.map((r) => {
-      const raw = r.valueNumeric ?? r.valueText ?? null;
-      return {
-        date: new Date(r.receivedAt).toISOString(),
-        value: isStringSensor && raw !== null ? String(raw) : raw,
-      };
-    });
+    const allIds = group.readings.map((r) => r.id);
 
-    const ids = group.readings.map((r) => r.id);
+    // Split readings into uploadable (has a value) and empty (null from NaN/empty MQTT payloads)
+    const isStringSensor = group.sensorType === 'string';
+    const uploadable: { date: string; value: number | string }[] = [];
+    const emptyIds: number[] = [];
+
+    for (const r of group.readings) {
+      const raw = r.valueNumeric ?? r.valueText ?? null;
+      if (raw === null) {
+        emptyIds.push(r.id);
+      } else {
+        uploadable.push({
+          date: new Date(r.receivedAt).toISOString(),
+          value: isStringSensor ? String(raw) : raw,
+        });
+      }
+    }
+
+    // Mark empty readings as uploaded — there is nothing to send
+    if (emptyIds.length > 0) {
+      markSessionReadingsUploaded(emptyIds);
+    }
+
+    // Skip API call if no readings carry a value
+    if (uploadable.length === 0) {
+      sensorsCompleted++;
+      log.info('Sensor %s (%s): skipped %d empty readings', sensorName(group.sensorId), group.sensorType, emptyIds.length);
+      continue;
+    }
 
     try {
       await fetchImplenia(
         `/api/v1/sensor-${group.sensorType}/${group.sensorId}/batch`,
-        { method: 'POST', body: { readings } },
+        { method: 'POST', body: { readings: uploadable } },
       );
-      markSessionReadingsUploaded(ids);
+      markSessionReadingsUploaded(allIds.filter((id) => !emptyIds.includes(id)));
       sensorsCompleted++;
     } catch (err) {
-      markSessionReadingsFailed(ids);
+      const valueIds = allIds.filter((id) => !emptyIds.includes(id));
+      markSessionReadingsFailed(valueIds);
       sensorsFailed++;
-      log.error('Upload failed for sensor %s: %s', group.sensorId, (err as Error).message);
+      log.error(
+        'Upload failed for sensor %s (%s, %d readings): %s',
+        sensorName(group.sensorId), group.sensorType, uploadable.length, (err as Error).message,
+      );
     }
   }
 
