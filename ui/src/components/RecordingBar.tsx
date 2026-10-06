@@ -85,6 +85,16 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     return () => clearTimeout(id);
   }, [emptyWarning]);
 
+  // Same for the resume confirmation. Without it the bar stays up on *every*
+  // screen until the next recording starts — including the element list, where
+  // it costs the row of resume tiles its space at 1024x768 — reporting a
+  // resume the worker has long since acted on.
+  useEffect(() => {
+    if (!resumed) return;
+    const id = setTimeout(() => setResumed(false), 10_000);
+    return () => clearTimeout(id);
+  }, [resumed]);
+
   // Fetch which streams can be exported once a session has ended.
   useEffect(() => {
     const sessionId = recordingState.sessionId;

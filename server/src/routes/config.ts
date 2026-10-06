@@ -6,6 +6,7 @@ import { ingestion, DataIngestion } from '../ingestion.js';
 import { deviceSource } from '../device-source.js';
 import { abortRecording } from '../recording.js';
 import { clearCalibrationCache } from '../calibration.js';
+import { forgetElementDevices } from '../element-device.js';
 import { clearResolverCache } from '../topic-resolver.js';
 import {
   TRANSPORTS, getTransport, isTransportConfigured, isValidTransport, setTransport,
@@ -202,6 +203,10 @@ export function registerConfigRoutes(app: FastifyInstance): void {
     clearTransportCache();
     clearResolverCache();
     clearCalibrationCache();
+    // Element→device ids included: a reset is how a kiosk is moved to another
+    // site, and a kept id would send the next Ausführungsdatum to the device of
+    // whatever element happened to share that name on the old one.
+    forgetElementDevices();
     deviceSource.clearMappingCache();
     ingestion.setSource(DataIngestion.sourceFor(getTransport()));
     // setSource is a no-op when the transport is unchanged (the common case),

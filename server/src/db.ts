@@ -258,12 +258,15 @@ const updateSessionStatusStmt = db.prepare(
 const getSessionsStmt = db.prepare(
   'SELECT * FROM recording_sessions ORDER BY started_at DESC'
 );
+// COALESCE because ended_at is only written by endSession(): a session uploaded
+// while it was still open has none, and `new Date(null)` on the resume tile
+// would read "01.01.1970".
 const getCompletedElementsStmt = db.prepare(`
-  SELECT element_name, MAX(ended_at) as last_upload
+  SELECT element_name, MAX(COALESCE(ended_at, started_at)) as last_upload
   FROM recording_sessions
   WHERE status = 'uploaded'
   GROUP BY element_name
-  ORDER BY MAX(ended_at) DESC
+  ORDER BY last_upload DESC
 `);
 const getSessionByIdStmt = db.prepare(
   'SELECT * FROM recording_sessions WHERE id = ?'
@@ -709,12 +712,6 @@ export function unclipSessionReadings(sessionId: number): number {
     )
     .run(sessionId, CLIPPED_STATUS);
   return result.changes;
-}
-
-export function deleteClippedReadings(sessionId: number): number {
-  return db
-    .prepare('DELETE FROM session_readings WHERE session_id = ? AND upload_status = ?')
-    .run(sessionId, CLIPPED_STATUS).changes;
 }
 
 export function getSessionStats(sessionId: number): SessionStats {

@@ -197,14 +197,27 @@ export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: P
   // still in the shift assignment belongs in the unfinished grid instead.
   const allStarted = completedElements.filter((e) => !unfinishedNames.has(e.elementName));
 
-  // Unsearched, the screen shows two rows of today's work plus one row of
-  // elements to resume. The search reaches the rest of both lists.
-  const unfinishedTiles = isSearching
+  // Two rows of today's work plus one row of elements to resume is what fits at
+  // 1024x768. The caps apply to the search results too: the grid is clipped
+  // (`overflow: hidden`) and vertically centred, so a search matching a dozen
+  // elements would silently cut rows off the top *and* the bottom with no
+  // scrollbar and no way to reach them. Truncated, the screen says so and the
+  // next typed character narrows it.
+  const MAX_UNFINISHED = 6;
+  const MAX_STARTED = 3;
+
+  const unfinishedMatches = isSearching
     ? data.measuring_devices.filter((d) => d.name.toLowerCase().includes(lower))
-    : data.measuring_devices.slice(0, 6);
-  const startedTiles = isSearching
+    : data.measuring_devices;
+  const startedMatches = isSearching
     ? allStarted.filter((e) => e.elementName.toLowerCase().includes(lower))
-    : allStarted.slice(0, 3);
+    : allStarted;
+
+  const unfinishedTiles = unfinishedMatches.slice(0, MAX_UNFINISHED);
+  const startedTiles = startedMatches.slice(0, MAX_STARTED);
+  const hiddenCount =
+    unfinishedMatches.length - unfinishedTiles.length
+    + (startedMatches.length - startedTiles.length);
 
   const nothingFound = isSearching && unfinishedTiles.length + startedTiles.length === 0;
 
@@ -259,6 +272,14 @@ export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: P
               </div>
             </>
           )}
+
+          {hiddenCount > 0 && (
+            <div style={styles.moreHint}>
+              {hiddenCount === 1
+                ? '1 weiteres Element — Namen eingeben, um es zu finden'
+                : `${hiddenCount} weitere Elemente — Namen eingeben, um sie zu finden`}
+            </div>
+          )}
         </div>
 
         <div style={styles.bottomBar}>
@@ -272,11 +293,15 @@ export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: P
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  // The vertical spacing here is measured, not chosen: at 1024x768 the full
+  // screen (search, six element tiles, the resume row and the import button) is
+  // 13px short of fitting while the recording bar is up, so each gap is as
+  // small as it can be and still read as a separation.
   page: {
     display: 'flex',
     justifyContent: 'center',
     height: '100%',
-    padding: '1.5rem',
+    padding: '1.25rem',
     boxSizing: 'border-box' as const,
   },
   // Search and import keep their place while the grids change underneath, so
@@ -292,7 +317,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     justifyContent: 'center',
     flexShrink: 0,
-    marginBottom: '1.25rem',
+    marginBottom: '1rem',
   },
   content: {
     flex: 1,
@@ -300,7 +325,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
-    gap: '0.75rem',
+    gap: '0.5rem',
     overflow: 'hidden',
   },
   bottomBar: {
@@ -309,7 +334,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     flexShrink: 0,
     minHeight: '72px',
-    marginTop: '1.25rem',
+    marginTop: '1rem',
   },
   searchInput: {
     width: '100%',
@@ -432,6 +457,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '1.1rem',
     fontWeight: 600,
     color: 'var(--text-muted)',
+  },
+  moreHint: {
+    fontSize: '1rem',
+    color: 'var(--text-muted)',
+    textAlign: 'center' as const,
+    flexShrink: 0,
   },
   noResults: {
     fontSize: '1.2rem',

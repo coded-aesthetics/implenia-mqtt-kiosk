@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { fetchImplenia, getApiConfig, type ApiError } from '../implenia-api.js';
-import { fetchHerstellenSensors, type SensorDefs } from '../herstellen-sensors.js';
+import { fetchHerstellenSensors } from '../herstellen-sensors.js';
 import { getMeta, setMeta, deleteMeta, setElementVorgaben, getElementVorgaben } from '../db.js';
 import { validateShiftImport, resolveShiftAssignment } from '../shift-import.js';
 import {
@@ -162,7 +162,14 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
       return reply.send({ ok: true, date: stamp });
     } catch (err) {
       log.error('Failed to mark element "%s" as complete: %s', elementName, (err as Error).message);
-      return reply.status(502).send({ error: (err as Error).message });
+      // Wrapped: an upstream message like "Implenia API 502: <html>" reaches
+      // the worker's screen, and the rules say what they see has to be German
+      // and tell them what to do. The raw text stays for service personnel.
+      return reply.status(502).send({
+        error:
+          'Fertigmeldung fehlgeschlagen. Die Messwerte sind hochgeladen — bitte erneut ' +
+          `versuchen, sobald die Verbindung wieder steht. (${(err as Error).message})`,
+      });
     }
   });
 
@@ -187,7 +194,12 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
       return reply.send({ ok: true });
     } catch (err) {
       log.error('Failed to clear completion for element "%s": %s', elementName, (err as Error).message);
-      return reply.status(502).send({ error: (err as Error).message });
+      return reply.status(502).send({
+        error:
+          'Element konnte nicht wiederaufgenommen werden. Es kann trotzdem weiter ' +
+          'aufgezeichnet werden — der nächste Upload meldet es erneut fertig. ' +
+          `(${(err as Error).message})`,
+      });
     }
   });
 }

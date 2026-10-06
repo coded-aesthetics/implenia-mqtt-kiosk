@@ -263,10 +263,11 @@ The operating mode reaches the state machine itself, not just the clipping decis
 
 **Nothing is discarded.** Clipped readings are stored with `phase = 'rohrwechsel'` and `upload_status = 'clipped'` — a status the upload query and the export both skip, so implenia-web receives only drilling data, matching how clipping has always been done machine-side. Values are never rewritten; the phase records what a reading is *worth*, not what it says. Clipped rows do not block the reset guard, which would otherwise refuse forever on any rig that changes pipes; the reset screen reports them instead, because the reset deletes them.
 
-**Clipping is reversible until the session uploads.** A threshold set slightly wrong clips readings that were drilling data after all, and those are otherwise unreachable — in no upload, in no exported file. While the session is still pending, `unclipSessionReadings` moves them back to `pending`, and the phase stays on the row, so what was released is still visible afterwards. Once the session has uploaded successfully, its clipped rows are deleted (`deleteClippedReadings`): they will never be sent, and keeping them would grow the database on every pipe change.
+**Clipping is reversible.** A threshold set slightly wrong clips readings that were drilling data after all, and those are otherwise unreachable — in no upload, in no exported file. `POST /api/recording/sessions/:id/unclip` moves them back to `pending`, and the phase stays on the row, so what was released is still visible afterwards. It stays available after the session has uploaded: the upload is the moment a wrong threshold becomes visible, and clipped rows are never deleted on upload — a reset is the only thing that discards them, and the reset screen counts them first.
 
 ```
 GET  /api/recording/sessions/:id/readings?limit=500   → phase and upload status per reading, clipped ones included
+POST /api/recording/sessions/:id/unclip               → release clipped readings back into the upload queue
 ```
 
 ### How the rig reports depth
@@ -365,7 +366,7 @@ awk '{c[$3]++} END{for(t in c) print c[t], t}' assets/<capture>.txt | sort -rn
 
 ## Element Completion
 
-An element is marked as produced by writing its `Ausführungsdatum` string sensor (CSV role `is_completed`). The kiosk does this itself after every successful session upload, so a worker never has to confirm anything — and clears it (empty string) when an operator resumes an already-uploaded element from "Begonnene Elemente".
+An element is marked as produced by writing its `Ausführungsdatum` string sensor (CSV role `is_completed`). The kiosk does this itself after every session upload that actually put readings on the platform, so a worker never has to confirm anything — an empty session, or one whose every reading was clipped as a Rohrwechsel, finishes nothing — and clears it (empty string) when an operator resumes an already-uploaded element from "Begonnene Elemente".
 
 ```
 POST   /api/elements/:elementName/complete   → { ok, date } — manual completion

@@ -12,7 +12,6 @@ import {
 } from './element-completion.js';
 import {
   createSession,
-  deleteClippedReadings,
   endSession,
   getActiveSession,
   getMostRecentSession,
@@ -273,7 +272,41 @@ export function abortRecording(): void {
   }
 }
 
-export async function uploadSession(
+/**
+ * The upload currently running for a session, keyed by session id.
+ *
+ * Three paths start an upload — the stop route, the connectivity watcher and
+ * the boot sweep — and nothing stops two of them from picking the same session
+ * within the same second: `uploading` is only written once the first attempt is
+ * already underway. Two concurrent passes read the same `pending` rows, send
+ * them twice, and then race on the session's final status: the one that
+ * finishes second overwrites it, so a session every reading of which landed can
+ * end up `partial` (its rows marked `failed` by the loser of the race), which
+ * the recording bar then offers to retry forever.
+ *
+ * A second caller therefore joins the running upload instead of starting one.
+ * It gets the same result, which is what it would have computed anyway.
+ */
+const uploadsInFlight = new Map<number, Promise<{ status: Session['status'] }>>();
+
+export function uploadSession(
+  sessionId: number,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<{ status: Session['status'] }> {
+  const running = uploadsInFlight.get(sessionId);
+  if (running) {
+    log.info('Upload for session %d is already running — joining it', sessionId);
+    return running;
+  }
+
+  const attempt = runUpload(sessionId, onProgress).finally(() => {
+    uploadsInFlight.delete(sessionId);
+  });
+  uploadsInFlight.set(sessionId, attempt);
+  return attempt;
+}
+
+async function runUpload(
   sessionId: number,
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<{ status: Session['status'] }> {
@@ -380,11 +413,13 @@ export async function uploadSession(
   const finalStatus: Session['status'] = sensorsFailed === 0 ? 'uploaded' : 'partial';
   updateSessionStatus(sessionId, finalStatus);
 
-  if (finalStatus === 'uploaded') {
-    const deleted = deleteClippedReadings(sessionId);
-    if (deleted > 0) {
-      log.info('Deleted %d clipped (Rohrwechsel) readings for session %d', deleted, sessionId);
-    }
+  // Only an upload that actually put readings on the platform finishes the
+  // element. A session with nothing to send also ends as `uploaded` — it has
+  // no pending rows, which is the case for an empty session and for one whose
+  // every reading was clipped as a Rohrwechsel — and stamping an
+  // Ausführungsdatum for it would report a pillar as produced on the strength
+  // of no data at all, and drop it out of the shift assignment.
+  if (finalStatus === 'uploaded' && getSessionStats(sessionId).uploaded > 0) {
     await autoMarkComplete(session.element_name);
   }
 
