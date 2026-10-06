@@ -129,6 +129,18 @@ PUT  /api/verfahren/active      → { verfahren } — write-once, 409 if already
 
 **Write-once by design.** Recorded sessions, serial channel mappings and stream-export columns are all interpreted through the active Verfahren, so switching it under existing data would silently reinterpret that data. Changing it requires a full reset. Until it is set, sensor metadata enrichment is skipped — the live view still works, just without CSV-derived priorities, roles and units.
 
+### Vorgaben cache
+
+Vorgaben (the Soll values and the geology profile) arrive bundled in the shift assignment: `GET /shift-assignment/unfinished-elements?include_vorgaben=true`. That list only carries **unfinished** elements, so as soon as an element's `Ausführungsdatum` is set it drops out — and its vorgaben go with it. A pillar spanning several days would be resumed blind: no geology profile, no Soll on any gauge.
+
+Every shift-assignment fetch therefore writes each element's vorgaben to `element_vorgaben` (one row per element, the payload stored as opaque JSON). The element screen reads the live payload first and falls back to the cache only when the element is absent from it, so an edit in the portal is never masked by a stale copy.
+
+```
+GET /api/elements/:elementName/vorgaben   → { vorgaben } from the cache, 404 if never seen
+```
+
+Local by design: resuming a pillar is exactly the moment a site is likely to be offline, so a fallback that needed the API would fail where it is needed most.
+
 
 ### First-start setup
 
@@ -148,7 +160,7 @@ GET  /api/config/reset   → { allowed, unsafe: { sessions, readings, clipped },
 POST /api/config/reset   → 409 while data is unsafe, otherwise wipes and clears caches
 ```
 
-**Clears:** Verfahren, transport, MQTT settings, devices, channel mappings, topic overrides, recorded sessions and readings, export records, the buffer, the imported shift assignment. The UI additionally clears the voice comment queue, which lives in `localStorage` and is therefore out of the server's reach — and, for the same reason, blocks the reset itself while comments are still unsent: the server's guard cannot see them, so a kiosk that was offline all shift would otherwise report "nothing unsaved" and discard a shift of dictation.
+**Clears:** Verfahren, transport, MQTT settings, devices, channel mappings, topic overrides, recorded sessions and readings, export records, the buffer, the imported shift assignment, the cached element vorgaben. The UI additionally clears the voice comment queue, which lives in `localStorage` and is therefore out of the server's reach — and, for the same reason, blocks the reset itself while comments are still unsent: the server's guard cannot see them, so a kiosk that was offline all shift would otherwise report "nothing unsaved" and discard a shift of dictation.
 
 **Keeps:** the API key and server address — the site's credentials, not this machine's setup, and re-entering a token on a touchscreen is miserable.
 
@@ -251,11 +263,10 @@ The operating mode reaches the state machine itself, not just the clipping decis
 
 **Nothing is discarded.** Clipped readings are stored with `phase = 'rohrwechsel'` and `upload_status = 'clipped'` — a status the upload query and the export both skip, so implenia-web receives only drilling data, matching how clipping has always been done machine-side. Values are never rewritten; the phase records what a reading is *worth*, not what it says. Clipped rows do not block the reset guard, which would otherwise refuse forever on any rig that changes pipes; the reset screen reports them instead, because the reset deletes them.
 
-**And clipping is reversible.** A threshold set slightly wrong clips readings that were drilling data after all, and those are otherwise unreachable — in no upload, in no exported file, and gone on the next reset. The recording bar offers to release them once the session has ended (tap to confirm), which moves them back to `pending`; the phase stays on the row, so what was released is still visible afterwards.
+**Clipping is reversible until the session uploads.** A threshold set slightly wrong clips readings that were drilling data after all, and those are otherwise unreachable — in no upload, in no exported file. While the session is still pending, `unclipSessionReadings` moves them back to `pending`, and the phase stays on the row, so what was released is still visible afterwards. Once the session has uploaded successfully, its clipped rows are deleted (`deleteClippedReadings`): they will never be sent, and keeping them would grow the database on every pipe change.
 
 ```
 GET  /api/recording/sessions/:id/readings?limit=500   → phase and upload status per reading, clipped ones included
-POST /api/recording/sessions/:id/unclip               → { released } — clipped readings back into the upload queue
 ```
 
 ### How the rig reports depth
@@ -351,6 +362,26 @@ A two-hour raw MQTT capture from a live Injektionsbohren rig (Bohrung G08, Markt
 # topic inventory of a capture
 awk '{c[$3]++} END{for(t in c) print c[t], t}' assets/<capture>.txt | sort -rn
 ```
+
+## Element Completion
+
+An element is marked as produced by writing its `Ausführungsdatum` string sensor (CSV role `is_completed`). The kiosk does this itself after every successful session upload, so a worker never has to confirm anything — and clears it (empty string) when an operator resumes an already-uploaded element from "Begonnene Elemente".
+
+```
+POST   /api/elements/:elementName/complete   → { ok, date } — manual completion
+DELETE /api/elements/:elementName/complete   → { ok } — un-complete for rework
+```
+
+Two details are a contract with implenia-machine-backend and implenia-web, not kiosk-internal choices:
+
+- **The reading is dated `2000-01-01T00:00:00Z`**, not "now". Sensor values upsert on `(sensor_id, date)`, so this sentinel makes completion one overwritable slot per element. Dated at "now", clearing would be impossible: readers ask whether *any* non-empty value exists, and yesterday's row would keep the element complete forever.
+- **The value is a full ISO instant and doubles as a data-version stamp.** Every successful upload rewrites it, and implenia-web re-materializes an element's derived values (protocol totals, drilling stats, BIM status) whenever the stamp differs from the one it last computed from. A date-only value would be too coarse — an element uploaded twice in one shift would stamp the same value twice and the appended readings would never reach those numbers.
+
+Clearing uses an empty string, never `null`: the batch endpoint types `string_sensors` as `map[string]string` and answers a null with a 422. `server/src/element-completion.ts` owns all of this; the full contract is in `CLAUDE.md`.
+
+**Writes go by device id, never by element name.** `server/src/element-device.ts` resolves the name once via `GET /api/v1/measuring-device/self/child/name:<element>/resolve`, caches the id in memory, and retries a rejected write once if re-resolving yields a different id (an element device rebuilt in the platform). In memory and not in SQLite on purpose: every write by element happens online anyway, so a persisted id would only add a second source of truth that can go stale. The session sensor map is persisted for the opposite reason — the upload must survive restarts.
+
+The platform does now accept a `name:<element>` reference as the `device_id` of `readings/batch`, but the kiosk keeps resolving: that support landed in the backend after this kiosk shipped, and kiosks self-update hourly while the backend deploys separately, so both versions run in the field at once. Before it landed, the batch endpoint handed the path segment to `ValidateDeviceAccess`, which looks it up as a primary key — so `name:F-23` answered `401 device access error: device not found: name:F-23`, which reads like an auth problem and isn't. Worth knowing when reading older logs.
 
 ## Session Data Export
 
@@ -452,6 +483,8 @@ server/src/
   websocket.ts        — WS broadcast
   implenia-api.ts     — Implenia API auth + fetch wrapper
   recording.ts        — Session recording + batch upload
+  element-completion.ts — Ausführungsdatum writes (sentinel date + data-version stamp)
+  element-device.ts     — Element name → platform device id (resolve + cache)
   session-export.ts   — Stream-driven .xlsx export (HDI/IVL) for implenia-web import
   connectivity.ts     — Online/offline watchdog
   updater.ts          — Self-update from GitHub Releases

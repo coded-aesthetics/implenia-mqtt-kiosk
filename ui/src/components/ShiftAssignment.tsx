@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect, useCallback } from 'react';
 import { navigate } from '../hooks/useHashRouter';
 import type { ShiftAssignmentState } from '../hooks/useImplenia';
 
@@ -7,6 +7,11 @@ interface Props {
   hasApiKey: boolean;
   onImport: (file: File) => Promise<{ ok: boolean; error?: string }>;
   onClearImport: () => Promise<void>;
+}
+
+interface CompletedElement {
+  elementName: string;
+  lastUpload: number;
 }
 
 function ImportButton({ onImport }: { onImport: Props['onImport'] }) {
@@ -65,8 +70,42 @@ function ImportBadge({ onClear }: { onClear: () => Promise<void> }) {
   );
 }
 
+function useCompletedElements() {
+  const [elements, setElements] = useState<CompletedElement[]>([]);
+
+  const fetchElements = useCallback(() => {
+    fetch('/api/recording/completed-elements')
+      .then((r) => (r.ok ? r.json() : { elements: [] }))
+      .then((data) => setElements(data.elements ?? []))
+      .catch(() => setElements([]));
+  }, []);
+
+  useEffect(() => { fetchElements(); }, [fetchElements]);
+
+  return elements;
+}
+
+/**
+ * Re-open an element the operator already uploaded once.
+ *
+ * Navigation does not wait for the network: a failed clear is recoverable (the
+ * next upload sets the date again), so blocking the tap on a round trip would
+ * be worse than a stale completion flag. The refetch is chained *after* the
+ * clear rather than fired alongside it — the shift assignment only lists
+ * unfinished elements, so a refetch that overtook the clear would re-read the
+ * list that still excludes this element and change nothing.
+ */
+function resumeAndOpen(elementName: string, refetch: () => void): void {
+  fetch(`/api/elements/${encodeURIComponent(elementName)}/complete`, { method: 'DELETE' })
+    .then((r) => { if (r.ok) refetch(); })
+    .catch(() => {});
+  navigate(`element/${encodeURIComponent(elementName)}`);
+}
+
 export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: Props) {
   const isImported = shift.source === 'import';
+  const [search, setSearch] = useState('');
+  const completedElements = useCompletedElements();
 
   if (!hasApiKey && !isImported && !shift.loading) {
     return (
@@ -150,40 +189,142 @@ export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: P
   }
 
   const { data } = shift;
+  const unfinishedNames = new Set(data.measuring_devices.map((d) => d.name));
+  const lower = search.toLowerCase();
+  const isSearching = search.length > 0;
+
+  // Already-uploaded elements the operator may want to pick up again. Anything
+  // still in the shift assignment belongs in the unfinished grid instead.
+  const allStarted = completedElements.filter((e) => !unfinishedNames.has(e.elementName));
+
+  // Unsearched, the screen shows two rows of today's work plus one row of
+  // elements to resume. The search reaches the rest of both lists.
+  const unfinishedTiles = isSearching
+    ? data.measuring_devices.filter((d) => d.name.toLowerCase().includes(lower))
+    : data.measuring_devices.slice(0, 6);
+  const startedTiles = isSearching
+    ? allStarted.filter((e) => e.elementName.toLowerCase().includes(lower))
+    : allStarted.slice(0, 3);
+
+  const nothingFound = isSearching && unfinishedTiles.length + startedTiles.length === 0;
 
   return (
-    <div style={styles.tileContainer}>
-      <div style={{ width: '100%', maxWidth: '900px' }}>
-        {isImported && <ImportBadge onClear={onClearImport} />}
-        <div style={styles.grid}>
-          {data.measuring_devices.map((device) => (
-            <button
-              key={device.id}
-              onClick={() => navigate(`element/${encodeURIComponent(device.name)}`)}
-              style={styles.tile}
-            >
-              <div style={styles.tileName}>{device.name}</div>
-            </button>
-          ))}
+    <div style={styles.page}>
+      <div style={styles.inner}>
+        <div style={styles.topBar}>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Element suchen..."
+            style={styles.searchInput}
+          />
         </div>
-        {!isImported && (
-          <div style={styles.importFooter}>
-            <ImportButton onImport={onImport} />
-          </div>
-        )}
+
+        <div style={styles.content}>
+          {nothingFound && <div style={styles.noResults}>Keine Elemente gefunden</div>}
+
+          {unfinishedTiles.length > 0 && (
+            <div style={styles.grid}>
+              {unfinishedTiles.map((device) => (
+                <button
+                  key={device.id}
+                  onClick={() => navigate(`element/${encodeURIComponent(device.name)}`)}
+                  style={styles.tile}
+                >
+                  <div style={styles.tileName}>{device.name}</div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {startedTiles.length > 0 && (
+            <>
+              <div style={styles.sectionLabel}>Begonnene Elemente</div>
+              <div style={styles.grid}>
+                {startedTiles.map((el) => (
+                  <button
+                    key={el.elementName}
+                    onClick={() => resumeAndOpen(el.elementName, shift.refetch)}
+                    style={{ ...styles.tile, ...styles.startedTile }}
+                  >
+                    <div style={styles.startedTileName}>{el.elementName}</div>
+                    <div style={styles.startedTileDate}>
+                      {new Date(el.lastUpload).toLocaleDateString('de-DE', {
+                        day: '2-digit', month: '2-digit', year: 'numeric',
+                      })}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div style={styles.bottomBar}>
+          {isImported
+            ? <ImportBadge onClear={onClearImport} />
+            : <ImportButton onImport={onImport} />}
+        </div>
       </div>
     </div>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  tileContainer: {
+  page: {
     display: 'flex',
     justifyContent: 'center',
-    alignItems: 'center',
     height: '100%',
     padding: '1.5rem',
     boxSizing: 'border-box' as const,
+  },
+  // Search and import keep their place while the grids change underneath, so
+  // typing into the search never moves the controls out from under a glove.
+  inner: {
+    width: '100%',
+    maxWidth: '900px',
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+  },
+  topBar: {
+    display: 'flex',
+    justifyContent: 'center',
+    flexShrink: 0,
+    marginBottom: '1.25rem',
+  },
+  content: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    gap: '0.75rem',
+    overflow: 'hidden',
+  },
+  bottomBar: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+    minHeight: '72px',
+    marginTop: '1.25rem',
+  },
+  searchInput: {
+    width: '100%',
+    maxWidth: '480px',
+    border: '2px solid var(--border)',
+    borderRadius: '8px',
+    fontSize: '1.1rem',
+    padding: '0.75rem 1rem',
+    minHeight: '64px',
+    boxSizing: 'border-box' as const,
+    textAlign: 'center' as const,
+    backgroundColor: 'var(--surface-0)',
+    color: 'var(--text-primary)',
+    fontFamily: 'inherit',
+    outline: 'none',
   },
   center: {
     display: 'flex',
@@ -245,17 +386,19 @@ const styles: Record<string, React.CSSProperties> = {
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-    gap: '1.5rem',
+    gap: '1.25rem',
     width: '100%',
   },
   tile: {
     backgroundColor: 'var(--surface-4)',
     borderRadius: '12px',
-    padding: '2rem',
+    padding: '1.5rem',
     minHeight: '120px',
     display: 'flex',
+    flexDirection: 'column',
     justifyContent: 'center',
     alignItems: 'center',
+    gap: '0.4rem',
     cursor: 'pointer',
     border: '2px solid transparent',
     color: 'var(--text-primary)',
@@ -269,6 +412,31 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '1.8rem',
     fontWeight: 700,
     wordBreak: 'break-word' as const,
+  },
+  // Dashed border reads as "half finished" — the element has data but is being
+  // picked up again.
+  startedTile: {
+    backgroundColor: 'var(--surface-2)',
+    border: '2px dashed var(--border)',
+  },
+  startedTileName: {
+    fontSize: '1.6rem',
+    fontWeight: 700,
+    wordBreak: 'break-word' as const,
+  },
+  startedTileDate: {
+    fontSize: '1rem',
+    color: 'var(--text-muted)',
+  },
+  sectionLabel: {
+    fontSize: '1.1rem',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+  },
+  noResults: {
+    fontSize: '1.2rem',
+    color: 'var(--text-muted)',
+    textAlign: 'center' as const,
   },
   divider: {
     fontSize: '1rem',
@@ -300,7 +468,6 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: '1rem',
-    marginBottom: '1rem',
     padding: '0.5rem 1rem',
     backgroundColor: 'var(--color-success-muted)',
     borderRadius: '8px',
@@ -335,10 +502,5 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: '40px',
     minWidth: '64px',
     fontWeight: 600,
-  },
-  importFooter: {
-    display: 'flex',
-    justifyContent: 'center',
-    marginTop: '1.5rem',
   },
 };

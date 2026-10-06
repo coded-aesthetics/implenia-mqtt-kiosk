@@ -35,8 +35,6 @@ export interface RecordingState {
   readingCount: number;
   rohrwechsel: RohrwechselStatus | null;
   operatingMode: OperatingMode | null;
-  /** Readings held back as a Rohrwechsel, and releasable from the recording bar. */
-  clippedCount: number;
 }
 
 export interface UploadProgress {
@@ -75,7 +73,6 @@ const INITIAL_RECORDING: RecordingState = {
   readingCount: 0,
   rohrwechsel: null,
   operatingMode: null,
-  clippedCount: 0,
 };
 
 export function useWebSocket() {
@@ -158,7 +155,6 @@ export function useWebSocket() {
                 readingCount: msg.readingCount,
                 rohrwechsel: msg.rohrwechsel ?? null,
                 operatingMode: msg.operatingMode ?? null,
-                clippedCount: msg.clippedCount ?? 0,
               },
             }));
             break;

@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import { beginRecording, endRecording, uploadSession, getRecordingState } from '../recording.js';
+import { beginRecording, endRecording, uploadSession, getRecordingState, tryAutoUpload } from '../recording.js';
 import {
   getSessions, getSessionById, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
-  unclipSessionReadings, setOperatingModeRow, getMostRecentSession,
+  getSessionReadingCount, setOperatingModeRow, getMostRecentSession, getCompletedElements,
 } from '../db.js';
 import {
   buildSessionExport,
@@ -12,9 +12,14 @@ import {
 } from '../session-export.js';
 import { broadcastMessage } from '../websocket.js';
 import { ingestion, isOperatingMode } from '../ingestion.js';
+import { connectivity } from '../connectivity.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('recording-routes');
+
+function broadcastUploadProgress(progress: import('../recording.js').UploadProgress): void {
+  broadcastMessage({ type: 'upload-progress', ...progress });
+}
 
 export function registerRecordingRoutes(app: FastifyInstance): void {
   app.post('/api/recording/start', async (request, reply) => {
@@ -37,6 +42,17 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
     try {
       const result = endRecording();
       broadcastMessage({ type: 'recording-state', ...getRecordingState() });
+
+      // Auto-upload in the background — don't block the HTTP response
+      const { sessionId } = result;
+      if (connectivity.isOnline() && getSessionReadingCount(sessionId) > 0) {
+        tryAutoUpload(sessionId, (progress) => {
+          broadcastUploadProgress(progress);
+        }).then(() => {
+          broadcastMessage({ type: 'recording-state', ...getRecordingState() });
+        });
+      }
+
       return reply.send(result);
     } catch (err) {
       return reply.status(409).send({ error: (err as Error).message });
@@ -51,10 +67,7 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
     }
 
     try {
-      const result = await uploadSession(sessionId, (progress) => {
-        broadcastMessage({ type: 'upload-progress', ...progress });
-      });
-      // Broadcast final recording state
+      const result = await uploadSession(sessionId, broadcastUploadProgress);
       broadcastMessage({ type: 'recording-state', ...getRecordingState() });
       return reply.send(result);
     } catch (err) {
@@ -91,10 +104,6 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
 
     try {
       const { buffer, filename, dataRows } = await buildSessionExport(sessionId, stream);
-      // Only a file that actually contains readings counts as the data having
-      // left the kiosk. A verfahren with no streams defined yields a
-      // header-only file, and marking that "exported" would let the reset
-      // guard discard data nobody ever saved.
       if (dataRows > 0) {
         const { remaining } = recordStreamExport(sessionId, stream);
         if (remaining.length > 0) {
@@ -172,29 +181,6 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
     },
   );
 
-  /**
-   * Put the readings this session held back as a Rohrwechsel back in the
-   * upload queue.
-   *
-   * The way out of a wrong Klemmbacke threshold. Clipped readings are in no
-   * upload and in no exported file, and a reset deletes them — so without
-   * this, a threshold typed one digit off costs a shift of measurements that
-   * are sitting right there in the database.
-   */
-  app.post<{ Params: { id: string } }>(
-    '/api/recording/sessions/:id/unclip',
-    async (request, reply) => {
-      const sessionId = Number(request.params.id);
-      if (!Number.isInteger(sessionId)) {
-        return reply.status(400).send({ error: 'Ungültige Aufzeichnungs-ID.' });
-      }
-      const released = unclipSessionReadings(sessionId);
-      log.info('Session %d: %d clipped readings released for upload', sessionId, released);
-      broadcastMessage({ type: 'recording-state', ...getRecordingState() });
-      return reply.send({ sessionId, released });
-    },
-  );
-
   app.get('/api/recording/sessions', async (_request, reply) => {
     const sessions = getSessions();
     const result = sessions.map((s) => ({
@@ -202,5 +188,9 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       stats: getSessionStats(s.id),
     }));
     return reply.send(result);
+  });
+
+  app.get('/api/recording/completed-elements', async (_request, reply) => {
+    return reply.send({ elements: getCompletedElements() });
   });
 }

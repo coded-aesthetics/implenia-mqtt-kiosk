@@ -130,6 +130,105 @@ Reference implementations to match: machine-backend `csvParseISO`
 (`api/sensors/persistence/sensors.go`) and web `parseIsoTimestamp`
 (`app/models/csv-upload.server.ts`). Keep all three projects in sync.
 
+## Element completion (Ausführungsdatum) — shared convention across three projects
+
+An element (pillar) is **complete** when its **`Ausführungsdatum`** string
+sensor (CSV role `is_completed`) holds a non-empty value. That sensor is the
+single source of truth for completion across the whole stack — and its value
+doubles as the element's **data-version stamp**, which is how appended data
+gets recomputed. Both roles are described below; neither works without the
+other.
+
+### The write
+
+- **Value: a full ISO 8601 instant** — `2026-10-07T07:14:22.000Z`, UTC, as the
+  kiosk writes it. Readers must also accept a bare `YYYY-MM-DD` and German
+  `DD.MM.YYYY`, both of which occur in legacy imports (web's
+  `parseExecutionDate` in `app/helpers/drilling-stats/profiles/dsv.ts` handles
+  all three). Parse the value; never compare it against a date for equality and
+  never slice it to get a day.
+- **Reading date: the sentinel `2000-01-01T00:00:00Z`**, never "now". Sensor
+  value inserts upsert on `(sensor_id, date)`, so a fixed date makes completion
+  a single overwritable slot per element instead of a time series. Everything
+  else here depends on that: clearing would otherwise be impossible (yesterday's
+  row keeps the element complete forever) and a re-import would append a second
+  execution date instead of replacing the first. It is the same sentinel
+  implenia-web uses for materialized per-element values
+  (`MATERIALIZATION_SENTINEL_DATE` in `app/helpers/drilling-stats/sentinel-read.ts`).
+- **Cleared: an empty string, never `null`.** The batch endpoint types
+  `string_sensors` as `map[string]string` and rejects a null with a 422
+  (`expected string`). Empty un-completes the element — the rework path.
+- **Who writes it:** only the kiosk. After every successful session upload
+  (`uploadSession` → `autoMarkComplete`), on the manual
+  `POST /api/elements/:name/complete`, and `''` on `DELETE …/complete` when an
+  operator resumes an already-uploaded element. The backend never writes it;
+  implenia-web writes it only from its legacy importers.
+
+### The stamp: how appended data gets re-materialized
+
+Because the kiosk rewrites the value on *every* successful upload, a changed
+value means "this element's data moved". implenia-web uses exactly that as its
+invalidation signal for derived values:
+
+1. The kiosk uploads a session and writes `Ausführungsdatum = <that instant>`
+   at the sentinel row, overwriting the previous stamp.
+2. implenia-web still holds the stamp it last materialized from in
+   `MeasuringDevice.config.__dsv_materialized`.
+3. The next read of that site (`ensureDsvMaterializationForSite`) compares the
+   two, finds them different, re-runs `computeAndMaterialize` and stores the new
+   stamp. Recomputed values upsert onto the same sentinel rows, so nothing
+   duplicates.
+
+What follows from this, and must not be broken:
+
+- **A date-only value would be too coarse.** An element recorded, uploaded,
+  resumed and uploaded again within one shift would write the same value twice
+  and web would skip the recompute — the appended readings would show up in raw
+  charts while protocol totals, drilling stats and the BIM widget kept the old
+  numbers. That is why the value is an instant, not a day.
+- **Re-materialization is lazy.** Nothing happens when the kiosk uploads; the
+  first read of the site afterwards pays for the recompute.
+- **`''` drops the flag** instead of re-materializing (rework reset), so an
+  un-completed element recomputes from scratch once it is completed again.
+- **A flag holding `true` predates stamps.** It compares unequal to every
+  stamp, so such a pillar re-materializes once and carries a stamp afterwards.
+- **The stamp is UTC.** Anything rendering it as a day must format in
+  `Europe/Berlin` (`formatInTimeZone` from `date-fns-tz`), or an element
+  finished at 00:30 local time prints as the previous day.
+
+### Per project
+
+- **implenia-mqtt-kiosk** — `server/src/element-completion.ts` owns the whole
+  payload (sentinel date, stamp, `''`) and posts to
+  `POST /api/v1/measuring-device/<device_id>/readings/batch`, with the id
+  resolved from the element name by `element-device.ts` (resolve once, cache in
+  memory, retry once if the id turns out stale). It resolves rather than passing
+  `name:<element>` as the device_id even though the backend now accepts that
+  reference form — the support landed after this kiosk shipped, and kiosks
+  self-update hourly while the backend deploys separately, so both versions are
+  live in the field at once. Resolve-then-write works against either.
+  `element-completion.test.ts` and `element-device.test.ts` pin both halves.
+- **implenia-machine-backend** — `GetUnfinishedElements` excludes elements whose
+  `Ausführungsdatum` sensor has a non-empty value. No other condition (e.g.
+  "has any float sensor data") may be used as a completion proxy.
+- **implenia-web** — every completion reader must treat `''` exactly like
+  `NULL` (`checkIfDeviceHasCreationData` and
+  `checkDevicesHaveCreationDataBatched` in `app/models/bim-widget.server.ts`,
+  the drilling-stats profiles). The materialization guards in
+  `app/helpers/computed-values/ensure-materialization.ts` compare stamps, not
+  booleans. The legacy bulk importer stores the execution date it wrote as the
+  stamp, so importing a site does not force a site-wide recompute on first view.
+
+**Known deviation:** values written before this convention — and everything
+written by web's legacy DSV MySQL migration (`writeIstValues` in
+`app/models/dsv-migration.server.ts` dates values at import time) — sit at real
+timestamps rather than the sentinel. Readers therefore ask "does a non-empty
+value exist", not "is the sentinel value non-empty", which keeps those elements
+complete but means they cannot be un-completed until the stale row is
+overwritten or deleted.
+
+Keep all three projects in sync when this contract changes.
+
 ## Testing
 
 This software auto-updates on machines where a broken deploy costs real time and money. Tests are a safety net, not a checkbox.

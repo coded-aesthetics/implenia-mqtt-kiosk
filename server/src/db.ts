@@ -172,6 +172,12 @@ db.exec(`
     sensor_name TEXT    NOT NULL,
     PRIMARY KEY (device_id, value_index)
   );
+
+  CREATE TABLE IF NOT EXISTS element_vorgaben (
+    element_name TEXT    PRIMARY KEY,
+    vorgaben     TEXT    NOT NULL,
+    updated_at   INTEGER NOT NULL
+  );
 `);
 
 // --- Additive migrations ---
@@ -252,6 +258,13 @@ const updateSessionStatusStmt = db.prepare(
 const getSessionsStmt = db.prepare(
   'SELECT * FROM recording_sessions ORDER BY started_at DESC'
 );
+const getCompletedElementsStmt = db.prepare(`
+  SELECT element_name, MAX(ended_at) as last_upload
+  FROM recording_sessions
+  WHERE status = 'uploaded'
+  GROUP BY element_name
+  ORDER BY MAX(ended_at) DESC
+`);
 const getSessionByIdStmt = db.prepare(
   'SELECT * FROM recording_sessions WHERE id = ?'
 );
@@ -396,8 +409,38 @@ export function updateSessionStatus(id: number, status: Session['status']): void
   updateSessionStatusStmt.run(status, id);
 }
 
+/**
+ * Hand sessions stuck mid-upload back to the retry path. Returns how many.
+ *
+ * `uploading` is set for the duration of a call to uploadSession() and nowhere
+ * else, so in a process that has just started it cannot be true: no upload
+ * survives a restart. Left alone the row is a dead end — getRecordingState()
+ * keeps reporting the session, which pins the recording bar to a reading count
+ * with no upload button and no "Aufzeichnung beginnen", so the kiosk can
+ * neither finish that element nor start the next one. PM2 restarts mid-upload
+ * on a crash, a power cut, and every applied update.
+ *
+ * Readings already marked `uploaded` stay that way, so the retry resumes where
+ * the interrupted attempt stopped instead of sending them twice.
+ */
+export function reclaimStrandedUploads(): number {
+  return db.prepare(
+    "UPDATE recording_sessions SET status = 'ended' WHERE status = 'uploading'"
+  ).run().changes;
+}
+
 export function getSessions(): Session[] {
   return getSessionsStmt.all() as Session[];
+}
+
+export interface CompletedElement {
+  elementName: string;
+  lastUpload: number;
+}
+
+export function getCompletedElements(): CompletedElement[] {
+  const rows = getCompletedElementsStmt.all() as { element_name: string; last_upload: number }[];
+  return rows.map((r) => ({ elementName: r.element_name, lastUpload: r.last_upload }));
 }
 
 export function deleteSessionWithReadings(id: number): void {
@@ -487,6 +530,44 @@ export function setCalibration(sensorName: string, scale: number, offset: number
 
 export function deleteCalibration(sensorName: string): void {
   deleteCalibrationStmt.run(sensorName.toLowerCase());
+}
+
+// --- Vorgaben cache ---
+
+const setElementVorgabenStmt = db.prepare(
+  `INSERT INTO element_vorgaben (element_name, vorgaben, updated_at) VALUES (?, ?, ?)
+   ON CONFLICT(element_name) DO UPDATE SET
+     vorgaben = excluded.vorgaben, updated_at = excluded.updated_at`
+);
+const getElementVorgabenStmt = db.prepare(
+  'SELECT vorgaben FROM element_vorgaben WHERE element_name = ?'
+);
+
+/**
+ * Remember an element's vorgaben so the element screen still has them once the
+ * element drops out of the shift assignment.
+ *
+ * The shift assignment only carries *unfinished* elements, and setting the
+ * Ausführungsdatum after upload takes the element out of it — along with its
+ * geology profile and every Soll value. A pillar spanning several days would
+ * otherwise be resumed blind. Stored opaque: the shape is the UI's contract,
+ * and parsing it here would only add a way to corrupt it.
+ */
+export function setElementVorgaben(elementName: string, vorgaben: unknown): void {
+  setElementVorgabenStmt.run(elementName, JSON.stringify(vorgaben), Date.now());
+}
+
+/** Cached vorgaben for an element, or null if none were ever seen. */
+export function getElementVorgaben(elementName: string): unknown | null {
+  const row = getElementVorgabenStmt.get(elementName) as { vorgaben: string } | undefined;
+  if (!row) return null;
+  try {
+    return JSON.parse(row.vorgaben);
+  } catch {
+    // Unreadable cache is the same as no cache — the screen degrades to live
+    // readings without vorgaben rather than failing to open.
+    return null;
+  }
 }
 
 // --- Session reading functions ---
@@ -628,6 +709,12 @@ export function unclipSessionReadings(sessionId: number): number {
     )
     .run(sessionId, CLIPPED_STATUS);
   return result.changes;
+}
+
+export function deleteClippedReadings(sessionId: number): number {
+  return db
+    .prepare('DELETE FROM session_readings WHERE session_id = ? AND upload_status = ?')
+    .run(sessionId, CLIPPED_STATUS).changes;
 }
 
 export function getSessionStats(sessionId: number): SessionStats {
@@ -870,6 +957,7 @@ export function resetKiosk(): void {
     db.prepare('DELETE FROM devices').run();
     db.prepare('DELETE FROM topic_overrides').run();
     db.prepare('DELETE FROM sensor_calibration').run();
+    db.prepare('DELETE FROM element_vorgaben').run();
     db.prepare(
       `DELETE FROM meta WHERE key NOT IN (${RESET_PRESERVED_META.map(() => '?').join(',')})`
     ).run(...RESET_PRESERVED_META);

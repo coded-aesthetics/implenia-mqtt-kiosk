@@ -15,7 +15,6 @@ interface ExportOption {
   stream: string;
   label: string;
   count: number;
-  /** Already written to a file. Until every stream is, the data is only here. */
   exported: boolean;
 }
 
@@ -27,10 +26,22 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
   const [lastUploadResult, setLastUploadResult] = useState<'uploaded' | 'partial' | null>(null);
   const [emptyWarning, setEmptyWarning] = useState(false);
   const [exportOptions, setExportOptions] = useState<ExportOption[]>([]);
-  const [unclipPending, setUnclipPending] = useState(false);
-  const [unclipped, setUnclipped] = useState<number | null>(null);
-  // Bumped after a download so the ✓ marks appear without a page reload.
   const [exportTick, setExportTick] = useState(0);
+
+  // Remember the element name across recording → upload → idle transitions.
+  // recordingState.elementName goes null after upload completes, but the
+  // "Wiederaufnehmen" button still needs the name.
+  const [lastElementName, setLastElementName] = useState<string | null>(null);
+  useEffect(() => {
+    if (recordingState.elementName) {
+      setLastElementName(recordingState.elementName);
+    }
+  }, [recordingState.elementName]);
+  const effectiveElementName = recordingState.elementName ?? lastElementName;
+
+  // "Wiederaufnehmen" state (undo auto-completion after upload)
+  const [resumePending, setResumePending] = useState(false);
+  const [resumed, setResumed] = useState(false);
 
   // Determine current display status
   const status: SessionStatus = (() => {
@@ -47,10 +58,11 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     if (recordingState.active) {
       setLastUploadResult(null);
       setEmptyWarning(false);
-      setUnclipPending(false);
-      setUnclipped(null);
+      setResumePending(false);
+      setResumed(false);
+      setLastElementName(recordingState.elementName);
     }
-  }, [recordingState.active]);
+  }, [recordingState.active, recordingState.elementName]);
 
   // Track upload completion
   useEffect(() => {
@@ -73,9 +85,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     return () => clearTimeout(id);
   }, [emptyWarning]);
 
-  // Fetch which streams can be exported once a session has ended. Which streams
-  // exist is driven by the machine's CSV (Stream column); only those with
-  // recorded data are offered — no empty-file dead-ends.
+  // Fetch which streams can be exported once a session has ended.
   useEffect(() => {
     const sessionId = recordingState.sessionId;
     if (status !== 'ended' || !sessionId) {
@@ -96,8 +106,9 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     };
   }, [status, recordingState.sessionId, exportTick]);
 
-  // Only show on element page, or if recording is active for any element
-  if (currentPage !== 'element' && currentPage !== 'bohren' && !recordingState.active) return null;
+  // Show on element/bohren pages, while recording, or while showing post-upload state
+  const hasPostUploadState = lastUploadResult !== null || resumed || emptyWarning;
+  if (currentPage !== 'element' && currentPage !== 'bohren' && !recordingState.active && !hasPostUploadState) return null;
 
   async function startRecording() {
     if (!elementName) return;
@@ -160,43 +171,13 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
 
   function exportSession(stream: string) {
     if (!recordingState.sessionId) return;
-    // Attachment response triggers a download without navigating away.
     const a = document.createElement('a');
     a.href = `/api/recording/${recordingState.sessionId}/export?stream=${encodeURIComponent(stream)}`;
     a.download = '';
     document.body.appendChild(a);
     a.click();
     a.remove();
-    // The download is a plain navigation, so there is no completion event to
-    // wait for. Re-read the options shortly after: the server has recorded the
-    // export by then, and the worker sees which stream is still only on the
-    // kiosk.
     setTimeout(() => setExportTick((n) => n + 1), 1500);
-  }
-
-  /**
-   * Put the readings held back as a Rohrwechsel back in the upload queue.
-   *
-   * The recovery path for a Klemmbacke threshold set wrong: those readings are
-   * in no upload and in no exported file, and a reset would delete them.
-   */
-  async function unclip() {
-    if (!recordingState.sessionId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/recording/sessions/${recordingState.sessionId}/unclip`, {
-        method: 'POST',
-      });
-      const data = (await res.json()) as { released?: number; error?: string };
-      if (!res.ok) throw new Error(data.error ?? `Fehler ${res.status}`);
-      setUnclipped(data.released ?? 0);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setUnclipPending(false);
-      setLoading(false);
-    }
   }
 
   async function upload() {
@@ -212,6 +193,29 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
       }
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function resumeElement() {
+    const name = effectiveElementName;
+    if (!name) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/elements/${encodeURIComponent(name)}/complete`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `Fehler ${res.status}`);
+      }
+      setResumed(true);
+      setResumePending(false);
+    } catch (err) {
+      setError((err as Error).message);
+      setResumePending(false);
     } finally {
       setLoading(false);
     }
@@ -282,12 +286,19 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
         <div style={styles.recordingRow}>
           <span style={styles.count}>{recordingState.readingCount} Messwerte aufgezeichnet</span>
           {modeToggle}
+          {/*
+            Auto-upload normally carries the session straight from here to
+            "uploading", so reaching this state means it could not: the kiosk
+            was offline when the recording stopped, or a restart interrupted the
+            attempt. The session then blocks both finishing this element and
+            starting the next one, so there has to be a way out by hand.
+          */}
           <button
             style={{ ...styles.button, ...styles.uploadButton }}
             onClick={upload}
             disabled={loading}
           >
-            {loading ? 'Wird vorbereitet...' : 'Daten hochladen'}
+            {loading ? 'Wird hochgeladen...' : 'Daten hochladen'}
           </button>
           {exportOptions.map((opt) => (
             <button
@@ -304,22 +315,6 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
               Noch nicht exportiert:{' '}
               {exportOptions.filter((o) => !o.exported).map((o) => o.label).join(', ')}
             </span>
-          )}
-          {unclipped !== null && (
-            <span style={styles.count}>
-              {unclipped} Messwerte freigegeben — jetzt hochladen
-            </span>
-          )}
-          {unclipped === null && recordingState.clippedCount > 0 && (
-            <button
-              style={unclipPending ? styles.unclipButtonConfirm : styles.unclipButton}
-              onClick={() => { if (unclipPending) unclip(); else setUnclipPending(true); }}
-              disabled={loading}
-            >
-              {unclipPending
-                ? 'Wirklich freigeben?'
-                : `${recordingState.clippedCount} Messwerte vom Rohrwechsel freigeben`}
-            </button>
           )}
         </div>
       )}
@@ -342,10 +337,27 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
         </div>
       )}
 
-      {status === 'uploaded' && (
+      {status === 'uploaded' && !resumed && (
         <div style={styles.recordingRow}>
           <span style={styles.successIcon}>✓</span>
           <span style={styles.successLabel}>Erfolgreich hochgeladen</span>
+          <button
+            style={{
+              ...styles.button,
+              ...(resumePending ? styles.resumeButtonConfirm : styles.resumeButtonDefault),
+            }}
+            onClick={() => { if (resumePending) resumeElement(); else setResumePending(true); }}
+            disabled={loading}
+          >
+            {resumePending ? 'Wirklich wiederaufnehmen?' : 'Wiederaufnehmen'}
+          </button>
+        </div>
+      )}
+
+      {resumed && (
+        <div style={styles.recordingRow}>
+          <span style={styles.successIcon}>✓</span>
+          <span style={styles.successLabel}>Element wiederaufgenommen</span>
         </div>
       )}
 
@@ -419,36 +431,6 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: 'var(--color-danger-strong)',
     color: '#fff',
   },
-  uploadButton: {
-    backgroundColor: 'var(--color-success-strong)',
-    color: '#fff',
-  },
-  unclipButton: {
-    border: 'none',
-    borderRadius: '8px',
-    fontSize: '1.1rem',
-    fontWeight: 700,
-    cursor: 'pointer',
-    padding: '0.75rem 2rem',
-    minHeight: '52px',
-    minWidth: '180px',
-    textAlign: 'center',
-    backgroundColor: 'var(--border)',
-    color: 'var(--color-warning-text)',
-  },
-  unclipButtonConfirm: {
-    border: 'none',
-    borderRadius: '8px',
-    fontSize: '1.1rem',
-    fontWeight: 700,
-    cursor: 'pointer',
-    padding: '0.75rem 2rem',
-    minHeight: '52px',
-    minWidth: '180px',
-    textAlign: 'center',
-    backgroundColor: 'var(--color-warning)',
-    color: '#fff',
-  },
   exportButton: {
     backgroundColor: 'var(--color-accent-strong)',
     color: '#fff',
@@ -459,6 +441,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   retryButton: {
     backgroundColor: 'var(--color-warning)',
+    color: '#fff',
+  },
+  uploadButton: {
+    backgroundColor: 'var(--color-accent-strong)',
+    color: '#fff',
+  },
+  resumeButtonDefault: {
+    backgroundColor: 'var(--color-accent-strong)',
+    color: '#fff',
+  },
+  resumeButtonConfirm: {
+    backgroundColor: 'var(--color-accent)',
     color: '#fff',
   },
   redDot: {

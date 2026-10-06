@@ -44,6 +44,27 @@ function createSessionWithReadings(
 }
 
 describe('uploadSession', () => {
+  it('uploads a non-numeric value on a float sensor as a gap', async () => {
+    // A rig that formats its floats in C writes "nan", which lands in
+    // value_text. Sent as a string it fails the backend's validation with a
+    // 422 — and the backend rejects the *whole* batch, so one junk reading
+    // costs up to CHUNK_SIZE good ones and drops the session to `partial`.
+    apiFn.mockClear();
+    const sessionId = createSessionWithReadings([
+      { valueNumeric: 1.5, valueText: null },
+      { valueNumeric: null, valueText: 'nan' },
+      { valueNumeric: 3.0, valueText: null },
+    ]);
+
+    apiFn.mockResolvedValueOnce({});
+    const result = await recording.uploadSession(sessionId);
+
+    const [, opts] = apiFn.mock.calls[0];
+    const payload = opts.body.readings as Array<{ value: unknown }>;
+    expect(payload.map((p) => p.value)).toEqual([1.5, null, 3.0]);
+    expect(result.status).toBe('uploaded');
+  });
+
   it('sends a lone null between values (edge of its own run)', async () => {
     apiFn.mockClear();
     const sessionId = createSessionWithReadings([
@@ -126,6 +147,35 @@ describe('uploadSession', () => {
     expect(stats.uploaded).toBe(2);
     expect(stats.pending).toBe(0);
     expect(stats.failed).toBe(0);
+  });
+
+  it('deletes clipped readings after successful upload', async () => {
+    apiFn.mockClear();
+    apiFn.mockResolvedValueOnce({});
+
+    const sensorMap = {
+      testsensor: { sensorId: 'sensor-abc', sensorType: 'float' },
+    };
+    const sessionId = db.createSession('test-clip-delete', JSON.stringify(sensorMap));
+    db.endSession(sessionId);
+
+    const baseTime = Date.now();
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 1.0, null, { receivedAt: baseTime });
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 2.0, null, { receivedAt: baseTime + 1 });
+    // Insert clipped readings directly
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 99.0, null, { receivedAt: baseTime + 2, clipped: true });
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 98.0, null, { receivedAt: baseTime + 3, clipped: true });
+
+    const statsBefore = db.getSessionStats(sessionId);
+    expect(statsBefore.clipped).toBe(2);
+    expect(statsBefore.pending).toBe(2);
+
+    await recording.uploadSession(sessionId);
+
+    const statsAfter = db.getSessionStats(sessionId);
+    expect(statsAfter.uploaded).toBe(2);
+    expect(statsAfter.clipped).toBe(0);
+    expect(statsAfter.total).toBe(2);
   });
 
   it('deduplicates readings with the same timestamp, keeping the last value', async () => {

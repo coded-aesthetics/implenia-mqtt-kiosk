@@ -216,6 +216,40 @@ export interface VorgabenData {
   int_float_sensors?: Record<string, unknown>;
 }
 
+/**
+ * An element's vorgaben, falling back to the kiosk's cache.
+ *
+ * The shift assignment only carries unfinished elements, so a pillar resumed
+ * on a later day has no vorgaben in `fromShift` — no geology profile and no
+ * Soll values. The server remembers what it last saw, which also covers the
+ * element being resumed with no connectivity. The live payload always wins
+ * when it has an entry, so an edit in the portal is never masked by the cache.
+ */
+export function useElementVorgaben(
+  elementName: string | null,
+  fromShift: VorgabenData | null,
+): VorgabenData | null {
+  const [cached, setCached] = useState<VorgabenData | null>(null);
+
+  useEffect(() => {
+    if (!elementName || fromShift) {
+      setCached(null);
+      return;
+    }
+    let active = true;
+    fetch(`/api/elements/${encodeURIComponent(elementName)}/vorgaben`)
+      .then(async (r) => {
+        if (!r.ok || !active) return;
+        const data = await r.json();
+        if (active) setCached(data.vorgaben ?? null);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [elementName, fromShift]);
+
+  return fromShift ?? cached;
+}
+
 // --- Element sensor definitions ---
 
 export interface SensorMeta {
