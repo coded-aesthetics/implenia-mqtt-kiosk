@@ -4,6 +4,12 @@ import { ingestion, isOperatingMode, type OperatingMode, type SensorMapEntry } f
 import type { DrillStatus } from './rohrwechsel.js';
 import { createLogger, onLogEntry, type LogEntry } from './logger.js';
 import { config } from './config.js';
+import { connectivity } from './connectivity.js';
+import {
+  completionStamp,
+  findCompletionSensorName,
+  writeElementCompletion,
+} from './element-completion.js';
 import {
   createSession,
   endSession,
@@ -13,6 +19,7 @@ import {
   getSessionUploadGroups,
   getSessionReadingCount,
   getSessionStats,
+  getSessions,
   insertSessionReading,
   markSessionReadingsUploaded,
   markSessionReadingsFailed,
@@ -55,11 +62,6 @@ export interface RecordingState {
   rohrwechsel: DrillStatus | null;
   /** What the rig is doing. Null when nothing is being recorded. */
   operatingMode: OperatingMode | null;
-  /**
-   * Readings held back as a Rohrwechsel. The recording bar offers to release
-   * them, so a threshold set wrong does not cost a shift.
-   */
-  clippedCount: number;
 }
 
 export interface UploadProgress {
@@ -68,6 +70,31 @@ export interface UploadProgress {
   sensorsCompleted: number;
   sensorsFailed: number;
   currentSensor: string | null;
+}
+
+/**
+ * A recorded value in the shape its sensor's endpoint accepts.
+ *
+ * A numeric sensor must never be handed a string: the backend validates the
+ * whole batch and rejects all of it with a 422 over a single bad element, so one
+ * junk reading costs up to CHUNK_SIZE good ones and drops the session to
+ * `partial`. A value that is not a finite number is therefore uploaded as a gap
+ * (`null`), which is what it means — the rig had nothing to report.
+ *
+ * This backstops `parsePayload`, which already maps the non-finite spellings it
+ * knows to null. It cannot be the only guard: readings recorded before a
+ * spelling was recognised are already in SQLite as text, and they still have to
+ * upload.
+ */
+function uploadValue(
+  raw: number | string | null,
+  sensorType: string,
+): number | string | null {
+  if (raw === null) return null;
+  if (sensorType === 'string') return String(raw);
+  if (sensorType !== 'float' && sensorType !== 'int') return raw;
+  const num = typeof raw === 'number' ? raw : Number(raw);
+  return Number.isFinite(num) ? num : null;
 }
 
 // Map sensor_* array key to upload endpoint type suffix
@@ -245,7 +272,41 @@ export function abortRecording(): void {
   }
 }
 
-export async function uploadSession(
+/**
+ * The upload currently running for a session, keyed by session id.
+ *
+ * Three paths start an upload — the stop route, the connectivity watcher and
+ * the boot sweep — and nothing stops two of them from picking the same session
+ * within the same second: `uploading` is only written once the first attempt is
+ * already underway. Two concurrent passes read the same `pending` rows, send
+ * them twice, and then race on the session's final status: the one that
+ * finishes second overwrites it, so a session every reading of which landed can
+ * end up `partial` (its rows marked `failed` by the loser of the race), which
+ * the recording bar then offers to retry forever.
+ *
+ * A second caller therefore joins the running upload instead of starting one.
+ * It gets the same result, which is what it would have computed anyway.
+ */
+const uploadsInFlight = new Map<number, Promise<{ status: Session['status'] }>>();
+
+export function uploadSession(
+  sessionId: number,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<{ status: Session['status'] }> {
+  const running = uploadsInFlight.get(sessionId);
+  if (running) {
+    log.info('Upload for session %d is already running — joining it', sessionId);
+    return running;
+  }
+
+  const attempt = runUpload(sessionId, onProgress).finally(() => {
+    uploadsInFlight.delete(sessionId);
+  });
+  uploadsInFlight.set(sessionId, attempt);
+  return attempt;
+}
+
+async function runUpload(
   sessionId: number,
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<{ status: Session['status'] }> {
@@ -285,17 +346,21 @@ export async function uploadSession(
 
     const allIds = group.readings.map((r) => r.id);
 
-    const isStringSensor = group.sensorType === 'string';
-
     // Deduplicate by timestamp — at high ingest rates (replay 60x, fast MQTT)
     // multiple readings can share the same millisecond. The backend's ON CONFLICT
     // rejects batches with duplicate dates, so we keep the last value per timestamp.
     const byDate = new Map<string, number | string | null>();
+    let coerced = 0;
     for (const r of group.readings) {
       const raw = r.valueNumeric ?? r.valueText ?? null;
-      byDate.set(
-        new Date(r.receivedAt).toISOString(),
-        raw === null ? null : isStringSensor ? String(raw) : raw,
+      const value = uploadValue(raw, group.sensorType);
+      if (value === null && raw !== null) coerced++;
+      byDate.set(new Date(r.receivedAt).toISOString(), value);
+    }
+    if (coerced > 0) {
+      log.warn(
+        'Sensor %s: %d non-numeric reading(s) uploaded as gaps',
+        sensorName(group.sensorId), coerced,
       );
     }
 
@@ -348,6 +413,16 @@ export async function uploadSession(
   const finalStatus: Session['status'] = sensorsFailed === 0 ? 'uploaded' : 'partial';
   updateSessionStatus(sessionId, finalStatus);
 
+  // Only an upload that actually put readings on the platform finishes the
+  // element. A session with nothing to send also ends as `uploaded` — it has
+  // no pending rows, which is the case for an empty session and for one whose
+  // every reading was clipped as a Rohrwechsel — and stamping an
+  // Ausführungsdatum for it would report a pillar as produced on the strength
+  // of no data at all, and drop it out of the shift assignment.
+  if (finalStatus === 'uploaded' && getSessionStats(sessionId).uploaded > 0) {
+    await autoMarkComplete(session.element_name);
+  }
+
   // Final progress
   onProgress?.({
     sessionId,
@@ -373,7 +448,6 @@ export function getRecordingState(): RecordingState {
       readingCount: getSessionReadingCount(active.id),
       rohrwechsel: ingestion.drillStatus,
       operatingMode: ingestion.operatingMode,
-      clippedCount: getSessionStats(active.id).clipped,
     };
   }
 
@@ -391,13 +465,99 @@ export function getRecordingState(): RecordingState {
         readingCount: count,
         rohrwechsel: null,
         operatingMode: storedMode && isOperatingMode(storedMode) ? storedMode : null,
-        clippedCount: getSessionStats(recent.id).clipped,
       };
     }
   }
 
   return {
     active: false, sessionId: null, elementName: null, startedAt: null,
-    readingCount: 0, rohrwechsel: null, operatingMode: null, clippedCount: 0,
+    readingCount: 0, rohrwechsel: null, operatingMode: null,
   };
+}
+
+async function autoMarkComplete(elementName: string): Promise<void> {
+  const completionSensor = findCompletionSensorName();
+  if (!completionSensor) {
+    log.warn('No is_completed sensor found — skipping auto-completion for "%s"', elementName);
+    return;
+  }
+
+  const stamp = completionStamp();
+  try {
+    await writeElementCompletion(elementName, completionSensor, stamp);
+    log.info(
+      'Auto-marked element "%s" as complete (Ausführungsdatum = %s)',
+      elementName,
+      stamp,
+    );
+  } catch (err) {
+    log.error(
+      'Failed to auto-mark element "%s" as complete: %s',
+      elementName,
+      (err as Error).message,
+    );
+  }
+}
+
+/**
+ * Upload a session in the background, broadcasting progress via the provided
+ * callback. Errors are logged, never thrown — the session stays `ended` or
+ * `partial` for retry.
+ */
+export async function tryAutoUpload(
+  sessionId: number,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<void> {
+  try {
+    await uploadSession(sessionId, onProgress);
+  } catch (err) {
+    log.error('Auto-upload failed for session %d: %s', sessionId, (err as Error).message);
+  }
+}
+
+/**
+ * Upload every session still waiting in `ended` or `partial`.
+ *
+ * Sequential on purpose: these run against the same API the live upload uses,
+ * and a site on a mobile link does not benefit from racing them.
+ */
+async function uploadPendingSessions(
+  reason: string,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<void> {
+  for (const s of getSessions()) {
+    if (s.status !== 'ended' && s.status !== 'partial') continue;
+    if (getSessionReadingCount(s.id) === 0) continue;
+    log.info('%s — auto-uploading session %d ("%s")', reason, s.id, s.element_name);
+    await tryAutoUpload(s.id, onProgress);
+  }
+}
+
+/**
+ * Watch connectivity and upload any sessions waiting in `ended` or `partial`
+ * status when the kiosk comes back online.
+ */
+export function autoUploadOnConnectivity(
+  onProgress?: (progress: UploadProgress) => void,
+): void {
+  connectivity.on('online', () => {
+    void uploadPendingSessions('Connectivity restored', onProgress);
+  });
+}
+
+/**
+ * Upload sessions left waiting by a restart, once at boot.
+ *
+ * The connectivity watcher only fires on a transition, so a kiosk that was
+ * already online when it started would otherwise sit on a finished element
+ * until the link happened to drop and come back. That session also blocks the
+ * recording bar, so waiting for a coincidence is the wrong default.
+ *
+ * Not awaited by the caller: boot must not block on the network.
+ */
+export function uploadPendingSessionsAtBoot(
+  onProgress?: (progress: UploadProgress) => void,
+): void {
+  if (!connectivity.isOnline()) return;
+  void uploadPendingSessions('Pending upload found at startup', onProgress);
 }

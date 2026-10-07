@@ -7,7 +7,7 @@ import { config } from './config.js';
 import { createLogger, logger } from './logger.js';
 import { connectivity } from './connectivity.js';
 import { ingestion } from './ingestion.js';
-import { setupWebSocket, stopWebSocket } from './websocket.js';
+import { setupWebSocket, stopWebSocket, broadcastMessage } from './websocket.js';
 import { updater } from './updater.js';
 import { registerDataRoutes } from './routes/data.js';
 import { registerStatusRoutes } from './routes/status.js';
@@ -15,12 +15,14 @@ import { registerConfigRoutes } from './routes/config.js';
 import { registerImpleniaRoutes } from './routes/implenia.js';
 import { registerRecordingRoutes } from './routes/recording.js';
 import { registerDeviceRoutes } from './routes/devices.js';
-import { ensureLogSensor, resumeRecording } from './recording.js';
+import {
+  ensureLogSensor, resumeRecording, autoUploadOnConnectivity, uploadPendingSessionsAtBoot,
+} from './recording.js';
 import { registerLogRoutes } from './routes/logs.js';
 import { registerVerfahrenRoutes } from './routes/verfahren.js';
 import { registerTranscribeRoutes } from './routes/transcribe.js';
 import { isWhisperAvailable } from './whisper.js';
-import { close as closeDb } from './db.js';
+import { close as closeDb, reclaimStrandedUploads } from './db.js';
 const log = createLogger('server');
 
 const app = Fastify({ loggerInstance: logger as FastifyBaseLogger });
@@ -67,9 +69,23 @@ async function start(): Promise<void> {
   const resumed = resumeRecording();
   if (resumed) log.info('Recording resumed after restart (session %d)', resumed.sessionId);
 
+  // A restart mid-upload leaves the session marked `uploading`, which nothing
+  // else ever clears — and that row pins the recording bar, so the kiosk can
+  // neither finish the element nor start the next one.
+  const reclaimed = reclaimStrandedUploads();
+  if (reclaimed > 0) {
+    log.warn('Reclaimed %d session(s) interrupted mid-upload — queued for retry', reclaimed);
+  }
+
   ingestion.start();
   updater.start();
   ensureLogSensor().catch(() => {});
+  autoUploadOnConnectivity((progress) => {
+    broadcastMessage({ type: 'upload-progress', ...progress });
+  });
+  uploadPendingSessionsAtBoot((progress) => {
+    broadcastMessage({ type: 'upload-progress', ...progress });
+  });
   isWhisperAvailable();
 
   // Start HTTP server

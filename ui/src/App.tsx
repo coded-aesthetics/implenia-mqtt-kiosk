@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useHashRouter, navigate } from './hooks/useHashRouter';
-import { useConfig, useShiftAssignment, useActiveVerfahren } from './hooks/useImplenia';
+import { useConfig, useShiftAssignment, useActiveVerfahren, useElementVorgaben } from './hooks/useImplenia';
 import { useVoiceCommands } from './hooks/useVoiceCommands';
 import { Header } from './components/Header';
 import { UpdateBanner } from './components/UpdateBanner';
@@ -49,6 +49,14 @@ export function App() {
     () => shift.data?.measuring_devices.map((d) => d.name) ?? [],
     [shift.data],
   );
+
+  // Resolved here rather than in the switch below, because falling back to the
+  // kiosk's vorgaben cache is a hook and the switch runs past early returns.
+  const shiftVorgaben = useMemo(
+    () => shift.data?.measuring_devices.find((d) => d.name === route.params.name)?.vorgaben ?? null,
+    [shift.data, route.params.name],
+  );
+  const deviceVorgaben = useElementVorgaben(route.params.name ?? null, shiftVorgaben);
 
   // The wizard is a route, so its visibility cannot be knocked out by the
   // state it writes. An unconfigured kiosk is redirected into it; from there
@@ -151,9 +159,6 @@ export function App() {
     }
     case 'bohren':
     case 'element': {
-      const deviceVorgaben = shift.data?.measuring_devices.find(
-        (d) => d.name === route.params.name,
-      )?.vorgaben ?? null;
       if (setup.verfahren === 'injektionsbohren') {
         if (isVerpressenMode(recordingState.operatingMode)) {
           content = (

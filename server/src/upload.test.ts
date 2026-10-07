@@ -44,6 +44,27 @@ function createSessionWithReadings(
 }
 
 describe('uploadSession', () => {
+  it('uploads a non-numeric value on a float sensor as a gap', async () => {
+    // A rig that formats its floats in C writes "nan", which lands in
+    // value_text. Sent as a string it fails the backend's validation with a
+    // 422 — and the backend rejects the *whole* batch, so one junk reading
+    // costs up to CHUNK_SIZE good ones and drops the session to `partial`.
+    apiFn.mockClear();
+    const sessionId = createSessionWithReadings([
+      { valueNumeric: 1.5, valueText: null },
+      { valueNumeric: null, valueText: 'nan' },
+      { valueNumeric: 3.0, valueText: null },
+    ]);
+
+    apiFn.mockResolvedValueOnce({});
+    const result = await recording.uploadSession(sessionId);
+
+    const [, opts] = apiFn.mock.calls[0];
+    const payload = opts.body.readings as Array<{ value: unknown }>;
+    expect(payload.map((p) => p.value)).toEqual([1.5, null, 3.0]);
+    expect(result.status).toBe('uploaded');
+  });
+
   it('sends a lone null between values (edge of its own run)', async () => {
     apiFn.mockClear();
     const sessionId = createSessionWithReadings([
@@ -126,6 +147,83 @@ describe('uploadSession', () => {
     expect(stats.uploaded).toBe(2);
     expect(stats.pending).toBe(0);
     expect(stats.failed).toBe(0);
+  });
+
+  it('keeps clipped readings after a successful upload', async () => {
+    // Clipping is a judgement the kiosk made from a threshold typed in on
+    // site, and it is wrong often enough that releasing those readings is a
+    // documented recovery path. The upload is exactly when a wrong threshold
+    // becomes visible, so deleting them here would destroy the only copy of
+    // data the operator can still ask for.
+    apiFn.mockClear();
+    apiFn.mockResolvedValueOnce({});
+
+    const sensorMap = {
+      testsensor: { sensorId: 'sensor-abc', sensorType: 'float' },
+    };
+    const sessionId = db.createSession('test-clip-keep', JSON.stringify(sensorMap));
+    db.endSession(sessionId);
+
+    const baseTime = Date.now();
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 1.0, null, { receivedAt: baseTime });
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 2.0, null, { receivedAt: baseTime + 1 });
+    // Insert clipped readings directly
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 99.0, null, { receivedAt: baseTime + 2, clipped: true });
+    db.insertSessionReading(sessionId, 'testsensor', 'sensor-abc', 'float', 98.0, null, { receivedAt: baseTime + 3, clipped: true });
+
+    const statsBefore = db.getSessionStats(sessionId);
+    expect(statsBefore.clipped).toBe(2);
+    expect(statsBefore.pending).toBe(2);
+
+    await recording.uploadSession(sessionId);
+
+    const statsAfter = db.getSessionStats(sessionId);
+    expect(statsAfter.uploaded).toBe(2);
+    expect(statsAfter.clipped).toBe(2);
+    expect(statsAfter.total).toBe(4);
+
+    // And they are still releasable afterwards.
+    expect(db.unclipSessionReadings(sessionId)).toBe(2);
+  });
+
+  it('runs one upload when two callers race for the same session', async () => {
+    // The stop route, the connectivity watcher and the boot sweep can all pick
+    // the same session: `uploading` is only written once an attempt is already
+    // underway. Two passes would send the same rows twice and then race on the
+    // session's final status.
+    apiFn.mockClear();
+    apiFn.mockResolvedValue({});
+
+    const sessionId = createSessionWithReadings([
+      { valueNumeric: 1.0, valueText: null },
+      { valueNumeric: 2.0, valueText: null },
+    ]);
+
+    const [first, second] = await Promise.all([
+      recording.uploadSession(sessionId),
+      recording.uploadSession(sessionId),
+    ]);
+
+    expect(apiFn).toHaveBeenCalledOnce();
+    expect(first.status).toBe('uploaded');
+    expect(second).toEqual(first);
+    expect(db.getSessionById(sessionId)?.status).toBe('uploaded');
+    expect(db.getSessionStats(sessionId).failed).toBe(0);
+  });
+
+  it('allows a retry once the first upload has finished', async () => {
+    apiFn.mockClear();
+    apiFn.mockRejectedValueOnce(new Error('offline'));
+
+    const sessionId = createSessionWithReadings([{ valueNumeric: 7.0, valueText: null }]);
+
+    const failed = await recording.uploadSession(sessionId);
+    expect(failed.status).toBe('partial');
+
+    apiFn.mockResolvedValueOnce({});
+    const retried = await recording.uploadSession(sessionId);
+    expect(retried.status).toBe('uploaded');
+    expect(db.getSessionStats(sessionId).uploaded).toBe(1);
   });
 
   it('deduplicates readings with the same timestamp, keeping the last value', async () => {
