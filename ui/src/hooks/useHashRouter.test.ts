@@ -83,3 +83,25 @@ describe('parseRoute', () => {
     expect(r.query.from).toBe('config');
   });
 });
+
+describe('parseRoute: the geology sign-off', () => {
+  it('routes the bare path', () => {
+    expect(parseRoute('#/geologie')).toMatchObject({ page: 'geologie', params: {} });
+  });
+
+  it('carries the element name when one is given', () => {
+    expect(parseRoute('#/geologie/P-01')).toMatchObject({
+      page: 'geologie',
+      params: { name: 'P-01' },
+    });
+  });
+
+  it('decodes an element name with a slash in it', () => {
+    // Element names with slashes are real — they once broke sensor resolution.
+    expect(parseRoute(`#/geologie/${encodeURIComponent('A/12')}`).params.name).toBe('A/12');
+  });
+
+  it('does not swallow a similarly named path', () => {
+    expect(parseRoute('#/geologien').page).toBe('home');
+  });
+});
