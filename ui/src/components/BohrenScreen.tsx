@@ -11,6 +11,8 @@ import { useSensorValues } from '../hooks/useSensorValues';
 import { useClampState } from '../hooks/useClampState';
 import { buildSchichten, collectVorgabeEntries } from '../utils/vorgaben';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
+import { GeologieSpalte } from './GeologieSpalte';
+import type { GeologieErfassung } from '../hooks/useGeologieErfassung';
 
 export interface GaugeSlot {
   sensor: string;
@@ -52,9 +54,15 @@ interface Props {
    * button offer one boundary while the chart highlighted another.
    */
   markierteGrenze?: number | null;
+  /**
+   * Live geology entry. While its quick picker is open this column shows the
+   * choices instead of the profile — see GeologieSpalte for why that is better
+   * than a screen of its own.
+   */
+  geologie?: GeologieErfassung;
 }
 
-export function BohrenScreen({ readings, vorgaben, config, recordingState, markierteGrenze }: Props) {
+export function BohrenScreen({ readings, vorgaben, config, recordingState, markierteGrenze, geologie }: Props) {
   const geoRef = useRef<HTMLDivElement>(null);
   const [geoHeight, setGeoHeight] = useState(0);
 
@@ -92,7 +100,19 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
               <span style={styles.depthUnit}>m</span>
             </div>
           </div>
-          {geologyProfile && (
+          {geologie?.auswahl ? (
+            <GeologieSpalte
+              art={geologie.auswahl}
+              nrs={geologie.kandidaten}
+              aktuelleNr={geologie.aktuelleArt}
+              onWaehlen={geologie.erfasse}
+              // "Andere" only where it leads somewhere: for soils, always (the
+              // ground can differ from the plan), and for a Vorgabe with more
+              // types than the column shows. The six obstruction kinds are all
+              // of them, so there is nothing more to offer.
+              onAndere={geologie.auswahl === 'schicht' ? geologie.oeffneAndere : undefined}
+            />
+          ) : geologyProfile ? (
             <div ref={geoRef} style={styles.geoContainer}>
               <BohrprofilLog
                 schichten={geologyProfile.schichten}
@@ -105,8 +125,9 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
                 styleOverrides={geoStyles}
               />
             </div>
+          ) : (
+            <div style={styles.geoPlaceholder} />
           )}
-          {!geologyProfile && <div style={styles.geoPlaceholder} />}
         </div>
 
         {/* Right area: status row + gauges + bars */}

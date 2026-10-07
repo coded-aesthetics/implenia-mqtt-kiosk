@@ -123,12 +123,20 @@ export function App() {
     return buildSensorValues(readings).get(INJEKTIONSBOHREN_BOHREN.depthSensor) ?? null;
   }, [readings, setup.verfahren]);
 
+  /**
+   * Only the drilling screen has a profile column for the quick picker to take
+   * over. Elsewhere the full-screen picker is the only way to choose — which
+   * costs a screen change, but those Verfahren have no column to offer.
+   */
+  const spalteVerfuegbar = setup.verfahren === 'injektionsbohren';
+
   const geologie = useGeologieErfassung({
     sessionId: recordingState.sessionId,
     active: recordingState.active,
     operatingMode: recordingState.operatingMode,
     vorgabeSchichten,
     tiefe: liveTiefe,
+    spalteVerfuegbar,
   });
 
   // Comment queue (background whisper transcription + API posting)
@@ -273,6 +281,7 @@ export function App() {
               config={INJEKTIONSBOHREN_BOHREN}
               recordingState={recordingState}
               markierteGrenze={geologie.vorschlag?.tiefe ?? null}
+              geologie={geologie}
             />
           );
         }
@@ -348,16 +357,17 @@ export function App() {
         geologie={geologie}
       />
       {/*
-        The picker is opened from the recording bar but rendered here: it covers
-        the screen, so mounting it inside the bar would nest a full-viewport
-        overlay in a 76px-tall element.
+        The full DIN vocabulary, reached via "Andere" from the quick picker — or
+        directly on a screen with no profile column to host that. Rendered here
+        because it covers the screen, so mounting it inside the recording bar
+        would nest a full-viewport overlay in a 76px-tall element.
       */}
-      {geologie.picker && (
+      {geologie.vollbild && (
         <GeologiePicker
-          art={geologie.picker}
+          art={geologie.vollbild}
           untertitel={liveTiefe != null ? `Aktuelle Tiefe ${formatNumber(liveTiefe)} m` : undefined}
           onWaehlen={(nr, name) => geologie.erfasse(nr, name)}
-          onAbbrechen={geologie.schliessePicker}
+          onAbbrechen={geologie.schliesse}
         />
       )}
     </div>

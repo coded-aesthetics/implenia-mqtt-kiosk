@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import { grundBei } from '@coded-aesthetics/din4023/profile';
 import {
   vomServer, naechsteGrenze, kurzLabel, farbeVon, nameVon, istHindernis,
-  zumCommit, BODENARTEN, HINDERNISSE,
+  zumCommit, vorgabeArten, MAX_SPALTEN_KACHELN, BODENARTEN, HINDERNISSE,
 } from './geologie';
 
 const SAND = 5;
@@ -169,5 +170,92 @@ describe('zumCommit', () => {
   it('prefers a per-layer description over the DIN name', () => {
     expect(zumCommit([{ tiefe: 0, nr: SAND, beschreibung: 'Feinsand, humos' }])[0].name)
       .toBe('Feinsand, humos');
+  });
+});
+
+describe('vorgabeArten', () => {
+  it('lists the soil types the Vorgabe names, shallowest first', () => {
+    expect(vorgabeArten([
+      { tiefe: 0, nr: SAND }, { tiefe: 3, nr: SCHLUFF }, { tiefe: 7, nr: TON },
+    ])).toEqual([SAND, SCHLUFF, TON]);
+  });
+
+  it('collapses a repeated type to one choice', () => {
+    // S/U/S/T is three choices, not four: picking "the second sand" and "the
+    // first sand" are the same act.
+    expect(vorgabeArten([
+      { tiefe: 0, nr: SAND }, { tiefe: 2, nr: SCHLUFF },
+      { tiefe: 4, nr: SAND }, { tiefe: 6, nr: TON },
+    ])).toEqual([SAND, SCHLUFF, TON]);
+  });
+
+  it('orders by depth, not by the order the layers arrived in', () => {
+    expect(vorgabeArten([
+      { tiefe: 7, nr: TON }, { tiefe: 0, nr: SAND }, { tiefe: 3, nr: SCHLUFF },
+    ])).toEqual([SAND, SCHLUFF, TON]);
+  });
+
+  it('leaves obstructions out — they have their own list', () => {
+    expect(vorgabeArten([
+      { tiefe: 0, nr: SAND }, { tiefe: 2, nr: BETON }, { tiefe: 2.4, nr: SCHLUFF },
+    ])).toEqual([SAND, SCHLUFF]);
+  });
+
+  it('ignores unusable entries', () => {
+    expect(vorgabeArten([
+      { tiefe: 0, nr: SAND }, { tiefe: 1, nr: 0 },
+      { tiefe: 2, nr: -1 }, { tiefe: 3, nr: 2.5 },
+    ])).toEqual([SAND]);
+  });
+
+  it('is empty for an absent or empty profile', () => {
+    expect(vorgabeArten(null)).toEqual([]);
+    expect(vorgabeArten(undefined)).toEqual([]);
+    expect(vorgabeArten([])).toEqual([]);
+  });
+
+  it('leaves room for the Andere tile within the column', () => {
+    // The column holds eight 64px targets; the last is always Andere.
+    expect(MAX_SPALTEN_KACHELN).toBe(7);
+  });
+});
+
+describe('the ground an obstruction returns to', () => {
+  /*
+   * "Hindernis Ende" records one tap with no pick, which only works if the
+   * right answer is knowable. It is: the obstruction interrupted a layer the
+   * Vorgabe planned, and the Vorgabe holds only soils — never obstructions —
+   * so the planned ground at the current depth is always a soil to resume.
+   *
+   * useGeologieErfassung derives it with grundBei; these pin what that means,
+   * including the one case where it cannot answer and the picker has to open.
+   */
+  const vorgabe = [
+    { tiefe: 0, nr: SAND },
+    { tiefe: 3, nr: SCHLUFF },
+    { tiefe: 7, nr: TON },
+  ];
+
+  it('resumes the layer the obstruction interrupted', () => {
+    // Concrete met at 4.0 m, inside the planned schluff layer (3–7 m).
+    expect(grundBei(vorgabe, 4.2)).toBe(SCHLUFF);
+  });
+
+  it('resumes the right layer when the obstruction spans a planned boundary', () => {
+    // Met at 6.8 m, left at 7.2 m — below it the plan says ton, not schluff.
+    expect(grundBei(vorgabe, 7.2)).toBe(TON);
+  });
+
+  it('never resumes into an obstruction, because the plan holds none', () => {
+    const arten = vorgabeArten(vorgabe);
+    expect(arten.some(istHindernis)).toBe(false);
+    for (const tiefe of [0, 1.5, 3, 5, 7, 9]) {
+      const nr = grundBei(vorgabe, tiefe);
+      expect(nr === null || !istHindernis(nr), `at ${tiefe} m`).toBe(true);
+    }
+  });
+
+  it('answers nothing above the first layer, which is what opens the picker', () => {
+    expect(grundBei([{ tiefe: 2, nr: SAND }], 1)).toBeNull();
   });
 });

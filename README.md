@@ -425,9 +425,15 @@ POST /api/recording/stop                    → { geology?: [{ tiefe, nr, name?,
 
 ### During drilling
 
-Two oversized buttons in the **recording bar**. **Schicht** and **Hindernis** each open a full-screen tile grid — DIN 4023 hatch symbol, Kurzform and name per tile, 15 soils, 18 rock types and 6 obstruction kinds. Two taps, gloved, no text entry.
+Two oversized buttons in the **recording bar**, and the choices appear where the profile column is — not on a screen of their own. **Schicht** offers only the soils this element's Schichtauftrag actually names (typically three to five, distinct types ordered shallowest-first, with the one the plan expects at the current depth marked); **Hindernis** offers the six obstruction kinds. The depth hero, gauges and recording bar all stay put, so nothing about the screen changes for the second it takes to pick.
 
-An obstruction needs no thickness: tapping `Hindernis → Beton` starts a concrete layer at the current depth, and tapping `Schicht → Schluff` when the drill is through it ends that layer. Two ordinary layer changes, which is exactly what the uploaded series carries.
+Offering the plan's soils rather than the full vocabulary is the point: the operator is nearly always confirming a layer that was predicted, and 33 DIN types would be 33 ways to mis-tap. Unplanned ground is one more tap away behind **Andere…**, which opens the full grid — hatch symbol, Kurzform and name per tile, 15 soils, 18 rock types. Tapping the bar button again closes the list, so it needs no cancel tile.
+
+The column holds seven tiles plus Andere at a 64px target. A Vorgabe naming more distinct soils than that keeps the shallowest seven and leaves the rest to Andere, rather than shrinking targets below what a gloved hand can hit.
+
+An obstruction needs no thickness: tapping `Hindernis → Beton` starts a concrete layer at the current depth. While the drill is *inside* one, that button becomes **Hindernis Ende** and ending the obstruction is a **single tap with no pick at all** — the obstruction interrupted a layer the plan predicted, and `grundBei` says which, so the ground to resume is knowable. Where there is no plan to resume (nothing above the first planned layer, or no Vorgabe at all) it opens the soil picker instead. Either way the result is two ordinary layer changes, which is exactly what the uploaded series carries.
+
+"Inside an obstruction" is seeded from the server's last recorded code, not just from browser state, so a PM2 restart mid-obstruction does not strand the operator without the one-tap way out.
 
 They live in the bar rather than beside the profile for a space reason worth recording. The kiosk's chrome is a fixed budget at 1024x768, and in the left column the two buttons took 136px off a profile with 596px to work with. The bar is already 76px tall for its own controls, so 64px buttons cost **nothing** there — and geology entry is a recording action anyway, like Beenden.
 
@@ -599,7 +605,8 @@ ui/src/
     RecordingBar.tsx   — Session recording controls, geology entry, Rohrwechsel indicator
     PhaseStepper.tsx   — Bohren → Austausch → Einbauen → Auffüllen, in the header
     GeologieBestaetigung.tsx — Geology sign-off before a stop (editable DIN 4023 profile)
-    GeologiePicker.tsx — Full-screen DIN 4023 ground-type tile grid
+    GeologiePicker.tsx — Full-screen DIN 4023 tile grid, behind "Andere"
+    GeologieSpalte.tsx — Quick picker in the profile column: the plan's soils
     RohrwechselSettings.tsx — Klemmbacke topic, Rohrlänge, thresholds
     CalibrationPage.tsx — Per-sensor factor and offset, with live values
     UpdateUpload.tsx   — Manual update upload

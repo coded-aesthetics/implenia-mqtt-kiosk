@@ -52,6 +52,45 @@ export function farbeVon(nr: number): string {
   return e?.farbHex ?? 'var(--surface-3)';
 }
 
+/**
+ * The most tiles that fit the drilling screen's profile column.
+ *
+ * The column is ~519px tall and a tap target is 64px, so seven plus an
+ * "Andere" tile. A Vorgabe with more distinct types than that loses the
+ * deepest ones to the full picker rather than shrinking the tiles — a target
+ * too small for a gloved hand is worse than one more tap.
+ */
+export const MAX_SPALTEN_KACHELN = 7;
+
+/**
+ * The soil types this element's Vorgabe actually names, shallowest first.
+ *
+ * What the quick picker offers. The operator is nearly always confirming a
+ * layer the Schichtauftrag already predicted, so offering 33 DIN types to
+ * choose from is 33 ways to mis-tap; these are the three to five that can
+ * plausibly occur in this hole.
+ *
+ * Distinct types rather than layers: a S/U/S/T profile is three choices, not
+ * four, because picking "the second sand" and "the first sand" are the same
+ * act. Ordered by first appearance so the list still reads like the profile it
+ * replaces, top to bottom.
+ *
+ * Obstructions are excluded even if a Vorgabe somehow names one — they are not
+ * planned ground, and they have their own list.
+ */
+export function vorgabeArten(schichten: readonly Schicht[] | null | undefined): number[] {
+  if (!schichten) return [];
+  const gesehen = new Set<number>();
+  const arten: number[] = [];
+  for (const s of [...schichten].sort((a, b) => a.tiefe - b.tiefe)) {
+    if (!Number.isInteger(s.nr) || s.nr <= 0) continue;
+    if (istHindernis(s.nr) || gesehen.has(s.nr)) continue;
+    gesehen.add(s.nr);
+    arten.push(s.nr);
+  }
+  return arten;
+}
+
 export interface Profil {
   schichten: Schicht[];
   endTiefe: number;
