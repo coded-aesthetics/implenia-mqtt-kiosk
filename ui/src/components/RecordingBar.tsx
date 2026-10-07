@@ -296,20 +296,38 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     <span style={styles.recIcon} aria-label="Aufzeichnung läuft" />
   );
 
+  /*
+   * Two slots, always, so the bar never reflows.
+   *
+   * Left: the layer change. Pre-loaded with the expected answer near a planned
+   * boundary (one tap), otherwise it opens the quick picker in the profile
+   * column.
+   *
+   * Right: the obstruction. While the drill is *inside* one this becomes
+   * "Hindernis Ende" and needs no pick at all — the obstruction interrupted a
+   * planned layer and the plan says which, so leaving it is a single tap. That
+   * was two taps and a full-screen picker before.
+   */
   const geologieButtons = geologie?.verfuegbar ? (
     <>
       <button
         data-testid="geologie-schicht"
-        style={geologie.vorschlag ? styles.geoButtonVorschlag : styles.geoButton}
+        style={
+          geologie.auswahl === 'schicht' ? styles.geoButtonOffen
+            : geologie.vorschlag ? styles.geoButtonVorschlag
+              : styles.geoButton
+        }
         onClick={() => {
-          if (geologie.vorschlag) {
+          if (geologie.vorschlag && geologie.auswahl !== 'schicht') {
             geologie.erfasse(geologie.vorschlag.nr, nameVon(geologie.vorschlag.nr));
           } else {
-            geologie.oeffnePicker('schicht');
+            // Tapping again closes the list, so the button that opened it also
+            // dismisses it and the list needs no cancel tile of its own.
+            geologie.oeffne('schicht');
           }
         }}
       >
-        {geologie.vorschlag ? (
+        {geologie.vorschlag && geologie.auswahl !== 'schicht' ? (
           <>
             <Hatch nr={geologie.vorschlag.nr} />
             <span style={styles.geoLabel}>{nameVon(geologie.vorschlag.nr)}?</span>
@@ -318,13 +336,26 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
           <span style={styles.geoLabel}>Schicht</span>
         )}
       </button>
-      <button
-        data-testid="geologie-hindernis"
-        style={styles.geoButtonHindernis}
-        onClick={() => geologie.oeffnePicker('hindernis')}
-      >
-        Hindernis
-      </button>
+
+      {geologie.imHindernis ? (
+        <button
+          data-testid="geologie-hindernis"
+          style={styles.geoButtonHindernisEnde}
+          onClick={() => geologie.beendeHindernis()}
+        >
+          Hindernis Ende
+        </button>
+      ) : (
+        <button
+          data-testid="geologie-hindernis"
+          style={geologie.auswahl === 'hindernis'
+            ? styles.geoButtonHindernisOffen
+            : styles.geoButtonHindernis}
+          onClick={() => geologie.oeffne('hindernis')}
+        >
+          Hindernis
+        </button>
+      )}
     </>
   ) : null;
 
@@ -715,6 +746,52 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 'var(--radius-md)',
     backgroundColor: 'var(--surface-3)',
     color: 'var(--color-accent-strong)',
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  /** The quick picker is open in the column; tapping again closes it. */
+  geoButtonOffen: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '0.5rem',
+    minHeight: 'var(--tap-min)',
+    minWidth: '150px',
+    padding: '0 var(--space-md)',
+    border: '2px solid var(--color-accent)',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--color-accent)',
+    color: '#fff',
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  geoButtonHindernisOffen: {
+    minHeight: 'var(--tap-min)',
+    minWidth: '150px',
+    padding: '0 var(--space-md)',
+    border: '2px solid var(--color-warning)',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--color-warning)',
+    color: '#fff',
+    fontSize: 'var(--font-base)',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  /** Inside an obstruction: the one tap back to planned ground. */
+  geoButtonHindernisEnde: {
+    minHeight: 'var(--tap-min)',
+    minWidth: '150px',
+    padding: '0 var(--space-md)',
+    border: 'none',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--color-warning)',
+    color: '#fff',
+    fontSize: 'var(--font-base)',
+    fontWeight: 800,
     fontFamily: 'inherit',
     cursor: 'pointer',
     flexShrink: 0,
