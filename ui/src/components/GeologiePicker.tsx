@@ -23,12 +23,6 @@ interface Props {
   untertitel?: string;
   onWaehlen: (nr: number, name: string) => void;
   onAbbrechen: () => void;
-  /**
-   * Offered only when an existing layer is being changed. Tap-to-confirm, like
-   * every other destructive action in this app.
-   */
-  onEntfernen?: () => void;
-  entfernenBestaetigt?: boolean;
 }
 
 interface Sektion {
@@ -36,9 +30,7 @@ interface Sektion {
   eintraege: GeologieEintrag[];
 }
 
-export function GeologiePicker({
-  art, untertitel, onWaehlen, onAbbrechen, onEntfernen, entfernenBestaetigt,
-}: Props) {
+export function GeologiePicker({ art, untertitel, onWaehlen, onAbbrechen }: Props) {
   const sektionen: Sektion[] = art === 'hindernis'
     ? [{ titel: 'Hindernis', eintraege: HINDERNISSE }]
     : [
@@ -75,18 +67,6 @@ export function GeologiePicker({
           </div>
         ))}
       </div>
-
-      {onEntfernen && (
-        <button
-          style={{
-            ...styles.entfernen,
-            ...(entfernenBestaetigt ? styles.entfernenBestaetigt : {}),
-          }}
-          onClick={onEntfernen}
-        >
-          {entfernenBestaetigt ? 'Wirklich entfernen?' : 'Schicht entfernen'}
-        </button>
-      )}
     </div>
   );
 }
@@ -251,21 +231,5 @@ const styles: Record<string, CSSProperties> = {
     lineHeight: 1.2,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
-  },
-  entfernen: {
-    minHeight: 'var(--tap-min)',
-    flexShrink: 0,
-    border: 'none',
-    borderRadius: 'var(--radius-md)',
-    backgroundColor: 'var(--surface-3)',
-    color: 'var(--color-danger)',
-    fontSize: 'var(--font-base)',
-    fontWeight: 700,
-    fontFamily: 'inherit',
-    cursor: 'pointer',
-  },
-  entfernenBestaetigt: {
-    backgroundColor: 'var(--color-danger)',
-    color: '#fff',
   },
 };

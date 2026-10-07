@@ -457,7 +457,17 @@ Voice covers the same thing hands-free, which is the strongest case for it in th
 
 It is a **review step, not a gate.** The server back-fills the profile on *every* stop, so a recording stopped by voice, from a second browser tab, or straight from the recording bar commits exactly what a reviewed one would. The screen exists to let the operator correct it, not to make it exist. That is also why the voice `aufzeichnung beenden` stops directly rather than opening the screen — a hands-free operator would have no spoken way off it.
 
-The screen shows the profile the server is about to commit: the layers confirmed during production, with the stretches nobody confirmed filled in from the Schichtauftrag and drawn **dashed**, marked `Vorgabe`. Adjust it by dragging the boundaries in the chart (64 px touch handles), or with the −/+ 0.1 m steppers on each layer row; tap a row's name to change the ground type, or remove the layer from the picker. Obstructions drag freely through the profile and can be added at any depth. Anything touched stops being marked `Vorgabe`.
+The screen shows the profile the server is about to commit: the layers confirmed during production, with the stretches nobody confirmed filled in from the Schichtauftrag and drawn **dashed**, marked `Vorgabe`. Anything touched stops being marked `Vorgabe`.
+
+Each layer is a row carrying everything that can be done to it:
+
+- **tap the name** → change the ground type
+- **−/+** → move its upper boundary by 0.1 m (the first layer starts at the top of the hole, so it has none)
+- **✕** → remove it. Tap-to-confirm: the whole row turns red and reads `Sand ab 3,00 m — wirklich entfernen?`, and a tap on anything else disarms it. The last remaining layer cannot be removed.
+
+**+ Schicht** and **+ Hindernis** add one in the middle of the thickest layer — the place most likely to be hiding an unrecorded boundary, and the one spot guaranteed to have room for a split. The picker opens immediately, since an operator asking for a layer already knows what it is; the steppers move it afterwards. Both are disabled when no layer has room for two 0.1 m steps.
+
+Boundaries can also be dragged directly in the chart with 64 px touch handles, and obstructions drag freely through the profile.
 
 Two exits, both of which leave the operator somewhere useful: **Beenden** commits the profile and stops (the auto-upload then proceeds as always), and **Zurück zur Aufzeichnung** commits nothing and keeps recording, for a mis-tap. A restart on this screen leaves the session open, `resumeRecording` re-attaches it, and the operator taps Beenden again.
 

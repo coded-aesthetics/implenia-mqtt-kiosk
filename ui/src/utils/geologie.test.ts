@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { grundBei } from '@coded-aesthetics/din4023/profile';
 import {
   vomServer, naechsteGrenze, kurzLabel, farbeVon, nameVon, istHindernis,
-  zumCommit, vorgabeArten, liveProfil, MAX_SPALTEN_KACHELN,
+  zumCommit, vorgabeArten, liveProfil, einfuegeTiefe, MAX_SPALTEN_KACHELN,
   BODENARTEN, HINDERNISSE,
 } from './geologie';
 
@@ -352,5 +352,53 @@ describe('liveProfil', () => {
     expect(liveProfil(null, 3.1, vorgabe, 4)).toBeNull();
     expect(liveProfil(nachFund, 3.1, vorgabe, null)).toBe(nachFund);
     expect(liveProfil(nachFund, 3.1, vorgabe, NaN)).toBe(nachFund);
+  });
+});
+
+describe('einfuegeTiefe', () => {
+  it('picks the middle of the thickest layer', () => {
+    // 0–3 sand, 3–4 schluff, 4–12 ton: the ton layer has the room.
+    expect(einfuegeTiefe(
+      [{ tiefe: 0, nr: SAND }, { tiefe: 3, nr: SCHLUFF }, { tiefe: 4, nr: TON }], 12,
+    )).toBe(8);
+  });
+
+  it('counts the last layer against endTiefe, not against nothing', () => {
+    expect(einfuegeTiefe([{ tiefe: 0, nr: SAND }, { tiefe: 1, nr: TON }], 11)).toBe(6);
+  });
+
+  it('splits a single layer down the middle', () => {
+    expect(einfuegeTiefe([{ tiefe: 0, nr: SAND }], 12)).toBe(6);
+  });
+
+  it('snaps to the editing grid', () => {
+    // 0–3.7 would halve to 1.85, which no stepper could ever return to.
+    expect(einfuegeTiefe([{ tiefe: 0, nr: SAND }], 3.7)).toBe(1.9);
+  });
+
+  it('refuses when nothing has room for two steps', () => {
+    // Every layer is one grid step; splitting makes a layer of no thickness.
+    expect(einfuegeTiefe(
+      [{ tiefe: 0, nr: SAND }, { tiefe: 0.1, nr: SCHLUFF }], 0.2,
+    )).toBeNull();
+  });
+
+  it('refuses on an empty profile', () => {
+    expect(einfuegeTiefe([], 12)).toBeNull();
+  });
+
+  it('always lands strictly inside a layer, never on a boundary', () => {
+    const profile: { tiefe: number; nr: number }[][] = [
+      [{ tiefe: 0, nr: SAND }, { tiefe: 3, nr: SCHLUFF }, { tiefe: 7, nr: TON }],
+      [{ tiefe: 0, nr: SAND }, { tiefe: 0.4, nr: BETON }, { tiefe: 0.6, nr: SAND }],
+      [{ tiefe: 2, nr: SAND }],
+    ];
+    for (const schichten of profile) {
+      const t = einfuegeTiefe(schichten, 12)!;
+      const grenzen = schichten.map((x) => x.tiefe);
+      expect(grenzen, JSON.stringify(schichten)).not.toContain(t);
+      expect(t).toBeGreaterThan(schichten[0].tiefe);
+      expect(t).toBeLessThan(12);
+    }
   });
 });

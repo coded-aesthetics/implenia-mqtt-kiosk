@@ -130,6 +130,35 @@ export function vomServer(
 }
 
 /**
+ * Where a new layer goes when the operator asks for one.
+ *
+ * The middle of the thickest layer. A correction screen cannot ask "at what
+ * depth?" before it knows what is being inserted — that is two questions where
+ * the operator has one thought — so it picks a spot with room and lets them
+ * step it from there.
+ *
+ * Thickest rather than last: it is the layer most likely to be hiding a
+ * boundary nobody recorded, and it is the one place guaranteed to have room for
+ * a split. Null when nothing can be split, which is what greys out the control
+ * rather than producing a layer of no thickness.
+ */
+export function einfuegeTiefe(
+  schichten: readonly Schicht[],
+  endTiefe: number,
+): number | null {
+  let beste: { tiefe: number; dicke: number } | null = null;
+  for (let i = 0; i < schichten.length; i++) {
+    const von = schichten[i].tiefe;
+    const bis = i + 1 < schichten.length ? schichten[i + 1].tiefe : endTiefe;
+    const dicke = bis - von;
+    if (!beste || dicke > beste.dicke) beste = { tiefe: runde(von + dicke / 2), dicke };
+  }
+  // Both halves of the split need to exist, so the layer must hold two steps.
+  if (!beste || beste.dicke < 2 * RASTER) return null;
+  return beste.tiefe;
+}
+
+/**
  * The profile as it stands right now, for the live drilling chart.
  *
  * The committed profile says the last ground recorded runs to the next planned
