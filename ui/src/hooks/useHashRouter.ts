@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 export interface Route {
-  page: 'home' | 'config' | 'element' | 'bohren' | 'comments' | 'setup' | 'sensors' | 'calibration' | 'rohrverlaengerung';
+  page: 'home' | 'config' | 'element' | 'bohren' | 'comments' | 'setup' | 'sensors' | 'calibration' | 'rohrverlaengerung' | 'geologie';
   params: Record<string, string>;
   query: Record<string, string>;
 }
@@ -44,6 +44,18 @@ export function parseRoute(hash: string): Route {
 
   if (path === 'rohrverlaengerung') {
     return { page: 'rohrverlaengerung', params: {}, query };
+  }
+
+  // The geology sign-off before a stop. A route rather than an overlay so a
+  // remount — or a PM2 restart that reloads the page — leaves the operator
+  // where they were instead of silently dropping the confirmation.
+  const geologieMatch = path.match(/^geologie(?:\/(.+))?$/);
+  if (geologieMatch) {
+    return {
+      page: 'geologie',
+      params: geologieMatch[1] ? { name: decodeURIComponent(geologieMatch[1]) } : {},
+      query,
+    };
   }
 
   // The setup wizard is a route, not a conditional overlay. Its step lives in
