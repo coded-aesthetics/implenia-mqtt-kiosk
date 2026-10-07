@@ -36,7 +36,7 @@
 
 import { withElementDevice } from './element-device.js';
 import { fetchImplenia } from './implenia-api.js';
-import { getSensorMetaLookup } from './sensor-meta.js';
+import { findSensorNameByRole } from './sensor-meta.js';
 
 /**
  * The date every `Ausführungsdatum` reading is written at, so repeated writes
@@ -46,10 +46,7 @@ export const COMPLETION_SENTINEL_DATE = '2000-01-01T00:00:00Z';
 
 /** The sensor carrying completion for the configured Verfahren, if it has one. */
 export function findCompletionSensorName(): string | null {
-  for (const [name, meta] of getSensorMetaLookup()) {
-    if (meta.role === 'is_completed') return name;
-  }
-  return null;
+  return findSensorNameByRole('is_completed');
 }
 
 /**

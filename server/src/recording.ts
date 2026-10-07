@@ -180,8 +180,12 @@ function attachLogSensor(sessionId: number, sensorMap: Map<string, SensorMapEntr
  * which a technician can still export and fix. Refusing to resume would
  * instead record nothing at all for the rest of the element, which is the
  * outcome this whole path exists to prevent.
+ *
+ * Exported because geology needs the same resolution: its reads and writes go
+ * by sensor id, since `session_readings.topic` holds the rig's raw MQTT topic
+ * rather than a sensor name.
  */
-function parseSensorMap(json: string): Map<string, SensorMapEntry> {
+export function parseSensorMap(json: string): Map<string, SensorMapEntry> {
   const map = new Map<string, SensorMapEntry>();
 
   let parsed: unknown;
