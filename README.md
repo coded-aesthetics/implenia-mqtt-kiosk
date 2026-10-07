@@ -388,6 +388,57 @@ Clearing uses an empty string, never `null`: the batch endpoint types `string_se
 
 The platform does now accept a `name:<element>` reference as the `device_id` of `readings/batch`, but the kiosk keeps resolving: that support landed in the backend after this kiosk shipped, and kiosks self-update hourly while the backend deploys separately, so both versions run in the field at once. Before it landed, the batch endpoint handed the path segment to `ValidateDeviceAccess`, which looks it up as a primary key — so `name:F-23` answered `401 device access error: device not found: name:F-23`, which reads like an auth problem and isn't. Worth knowing when reading older logs.
 
+## Geology Capture
+
+The conductor records the geology they actually drilled through, and signs the profile off before it goes up. Uploaded as a `GeoDIN` integer series plus a `Geologie` text series — both already defined in the herstellen CSVs, both already read by implenia-web, so this needed no new sensor, no schema change and no backend work.
+
+```
+POST /api/recording/geology                 → { nr, name? } — record a layer at the current depth
+GET  /api/recording/:id/geology-context     → planned profile, observed layers, whether it drilled
+POST /api/recording/stop                    → { geology?: [{ tiefe, nr, name?, quelle }] }
+```
+
+### During drilling
+
+Two oversized buttons in the **recording bar**. **Schicht** and **Hindernis** each open a full-screen tile grid — DIN 4023 hatch symbol, Kurzform and name per tile, 15 soils, 18 rock types and 6 obstruction kinds. Two taps, gloved, no text entry.
+
+An obstruction needs no thickness: tapping `Hindernis → Beton` starts a concrete layer at the current depth, and tapping `Schicht → Schluff` when the drill is through it ends that layer. Two ordinary layer changes, which is exactly what the uploaded series carries.
+
+They live in the bar rather than beside the profile for a space reason worth recording. The kiosk's chrome is a fixed budget at 1024x768, and in the left column the two buttons took 136px off a profile with 596px to work with. The bar is already 76px tall for its own controls, so 64px buttons cost **nothing** there — and geology entry is a recording action anyway, like Beenden.
+
+Measured on the drilling screen: header 85px (64px logo plus the 68px phase switch), recording bar 76px, leaving `main` 607px — of which the geology profile gets ~519px, against ~372px when the buttons sat in the column.
+
+**The reminder is the control.** Operators routinely forget to record a layer change at all, and the usual answer — a hint or a prompt when the Vorgabe says a boundary is due — becomes an annoyance that gets ignored. Instead, when the live depth comes within 30 cm of a planned boundary (either side), the Schicht button itself pre-loads the expected answer and relabels to `U Schluff?`, and that boundary is marked in the profile beside it. One tap confirms the planned change. Ignoring it dismisses nothing, clears no state, and moves nothing on the screen. Once that ground type has been recorded, the suggestion stops.
+
+Voice covers the same thing hands-free, which is the strongest case for it in this app — hands are on the rig and the vocabulary is closed. Say `schluff`, `schicht schluff` or `hindernis beton`. The 15 soils and 6 obstructions are reachable by voice; the rock types are names a small offline model mishears often enough that a wrong layer would get recorded, so those stay touch-only.
+
+### The sign-off before stopping
+
+**Beenden** on a session that actually drilled (depth moved ≥ 0.5 m) goes to the geology sign-off first, on a machine whose Verfahren defines the sensors. Grouting-only sessions, machines without geology, and a session that never went down stop exactly as they always have — and if the check itself fails for any reason, the stop proceeds. Geology never stands between an operator and finishing an element.
+
+It is a **review step, not a gate.** The server back-fills the profile on *every* stop, so a recording stopped by voice, from a second browser tab, or straight from the recording bar commits exactly what a reviewed one would. The screen exists to let the operator correct it, not to make it exist. That is also why the voice `aufzeichnung beenden` stops directly rather than opening the screen — a hands-free operator would have no spoken way off it.
+
+The screen shows the profile the server is about to commit: the layers confirmed during production, with the stretches nobody confirmed filled in from the Schichtauftrag and drawn **dashed**, marked `Vorgabe`. Adjust it by dragging the boundaries in the chart (64 px touch handles), or with the −/+ 0.1 m steppers on each layer row; tap a row's name to change the ground type, or remove the layer from the picker. Obstructions drag freely through the profile and can be added at any depth. Anything touched stops being marked `Vorgabe`.
+
+Two exits, both of which leave the operator somewhere useful: **Beenden** commits the profile and stops (the auto-upload then proceeds as always), and **Zurück zur Aufzeichnung** commits nothing and keeps recording, for a mis-tap. A restart on this screen leaves the session open, `resumeRecording` re-attaches it, and the operator taps Beenden again.
+
+### Why the profile is always complete
+
+A profile is flat and gapless — each layer runs to the next — so a single ground-type code asserts the ground continues to the bottom of the hole. There is no way to record "sand from 2 m, and no claim below that": **partial geology is not representable.** Back-filling the unconfirmed stretches from the Vorgabe is therefore the only option that neither discards what the operator saw nor invents a boundary they rejected, and the `(Vorgabe)` suffix in the `Geologie` text is how a reader tells the two apart.
+
+One exception is worth knowing: **an obstruction is never extended upward.** Guessing that soil seen at 2 m also fills the metre above it is mild and usually right; guessing the same about `Hindernis Beton` would claim the drill met concrete at the surface. Such a profile legitimately starts below zero, and the chart draws empty space above it — which is both true and visible.
+
+### The alignment trap
+
+implenia-web derives layers by change detection over `GeoDIN`, taking each layer's depth from **the same reading** — matched by exact millisecond. A `GeoDIN` reading dated at "now", or at an interpolated instant, therefore produces **no layer at all**: it uploads cleanly, shows up as a raw series, and the protocol reports zero observed layers.
+
+So every reading is dated at the exact `received_at` of a depth reading already in the database. Two consequences worth knowing:
+
+- **Live entry sends no depth.** The route carries only a ground-type number and the server dates the reading at its own latest depth reading, then returns the depth it used so the screen can confirm `Schluff ab 3,40 m`. A browser-measured depth would have to be matched back to a reading, and being one sample out of step yields nothing.
+- **A boundary below the bottom of the hole is dropped, not clamped.** Clamping would claim the drill saw ground it never reached, and several such boundaries would collapse onto one instant — costing real layers to report fictional ones. The stop response reports what was dropped.
+
+`server/src/depth-timestamp.ts` owns the inversion as a pure, unit-tested module, and the confirmation screen reads the recorded series back through the same change detection implenia-web uses — so a misalignment shows up as a missing layer on the kiosk, in front of the operator, rather than weeks later in a protocol. The full contract is in `CLAUDE.md`.
+
 ## Session Data Export
 
 A completed recording can be exported to Excel files for offline import into the implenia-web DSV widget — the offline counterpart to the batch upload (record → export to USB → import in the web app).
@@ -488,6 +539,10 @@ server/src/
   websocket.ts        — WS broadcast
   implenia-api.ts     — Implenia API auth + fetch wrapper
   recording.ts        — Session recording + batch upload
+  geology.ts          — GeoDIN/Geologie writes, provenance, idempotent re-commit
+  geology-profile.ts  — Observations + Vorgabe → the profile every stop commits
+  depth-timestamp.ts  — Boundary depth → exact depth-reading timestamp (pure)
+  vorgabe-geology.ts  — Planned profile from "Geologie n" / "Tiefe Geologie n"
   element-completion.ts — Ausführungsdatum writes (sentinel date + data-version stamp)
   element-device.ts     — Element name → platform device id (resolve + cache)
   session-export.ts   — Stream-driven .xlsx export (HDI/IVL) for implenia-web import
@@ -517,6 +572,8 @@ ui/src/
     ChannelPicker.tsx  — Serial channel → sensor assignment
     ShiftAssignment.tsx — Shift import + element tiles
     RecordingBar.tsx   — Session recording controls, Bohren/Verpressen switch, Rohrwechsel indicator
+    GeologieBestaetigung.tsx — Geology sign-off before a stop (editable DIN 4023 profile)
+    GeologiePicker.tsx — Full-screen DIN 4023 ground-type tile grid
     RohrwechselSettings.tsx — Klemmbacke topic, Rohrlänge, thresholds
     CalibrationPage.tsx — Per-sensor factor and offset, with live values
     UpdateUpload.tsx   — Manual update upload
