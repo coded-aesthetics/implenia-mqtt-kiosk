@@ -388,6 +388,31 @@ Clearing uses an empty string, never `null`: the batch endpoint types `string_se
 
 The platform does now accept a `name:<element>` reference as the `device_id` of `readings/batch`, but the kiosk keeps resolving: that support landed in the backend after this kiosk shipped, and kiosks self-update hourly while the backend deploys separately, so both versions run in the field at once. Before it landed, the batch endpoint handed the path segment to `ValidateDeviceAccess`, which looks it up as a primary key — so `name:F-23` answered `401 device access error: device not found: name:F-23`, which reads like an auth problem and isn't. Worth knowing when reading older logs.
 
+## Phases
+
+A pillar runs through four phases, always in the same order, with Austausch and Einbauen occasionally omitted:
+
+```
+Bohren  →  Austausch  →  Einbauen  →  Auffüllen
+```
+
+The header carries a stepper showing where the pillar is and offering the one step forward:
+
+```
+Bohren       [ Bohren ][ Austausch › ]
+Austausch    [ ‹ Bohren ][ Austausch ][ Einbauen › ]
+Einbauen     [ ‹ Austausch ][ Einbauen ][ Auffüllen › ]
+Auffüllen    [ ‹ Einbauen ][ Auffüllen ]
+```
+
+The past phase stays tappable but subdued — an operator who stepped forward too early needs a way back, and the phase's name says where that goes in a way a bare `‹` would not. Three slots at most, at a fixed 424px so the element name beside it never shifts as phases advance; four worded segments would have come to ~617px of a 624px header centre, which works for `P-01` and breaks for a longer name.
+
+**Skipping a phase means stepping through it**, and that is deliberate rather than a compromise. All three post-drilling phases are indistinguishable to Rohrverlängerung clipping (`isRetracting`, `hasPipeHandling`), and `operating_mode` is a single overwritten column rather than a time series — so a moment spent in Austausch on the way to Einbauen changes no behaviour and leaves no trace. `operating-mode.test.ts`, on both the server and the UI side, pins that. If one of those phases ever needs different clipping, the stepper needs a way to skip without entering.
+
+Phase changes live only here. The post-drilling screen used to carry its own three-button sidebar for the same transitions, which put the control in one place and the indicator in another; the chart has that width now.
+
+The phase is both navigation and a recording setting: it picks which screen renders, and it tells ingestion whether a closed Klemmbacke is a pipe change (clip those readings) or a pipe string being held (keep them).
+
 ## Geology Capture
 
 The conductor records the geology they actually drilled through, and signs the profile off before it goes up. Uploaded as a `GeoDIN` integer series plus a `Geologie` text series — both already defined in the herstellen CSVs, both already read by implenia-web, so this needed no new sensor, no schema change and no backend work.
@@ -406,7 +431,7 @@ An obstruction needs no thickness: tapping `Hindernis → Beton` starts a concre
 
 They live in the bar rather than beside the profile for a space reason worth recording. The kiosk's chrome is a fixed budget at 1024x768, and in the left column the two buttons took 136px off a profile with 596px to work with. The bar is already 76px tall for its own controls, so 64px buttons cost **nothing** there — and geology entry is a recording action anyway, like Beenden.
 
-Measured on the drilling screen: header 85px (64px logo plus the 68px phase switch), recording bar 76px, leaving `main` 607px — of which the geology profile gets ~519px, against ~372px when the buttons sat in the column.
+Measured on the drilling screen: header 85px (64px logo plus the 68px phase stepper), recording bar 76px, leaving `main` 607px — of which the geology profile gets ~519px, against ~372px when the buttons sat in the column.
 
 **The reminder is the control.** Operators routinely forget to record a layer change at all, and the usual answer — a hint or a prompt when the Vorgabe says a boundary is due — becomes an annoyance that gets ignored. Instead, when the live depth comes within 30 cm of a planned boundary (either side), the Schicht button itself pre-loads the expected answer and relabels to `U Schluff?`, and that boundary is marked in the profile beside it. One tap confirms the planned change. Ignoring it dismisses nothing, clears no state, and moves nothing on the screen. Once that ground type has been recorded, the suggestion stops.
 
@@ -571,7 +596,8 @@ ui/src/
     DeviceConfig.tsx   — Device management + sensor mapping
     ChannelPicker.tsx  — Serial channel → sensor assignment
     ShiftAssignment.tsx — Shift import + element tiles
-    RecordingBar.tsx   — Session recording controls, Bohren/Verpressen switch, Rohrwechsel indicator
+    RecordingBar.tsx   — Session recording controls, geology entry, Rohrwechsel indicator
+    PhaseStepper.tsx   — Bohren → Austausch → Einbauen → Auffüllen, in the header
     GeologieBestaetigung.tsx — Geology sign-off before a stop (editable DIN 4023 profile)
     GeologiePicker.tsx — Full-screen DIN 4023 ground-type tile grid
     RohrwechselSettings.tsx — Klemmbacke topic, Rohrlänge, thresholds

@@ -1,6 +1,5 @@
-import { useMemo, useRef, useEffect, useState, useCallback } from 'react';
+import { useMemo, useRef, useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
-import type { RecordingState, OperatingMode } from '../hooks/useWebSocket';
 import type { VorgabenData } from '../hooks/useImplenia';
 import { SensorGauge } from './SensorGauge';
 import { SensorChart, type ChartSeries, type ChartScale } from './SensorChart';
@@ -9,7 +8,6 @@ import { formatNumber } from '../utils/format';
 import { findSoll } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
 import { useClampState } from '../hooks/useClampState';
-import { MODE_LABELS, VERPRESSEN_MODES } from '../utils/operating-mode';
 
 export interface GaugeSlot {
   sensor: string;
@@ -40,37 +38,17 @@ interface Props {
   readings: Map<string, import('../hooks/useWebSocket').SensorReading>;
   vorgaben: VorgabenData | null;
   config: VerpressenConfig;
-  recordingState: RecordingState;
 }
 
 const CHART_WINDOW_MINUTES = 5;
 const MAX_BUFFER_POINTS = CHART_WINDOW_MINUTES * 60 * 2;
 
-export function VerpressenScreen({ readings, vorgaben, config, recordingState }: Props) {
+export function VerpressenScreen({ readings, vorgaben, config }: Props) {
   const sensorValues = useSensorValues(readings);
   const { clampConfig, clampValue, isClampOpen } = useClampState(sensorValues);
 
-  const operatingMode = recordingState.operatingMode;
-
   const depth = sensorValues.get(config.depthSensor) ?? 0;
   const volume = sensorValues.get(config.volumeSensor) ?? 0;
-  const setMode = useCallback(async (mode: OperatingMode) => {
-    if (mode === operatingMode) return;
-    try {
-      const res = await fetch('/api/recording/mode', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, sessionId: recordingState.sessionId }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || `Fehler ${res.status}`);
-      }
-    } catch {
-      // Errors will get dedicated guidance UI later
-    }
-  }, [operatingMode, recordingState.sessionId]);
-
   // Chart data accumulation — samples sensorValues at ~1Hz via useEffect
   const chartBufferRef = useRef<Map<string, Array<{ ts: number; value: number }>>>(new Map());
   const lastSampleRef = useRef(0);
@@ -164,21 +142,15 @@ export function VerpressenScreen({ readings, vorgaben, config, recordingState }:
         ))}
       </div>
 
-      {/* Row 3: Mode buttons (side) + Chart */}
+      {/*
+        Row 3: Chart.
+
+        The three phase buttons that used to sit beside it are gone. The header's
+        PhaseStepper owns phase changes now — keeping both would put the control
+        in one place and the indicator in another, which is the split that was
+        just removed for Bohren/Austausch. The chart gets the width back.
+      */}
       <div style={styles.chartRow}>
-        {recordingState.active && (
-          <div style={styles.modeSidebar}>
-            {VERPRESSEN_MODES.map((m) => (
-              <button
-                key={m}
-                style={operatingMode === m ? styles.modeButtonActive : styles.modeButton}
-                onClick={() => setMode(m)}
-              >
-                {MODE_LABELS[m]}
-              </button>
-            ))}
-          </div>
-        )}
         <div style={styles.chartFill}>
           <SensorChart
             series={chartSeries}
@@ -269,39 +241,6 @@ const styles: Record<string, CSSProperties> = {
     fontSize: '1.4rem',
     color: 'var(--text-muted)',
     fontWeight: 600,
-  },
-  modeSidebar: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.5rem',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  modeButton: {
-    minWidth: '8rem',
-    minHeight: '3.5rem',
-    border: '2px solid var(--surface-3)',
-    borderRadius: 'var(--radius)',
-    background: 'var(--surface-2)',
-    color: 'var(--text-muted)',
-    fontSize: 'var(--font-base)',
-    fontWeight: 700,
-    cursor: 'pointer',
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-  },
-  modeButtonActive: {
-    minWidth: '8rem',
-    minHeight: '3.5rem',
-    border: '2px solid var(--color-phase-alt)',
-    borderRadius: 'var(--radius)',
-    background: 'var(--color-phase-alt-bg)',
-    color: 'var(--color-phase-alt-text)',
-    fontSize: 'var(--font-base)',
-    fontWeight: 700,
-    cursor: 'pointer',
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
   },
   gaugeRow: {
     display: 'flex',

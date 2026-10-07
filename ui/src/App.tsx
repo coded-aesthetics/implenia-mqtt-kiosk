@@ -263,7 +263,6 @@ export function App() {
               readings={readings}
               vorgaben={deviceVorgaben}
               config={INJEKTIONSBOHREN_VERPRESSEN}
-              recordingState={recordingState}
             />
           );
         } else {

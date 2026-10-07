@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { navigate } from '../hooks/useHashRouter';
 import type { OperatingMode } from '../hooks/useWebSocket';
-import { PhaseSwitch } from './PhaseSwitch';
+import { PhaseStepper } from './PhaseStepper';
 import logo from '../../assets/implenia-logo.png';
 
 interface Props {
@@ -73,7 +73,7 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
       <div style={styles.centerSection}>
         {pageTitle && <span style={styles.pageTitle}>{pageTitle}</span>}
         {operatingMode && (currentPage === 'element' || currentPage === 'bohren') && (
-          <PhaseSwitch mode={operatingMode} onChange={onModeChange} />
+          <PhaseStepper mode={operatingMode} onChange={onModeChange} />
         )}
       </div>
 
