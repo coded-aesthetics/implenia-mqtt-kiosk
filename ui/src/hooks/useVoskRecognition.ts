@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Model, KaldiRecognizer } from 'vosk-browser';
 import { elementNameVariants } from '../voice/elementNameVariants';
+import { geologieGrammatik } from '../voice/geologiePhrasen';
 
 export type SpeechStatus = 'idle' | 'listening' | 'result' | 'error';
 
@@ -143,6 +144,18 @@ export function buildGrammar(elementNames: string[]): string {
         phrases.add(variant);
       }
     }
+  }
+
+  // Geology: the DIN ground types, kept out of addVariations on purpose.
+  //
+  // There are 21 of them with several spoken forms each, and the full variation
+  // expansion would add several hundred entries to the grammar — which makes a
+  // small offline model slower and more prone to picking a near-miss. A bare
+  // "bitte" prefix is the only filler worth carrying; `stripFillers` in the
+  // matcher removes the rest before any phrase is compared.
+  for (const phrase of geologieGrammatik()) {
+    phrases.add(phrase);
+    phrases.add(`bitte ${phrase}`);
   }
 
   // Add element-specific phrases
