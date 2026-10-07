@@ -1,5 +1,7 @@
 import { ALLE_EINTRAEGE, findByNr } from '@coded-aesthetics/din4023';
-import type { Schicht } from '@coded-aesthetics/din4023/profile';
+import {
+  RASTER, fuegeSchichtEin, grundBei, runde, type Schicht,
+} from '@coded-aesthetics/din4023/profile';
 
 /**
  * The geology vocabulary and the profile the confirmation screen starts from.
@@ -124,6 +126,55 @@ export function vomServer(
       (s.quelle === 'vorgabe'
         ? { tiefe: s.tiefe, nr: s.nr, vorlaeufig: true }
         : { tiefe: s.tiefe, nr: s.nr })),
+  };
+}
+
+/**
+ * The profile as it stands right now, for the live drilling chart.
+ *
+ * The committed profile says the last ground recorded runs to the next planned
+ * boundary — it has to, because a flat gapless profile cannot say "and no claim
+ * below that". On screen during drilling that reads wrong: tapping `Findling`
+ * at 3.08 m would immediately draw a 4 m block of boulder the drill has not
+ * reached, rather than the thin seam it actually is.
+ *
+ * So for display, the layer the drill is *in* stops at the current depth and the
+ * plan resumes below it, dashed. The operator watches the obstruction grow as
+ * the hole advances, and it stops growing the moment they tap `Hindernis Ende`
+ * — which records a real boundary where the display already had one.
+ *
+ * Display only. The committed profile is the server's (`geology-profile.ts`),
+ * and this never re-derives it — it adjusts the answer the server gave. The
+ * boundary sits at least one grid step below the observation so a layer just
+ * recorded is visible rather than zero-thickness.
+ */
+export function liveProfil(
+  profil: Profil | null,
+  letzteBeobachtungTiefe: number | null,
+  vorgabeSchichten: readonly Schicht[] | null | undefined,
+  tiefe: number | null,
+): Profil | null {
+  if (!profil) return null;
+  // Nothing observed yet, or no depth to stop at: the plan is the whole story.
+  if (letzteBeobachtungTiefe == null || tiefe == null || !Number.isFinite(tiefe)) {
+    return profil;
+  }
+
+  const grenze = runde(Math.max(tiefe, letzteBeobachtungTiefe + RASTER));
+  if (grenze >= profil.endTiefe - RASTER) return profil;
+
+  const geplant = vorgabeSchichten
+    ? grundBei(vorgabeSchichten as Parameters<typeof grundBei>[0], grenze)
+    : null;
+  // No plan to resume — leaving the observed ground running on is the only
+  // thing left to draw, and it is what will be committed anyway.
+  if (geplant == null) return profil;
+
+  return {
+    endTiefe: profil.endTiefe,
+    schichten: fuegeSchichtEin(
+      profil.schichten, profil.endTiefe, grenze, geplant, { vorlaeufig: true },
+    ),
   };
 }
 

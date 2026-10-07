@@ -435,6 +435,14 @@ An obstruction needs no thickness: tapping `Hindernis → Beton` starts a concre
 
 "Inside an obstruction" is seeded from the server's last recorded code, not just from browser state, so a PM2 restart mid-obstruction does not strand the operator without the one-tap way out.
 
+### What the profile shows while drilling
+
+The column draws what has actually been recorded — observed layers **solid**, the Schichtauftrag **dashed** below them — so an obstruction is visible from the moment it is entered and grows with the hole, rather than the only feedback being a message that fades after six seconds.
+
+It is deliberately **not** the profile that would be committed. A committed profile is flat and gapless, so the last ground recorded has to run to the next planned boundary — meaning a Findling entered at 3.1 m commits as a 3.9 m block. Drawing that live would show metres of boulder the drill has not reached. So on screen the layer the drill is *in* stops at the current depth and the plan resumes below it; tapping `Hindernis Ende` then records a real boundary where the display already had one. The sign-off screen before upload is where the committed shape is shown.
+
+The observed layers come from the server (`geology-context`), re-read after each entry rather than tallied in the browser — the server decides which depth reading an entry landed on, so only it knows where the layer starts, and a restart loses nothing.
+
 They live in the bar rather than beside the profile for a space reason worth recording. The kiosk's chrome is a fixed budget at 1024x768, and in the left column the two buttons took 136px off a profile with 596px to work with. The bar is already 76px tall for its own controls, so 64px buttons cost **nothing** there — and geology entry is a recording action anyway, like Beenden.
 
 Measured on the drilling screen: header 85px (64px logo plus the 68px phase stepper), recording bar 76px, leaving `main` 607px — of which the geology profile gets ~519px, against ~372px when the buttons sat in the column.
