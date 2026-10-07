@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useHashRouter, navigate } from './hooks/useHashRouter';
 import { useConfig, useShiftAssignment, useActiveVerfahren, useElementVorgaben } from './hooks/useImplenia';
@@ -16,10 +16,17 @@ import { TopicAssignment } from './components/TopicAssignment';
 import { CalibrationPage } from './components/CalibrationPage';
 import { RohrverlaengerungPage } from './components/RohrverlaengerungPage';
 import { BohrenScreen, INJEKTIONSBOHREN_BOHREN } from './components/BohrenScreen';
+import { GeologieBestaetigung } from './components/GeologieBestaetigung';
 import { VerpressenScreen, INJEKTIONSBOHREN_VERPRESSEN } from './components/VerpressenScreen';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import { isVerpressenMode } from './utils/operating-mode';
+import { GeologiePicker } from './components/GeologiePicker';
+import { useGeologieErfassung } from './hooks/useGeologieErfassung';
+import { buildSchichten, collectVorgabeEntries } from './utils/vorgaben';
+import { buildSensorValues } from './utils/sensors';
+import { formatNumber } from './utils/format';
+import type { OperatingMode } from './hooks/useWebSocket';
 import type { ViewTab } from './components/ElementDetail';
 
 export function App() {
@@ -72,6 +79,57 @@ export function App() {
   useEffect(() => {
     if (needsSetupRedirect(gate)) navigate('setup');
   }, [gate.onSetupRoute, gate.settled, gate.hasError, gate.verfahren]);
+
+  /**
+   * Switch what the rig is doing.
+   *
+   * Lives here because the control moved into the header, next to the state it
+   * sets, while the request itself is session-scoped. No error surface: the
+   * switch renders from `recordingState`, which the WebSocket keeps
+   * authoritative, so a failed request simply leaves the segment where it was —
+   * visibly a no-op the operator can repeat. The only failure the endpoint has
+   * is "no session", and the switch is not shown without one.
+   */
+  const setOperatingMode = useCallback(async (mode: OperatingMode) => {
+    try {
+      await fetch('/api/recording/mode', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, sessionId: recordingState.sessionId }),
+      });
+    } catch {
+      // See above: the switch is server-rendered, so nothing moved.
+    }
+  }, [recordingState.sessionId]);
+
+  /**
+   * Live geology entry, assembled here because two places need the same state:
+   * the recording bar draws the buttons and the drilling profile marks the
+   * boundary the suggestion refers to.
+   *
+   * The depth is the one awkward part. The write needs none — the server dates
+   * the reading at its own latest depth reading — but the *suggestion* has to
+   * know where the drill is, and the live depth is only reachable through the
+   * drilling screen's sensor config. Where that config does not apply, the
+   * buttons still work; only the pre-loaded answer is absent.
+   */
+  const vorgabeSchichten = useMemo(() => {
+    const entries = collectVorgabeEntries(deviceVorgaben);
+    return buildSchichten(entries)?.schichten ?? null;
+  }, [deviceVorgaben]);
+
+  const liveTiefe = useMemo(() => {
+    if (setup.verfahren !== 'injektionsbohren') return null;
+    return buildSensorValues(readings).get(INJEKTIONSBOHREN_BOHREN.depthSensor) ?? null;
+  }, [readings, setup.verfahren]);
+
+  const geologie = useGeologieErfassung({
+    sessionId: recordingState.sessionId,
+    active: recordingState.active,
+    operatingMode: recordingState.operatingMode,
+    vorgabeSchichten,
+    tiefe: liveTiefe,
+  });
 
   // Comment queue (background whisper transcription + API posting)
   const commentQueue = useCommentQueue();
@@ -145,6 +203,45 @@ export function App() {
       pageTitle = 'Rohrverlängerung';
       break;
     }
+    /**
+     * The geology sign-off, between "Beenden" and the session actually ending.
+     *
+     * The commit and the stop are one request: the server writes the geology
+     * readings and only then ends the session, because ending it is what
+     * releases the auto-upload. See the stop route.
+     */
+    case 'geologie': {
+      content = (
+        <GeologieBestaetigung
+          sessionId={recordingState.sessionId}
+          elementName={recordingState.elementName ?? route.params.name}
+          onBeenden={async (layers) => {
+            try {
+              const res = await fetch('/api/recording/stop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ geology: layers }),
+              });
+              if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                return data.error || `Die Aufzeichnung konnte nicht beendet werden (Fehler ${res.status}).`;
+              }
+              const name = recordingState.elementName ?? route.params.name;
+              navigate(name ? `bohren/${encodeURIComponent(name)}` : '');
+              return null;
+            } catch (err) {
+              return `Die Aufzeichnung konnte nicht beendet werden: ${(err as Error).message}`;
+            }
+          }}
+          onZurueck={() => {
+            const name = recordingState.elementName ?? route.params.name;
+            navigate(name ? `bohren/${encodeURIComponent(name)}` : '');
+          }}
+        />
+      );
+      pageTitle = 'Geologie';
+      break;
+    }
     case 'comments': {
       content = (
         <CommentQueuePage
@@ -176,6 +273,7 @@ export function App() {
               vorgaben={deviceVorgaben}
               config={INJEKTIONSBOHREN_BOHREN}
               recordingState={recordingState}
+              markierteGrenze={geologie.vorschlag?.tiefe ?? null}
             />
           );
         }
@@ -220,6 +318,7 @@ export function App() {
         onMicRelease={voice.stopListening}
         commentQueueCount={commentQueue.pendingCount}
         operatingMode={recordingState.operatingMode}
+        onModeChange={setOperatingMode}
       />
       <VoiceFeedbackOverlay feedback={voice.feedback} />
       <UpdateBanner
@@ -235,7 +334,7 @@ export function App() {
       )}
       <main style={{
         ...styles.main,
-        ...(route.page === 'element' || route.page === 'bohren' || route.page === 'sensors' || route.page === 'calibration' || route.page === 'rohrverlaengerung'
+        ...(route.page === 'element' || route.page === 'bohren' || route.page === 'sensors' || route.page === 'calibration' || route.page === 'rohrverlaengerung' || route.page === 'geologie'
           || (route.page === 'config' && !route.params.section)
           ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const }
           : {}),
@@ -247,7 +346,21 @@ export function App() {
         elementName={route.params.name}
         recordingState={recordingState}
         uploadProgress={uploadProgress}
+        geologie={geologie}
       />
+      {/*
+        The picker is opened from the recording bar but rendered here: it covers
+        the screen, so mounting it inside the bar would nest a full-viewport
+        overlay in a 76px-tall element.
+      */}
+      {geologie.picker && (
+        <GeologiePicker
+          art={geologie.picker}
+          untertitel={liveTiefe != null ? `Aktuelle Tiefe ${formatNumber(liveTiefe)} m` : undefined}
+          onWaehlen={(nr, name) => geologie.erfasse(nr, name)}
+          onAbbrechen={geologie.schliessePicker}
+        />
+      )}
     </div>
   );
 }
