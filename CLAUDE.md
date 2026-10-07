@@ -77,7 +77,9 @@ The self-updater on the kiosk polls GitHub Releases hourly, compares semver agai
 
 **lodash pinned to 4.17.21**: lodash 4.18.0 removed `assignWith` which breaks `workbox-build` (used by `vite-plugin-pwa`). The root `package.json` pins `"lodash": "4.17.21"` as a top-level override. Do not remove this pin.
 
-**GitHub Packages auth**: The `@coded-aesthetics/din4023` package is hosted on GitHub Packages (private). CI uses `GITHUB_TOKEN` with `packages: read` permission. The `.npmrc` scopes `@coded-aesthetics` to `npm.pkg.github.com`.
+**GitHub Packages auth**: The `@coded-aesthetics/din4023` package is hosted on GitHub Packages (private). CI uses `GITHUB_TOKEN` with `packages: read` permission. The `.npmrc` scopes `@coded-aesthetics` to `npm.pkg.github.com`. The server depends on it too, for the DIN 4023 tables — only its root entry, which carries no React.
+
+**Playwright browsers**: the smoke tests need a browser binary, which is not in `node_modules`. CI runs `npx playwright install --with-deps chromium` before them, after the build (they serve the built output). Chromium only — the kiosk browser is Chromium, so testing the other engines would spend CI minutes on something nobody runs. Locally, `npx playwright install chromium` once; a version bump of `@playwright/test` needs it again, because the expected browser build is pinned to the runner version.
 
 ## Architecture
 
@@ -229,6 +231,154 @@ overwritten or deleted.
 
 Keep all three projects in sync when this contract changes.
 
+## Worker-observed geology (`GeoDIN`) — shared convention across two projects
+
+The geology a worker actually encountered is uploaded as a **`GeoDIN`** integer
+time series (CSV role `geology_nr`) alongside a **`Geologie`** text series (role
+`geology_text`). implenia-web turns the numbers back into layers by **change
+detection**: each reading whose code differs from the previous one starts a
+layer, at the **depth of the same reading**. There is no layer table and no
+depth field — the series *is* the profile.
+
+The kiosk is the only writer. Both herstellen CSVs declare `GeoDIN` as
+`Quelle=server` and implenia-web's `sensor-meta.ts` documents it as "derived
+from geology_text by server", but **nothing derives it** — no implementation
+exists in the backend or in web. The comment is aspirational, and
+`RECORDABLE_ROLES` in `herstellen-sensors.ts` exists solely to stop that
+`server` from excluding the sensor from the session's sensor map. The honest fix
+is `Quelle=kiosk` in implenia-web's CSVs plus a re-sync; until then the
+exception keeps both versions interoperable.
+
+### The alignment rule — the one that fails silently
+
+**Every `GeoDIN` reading must be dated at the exact `received_at` of an already
+recorded depth reading.**
+
+implenia-web aligns the two series by **millisecond equality**
+(`rowMap.get(date.getTime())` in `herstellungLayersFromRows`,
+`app/models/injektionsbohren-protocol.server.ts`) and skips any row where
+either value is null. A reading dated at `Date.now()`, or at an interpolated
+instant, therefore produces **no layer at all**: it uploads cleanly, appears in
+raw charts, and the protocol shows zero observed layers. Same shape of silent,
+total loss as a sensor name that fails to resolve.
+
+What follows from this, and must not be broken:
+
+- **Depth is never taken from the browser.** The live entry route
+  (`POST /api/recording/geology`) carries only a ground-type number; the server
+  dates the reading at its latest depth reading. A client-measured depth would
+  have to be matched back to a reading, and a client one sample out of step
+  produces nothing.
+- **The depth sensor is resolved by role, never by name.** It is `Bohrtiefe` for
+  Injektionsbohren and Ankerbohren but `Tiefe` for DSV
+  (`findSensorNameByRole('depth')`). Note that web's reader hardcodes
+  `Bohrtiefe`: for Injektionsbohren — the only Verfahren with a consumer today —
+  that is the role-`depth` sensor, so the two agree. A future DSV consumer
+  reading `Bohrtiefe` while the kiosk aligned against `Tiefe` would see nothing,
+  and the two sensors only share a timestamp when they arrive in one Elvis
+  frame.
+- **Readings are matched by `sensor_id`, not by topic.**
+  `session_readings.topic` holds the rig's raw MQTT topic, which differs per
+  machine; the session's own `sensor_map` resolves a name to the id every
+  reading carries.
+- **The depth series is filtered to real drilling**: `phase = 'bohren'` (which
+  drops the Rohrverlängerung phantom depths, see `rohrwechsel.ts`) and
+  `upload_status != 'clipped'`. A boundary dated against either would sit at a
+  depth the hole never had.
+- **Timestamps must be strictly increasing across a profile.** Two `GeoDIN`
+  readings at one instant are one row to web, and the upload's own
+  per-timestamp deduplication keeps only the last — so a collision discards a
+  layer. `alignBoundaries` in `depth-timestamp.ts` gives each boundary its own
+  reading.
+- **A boundary deeper than the hole ever got is dropped, not clamped.**
+  Clamping would assert the drill observed ground it never reached, and several
+  such boundaries would all clamp to the same instant, costing real layers to
+  report fictional ones.
+
+### Obstructions are not a separate concept
+
+DIN 4023 numbers 59–64 (`Hindernis Stahl/Beton/Holz/Sonstiges`, `Hohlräume`,
+`Findling`) live in the same number space as soils and rocks. An obstruction is
+an ordinary thin layer, and entering and leaving it are two ordinary code
+changes. web's existing reader renders it correctly with no change at all, and
+the profile survives the round trip through the series without loss.
+
+### The profile committed at stop is complete
+
+A profile is flat and gapless — each layer runs to the next, the last to the
+bottom — so **partial geology is not representable**: a single code asserts the
+ground continues to the bottom of the hole. There is no way to record "sand
+from 2 m, and no claim below that".
+
+Every stop that followed real drilling therefore commits a **complete profile**,
+with the stretches the operator never confirmed back-filled from the
+Schichtauftrag (`Geologie n` / `Tiefe Geologie n`, parsed by
+`vorgabe-geology.ts`). That is the only option that neither discards what the
+operator saw nor invents a boundary they rejected. Back-filled boundaries are
+marked in the **`Geologie` text with a ` (Vorgabe)` suffix** —
+`VORGABE_SUFFIX` in `geology.ts`. Provenance goes there because nothing else
+survives the trip: the backend stores numbers and strings, `GeoDIN` has no room
+for it, and `Geologie` has no other writer.
+
+**The back-fill is server-side, on every stop path.** `geology-profile.ts`
+builds the profile, and `POST /api/recording/stop` commits it whether or not the
+request carried one. The touchscreen's sign-off screen is therefore a *review
+step, not a gate*: a stop by voice, from a second browser tab, or straight from
+the recording bar produces the same profile as a reviewed one. The screen edits
+what the server built rather than deriving its own, so there is one
+implementation and one answer — which is also why the voice stop deliberately
+does **not** route through the sign-off (a hands-free operator would have no
+spoken way off that screen).
+
+Two rules inside the merge are easy to get wrong:
+
+- **Adjacent layers of one ground type merge, shallower boundary surviving.**
+  That is what moves a planned boundary to where it was actually seen, and what
+  stops a confirmation that changed nothing from splitting a layer in two.
+- **An obstruction is never extended to the top of the hole.** Extending soil
+  upward where no Vorgabe fills it is a mild assumption that is usually right;
+  extending `Hindernis Beton` upward asserts the drill met concrete from the
+  surface, which nobody said. Such a profile legitimately starts below zero —
+  the series then says "at 2.0 m the code became 60" and nothing before, which
+  is exactly what web's `fillInitialGap` exists to handle.
+
+The `Geologie` text is composed from the DIN tables in the **din4023 package,
+which the server depends on** (its root entry carries the tables and no React) —
+not from a name the client sends. A caller may still override it per layer for
+an operator's own description. This keeps a profile reading the same however the
+recording was stopped, and stops a client labelling a layer as something it is
+not. Nothing in implenia-web reads this series; `GeoDIN` is what layers come
+from.
+
+### Per project
+
+- **implenia-mqtt-kiosk** — `depth-timestamp.ts` owns the inversion (pure,
+  unit-tested); `geology-profile.ts` owns the merge; `geology.ts` owns the
+  write, the provenance and the idempotent re-commit; `vorgabe-geology.ts`
+  parses the planned profile.
+  `POST /api/recording/stop` takes an optional `geology` body and commits it
+  **before** ending the session, because ending it is what releases the
+  auto-upload. A re-commit removes the previous commit's `pending` readings
+  only, so nothing already on the platform is touched. The stop is never
+  refused over its geology: a malformed profile costs the geology and nothing
+  else.
+- **implenia-web** — `herstellungLayersFromRows`
+  (`injektionsbohren-protocol.server.ts` and `injektionsbohren-export.server.ts`)
+  is the reader. `fillInitialGap` fills the 0 → first-boundary stretch from the
+  Vorgabe; the kiosk now writes a layer at the top of the hole explicitly, so
+  that path is a fallback for older data rather than the normal case. Only
+  Injektionsbohren has a consumer today — DSV declares the sensors with none.
+
+**Known deviation:** the UI parses the Vorgabe geology a second time
+(`ui/src/utils/vorgaben.ts` → `buildSchichten`) for the Soll profile the element
+and drilling screens draw, and for the approaching-boundary suggestion. That
+path is display-only and renders synchronously from already-cached props, which
+is why it was not replaced by a fetch. The server's `vorgabe-geology.ts` is the
+only parser on the correctness-critical path — if the two ever disagree, a drawn
+picture is slightly wrong and nothing is miscommitted.
+
+Keep both projects in sync when this contract changes.
+
 ## Testing
 
 This software auto-updates on machines where a broken deploy costs real time and money. Tests are a safety net, not a checkbox.
@@ -243,7 +393,15 @@ This software auto-updates on machines where a broken deploy costs real time and
 
 **Tests never touch a real database.** `DB_PATH` is forced to `:memory:` in `server/vitest.config.ts`, which is the only correct place for it: `db.ts` opens its connection at *import* time, so setting `process.env.DB_PATH` inside a test file — even in `beforeAll` — is too late if any module already pulled `db.ts` in. Do not set it per-test and do not remove it from the vitest config. A suite that deletes rows must additionally assert `databasePath() === ':memory:'` before it runs. This rule exists because a reset test once wiped a developer's real `kiosk.db`, sessions and readings included.
 
-**Smoke tests** (Playwright, minimal): Not a full E2E suite — just 2-3 tests that boot the app at 1024x768 and verify the shell renders, key elements are visible, and there are no JS console errors. These catch catastrophic failures (broken build, missing assets, layout completely off-screen) that unit/integration tests can't. Keep the count low and the assertions broad. If a smoke test breaks on every CSS change, it's too specific.
+**Smoke tests** (Playwright, `npm run test:smoke`): Not a full E2E suite — three tests that boot the app at 1024x768 and check the shell renders, nothing overflows, and the recording bar stays a single row. These catch catastrophic failures (broken build, missing assets, layout completely off-screen) that unit/integration tests can't. Keep the count low and the assertions broad. If a smoke test breaks on every CSS change, it's too specific — pixel thresholds for one particular arrangement belong in prose here, not frozen in a test that will cry wolf the next time somebody moves a button.
+
+They exist for the failures no unit test can see: the viewport is a hard constraint, and a recording bar that silently wraps to a second row costs the drilling profile 76px. Three things about them are load-bearing:
+
+- **The viewport goes in the project's `use`, after the `devices[…]` spread.** `devices['Desktop Chrome']` carries its own 1280x720 viewport and will silently override a top-level `use.viewport` — which makes every assertion run at a resolution the kiosk never uses.
+- **Routing is hash-based.** `page.goto('/bohren/P-01')` is served the SPA shell and then parsed as the *home* route, so it measures the element list instead. Use `/#/bohren/P-01`.
+- **The browser logs every 4xx/5xx response as a console error.** An unconfigured kiosk answering 503 from `/api/…` is correct degradation, so console errors are filtered to real script errors while *non-API* request failures stay strict — a 404 on a JS chunk is exactly what this should catch.
+
+`e2e/seed.mjs` prepares a throwaway database through the server's own `db` module (importing it is what creates the schema, and it avoids a second copy of the DDL). It refuses to touch a path ending in `kiosk.db`, the same rule the vitest config enforces.
 
 **Pre-update health check** (server-side): Before the auto-updater commits to a new version, the new server must boot and respond to `/health` with a passing status (DB accessible, config loadable, static assets present). If the health check fails, the updater keeps the previous version. No browser involved — this runs on the kiosk itself.
 
