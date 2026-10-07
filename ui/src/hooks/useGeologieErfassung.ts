@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Schicht } from '@coded-aesthetics/din4023/profile';
 import { grundBei } from '@coded-aesthetics/din4023/profile';
 import {
-  HINDERNISSE, MAX_SPALTEN_KACHELN, istHindernis, naechsteGrenze, nameVon,
-  vorgabeArten,
+  HINDERNISSE, MAX_SPALTEN_KACHELN, istHindernis, liveProfil, naechsteGrenze,
+  nameVon, vomServer, vorgabeArten, type Profil, type ServerSchicht,
 } from '../utils/geologie';
 import { formatNumber } from '../utils/format';
 
@@ -78,6 +78,12 @@ export interface GeologieErfassung {
    * picker when there is no plan to fall back on.
    */
   beendeHindernis: () => Promise<void>;
+  /**
+   * The profile to draw while drilling: observed layers solid, the plan dashed
+   * below, and the layer the drill is in ending at the drill. Null until the
+   * server has answered.
+   */
+  profil: Profil | null;
   /** Transient confirmation, e.g. "Schluff ab 3,40 m". */
   rueckmeldung: string | null;
   /** Transient, German, actionable. */
@@ -106,6 +112,18 @@ export function useGeologieErfassung({
   sessionId, active, operatingMode, vorgabeSchichten, tiefe, spalteVerfuegbar,
 }: Args): GeologieErfassung {
   const [verfuegbar, setVerfuegbar] = useState(false);
+  /**
+   * The server's view of this session's geology: the profile it would commit,
+   * and the layers already observed.
+   *
+   * Server-derived rather than accumulated in the browser, so it survives a PM2
+   * restart and so the chart shows what will actually be uploaded rather than a
+   * second, divergent tally.
+   */
+  const [kontext, setKontext] = useState<{
+    profil: { schichten: ServerSchicht[]; endTiefe: number } | null;
+    letzteTiefe: number | null;
+  }>({ profil: null, letzteTiefe: null });
   const [auswahl, setAuswahl] = useState<PickerArt | null>(null);
   const [vollbild, setVollbild] = useState<PickerArt | null>(null);
   const [rueckmeldung, setRueckmeldung] = useState<string | null>(null);
@@ -122,37 +140,50 @@ export function useGeologieErfassung({
 
   const drillt = active && operatingMode === 'bohren';
 
-  // Whether this Verfahren records geology at all is a property of the session,
-  // so it is asked once per session rather than polled.
+  /**
+   * Read the server's view of this session's geology.
+   *
+   * Called once when the session appears and again after every entry — not
+   * polled. Observations only change when something is recorded, and the server
+   * is local, so a round trip per tap costs nothing and keeps one source of
+   * truth instead of a browser-side tally that a restart would lose.
+   */
+  const ladeKontext = useCallback(async (id: number) => {
+    try {
+      const res = await fetch(`/api/recording/${id}/geology-context`);
+      if (!res.ok) throw new Error(String(res.status));
+      const ctx = await res.json();
+      setVerfuegbar(ctx?.verfuegbar === true);
+      const beobachtet = Array.isArray(ctx?.beobachtet) ? ctx.beobachtet : [];
+      const letzte = beobachtet[beobachtet.length - 1];
+      setKontext({
+        profil: ctx?.profil ?? null,
+        letzteTiefe: letzte && Number.isFinite(letzte.tiefe) ? letzte.tiefe : null,
+      });
+      // The last code already recorded. This is what makes "inside an
+      // obstruction" outlive a PM2 restart — without it the operator would come
+      // back to a screen offering no way to close the obstruction.
+      if (letzte && Number.isInteger(letzte.nr)) setLetzteNr(letzte.nr);
+    } catch {
+      // A Verfahren that cannot be asked gets no buttons. Nothing else about
+      // the recording is affected.
+      setVerfuegbar(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (sessionId === null || !active) {
       setVerfuegbar(false);
+      setKontext({ profil: null, letzteTiefe: null });
       return;
     }
-    let abgebrochen = false;
-    fetch(`/api/recording/${sessionId}/geology-context`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((ctx) => {
-        if (abgebrochen) return;
-        setVerfuegbar(ctx?.verfuegbar === true);
-        // The last code already recorded. This is what makes "inside an
-        // obstruction" outlive a PM2 restart — without it the operator would
-        // come back to a screen offering no way to close the obstruction.
-        const beobachtet = Array.isArray(ctx?.beobachtet) ? ctx.beobachtet : [];
-        const letzte = beobachtet[beobachtet.length - 1];
-        if (letzte && Number.isInteger(letzte.nr)) setLetzteNr(letzte.nr);
-      })
-      .catch(() => {
-        // A Verfahren that cannot be asked gets no buttons. Nothing else about
-        // the recording is affected.
-        if (!abgebrochen) setVerfuegbar(false);
-      });
-    return () => { abgebrochen = true; };
-  }, [sessionId, active]);
+    void ladeKontext(sessionId);
+  }, [sessionId, active, ladeKontext]);
 
   // A new session starts with nothing confirmed.
   useEffect(() => {
     setLetzteNr(null);
+    setKontext({ profil: null, letzteTiefe: null });
     setAuswahl(null);
     setVollbild(null);
     setRueckmeldung(null);
@@ -197,6 +228,16 @@ export function useGeologieErfassung({
 
   const imHindernis = letzteNr !== null && istHindernis(letzteNr);
 
+  /**
+   * What the drilling chart draws: everything observed, with the layer the
+   * drill is currently in stopping at the current depth and the plan resuming
+   * below it. See liveProfil — it is deliberately not the committed shape.
+   */
+  const profil = useMemo(
+    () => liveProfil(vomServer(kontext.profil), kontext.letzteTiefe, vorgabeSchichten, tiefe ?? null),
+    [kontext, vorgabeSchichten, tiefe],
+  );
+
   const vorschlag = useMemo(() => {
     if (!drillt || !verfuegbar || !vorgabeSchichten || tiefe == null) return null;
     const grenze = naechsteGrenze(vorgabeSchichten, tiefe, FENSTER_M);
@@ -226,10 +267,13 @@ export function useGeologieErfassung({
           ? `${gezeigt} ab ${formatNumber(data.tiefe)} m`
           : gezeigt,
       );
+      // Re-read rather than patch a local copy: the server decides which depth
+      // reading the entry landed on, so only it knows where the layer starts.
+      if (sessionId !== null) void ladeKontext(sessionId);
     } catch (err) {
       setFehler(`Die Geologie konnte nicht erfasst werden: ${(err as Error).message}`);
     }
-  }, []);
+  }, [sessionId, ladeKontext]);
 
   /**
    * Open a picker — the quick one where a column can show it, the full one
@@ -278,6 +322,7 @@ export function useGeologieErfassung({
     erfasse,
     imHindernis,
     beendeHindernis,
+    profil,
     rueckmeldung,
     fehler,
   };

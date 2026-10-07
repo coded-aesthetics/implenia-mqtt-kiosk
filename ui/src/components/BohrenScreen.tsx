@@ -80,6 +80,18 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
 
   const showRohr = recordingState.active && operatingMode === 'bohren' && rohrwechsel;
 
+  /**
+   * What the column draws.
+   *
+   * While recording, the live profile: the layers the operator actually
+   * recorded, drawn solid, with the Schichtauftrag dashed below — so an
+   * obstruction is visible from the moment it is entered and grows with the
+   * hole, instead of the only feedback being a message that fades after six
+   * seconds. Before a recording starts there is nothing observed, so the plan
+   * is the whole story.
+   */
+  const gezeigtesProfil = geologie?.profil ?? geologyProfile;
+
   return (
     <div style={styles.container}>
       <div style={styles.layout}>
@@ -103,11 +115,11 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
               // of them, so there is nothing more to offer.
               onAndere={geologie.auswahl === 'schicht' ? geologie.oeffneAndere : undefined}
             />
-          ) : geologyProfile ? (
+          ) : gezeigtesProfil ? (
             <div ref={geoRef} data-testid="geologie-profil" style={styles.geoContainer}>
               <BohrprofilLog
-                schichten={geologyProfile.schichten}
-                endTiefe={geologyProfile.endTiefe}
+                schichten={gezeigtesProfil.schichten}
+                endTiefe={gezeigtesProfil.endTiefe}
                 breite={150}
                 hoehe={geoHeight > 0 ? geoHeight : 300}
                 modus="vollbild"

@@ -2,13 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { grundBei } from '@coded-aesthetics/din4023/profile';
 import {
   vomServer, naechsteGrenze, kurzLabel, farbeVon, nameVon, istHindernis,
-  zumCommit, vorgabeArten, MAX_SPALTEN_KACHELN, BODENARTEN, HINDERNISSE,
+  zumCommit, vorgabeArten, liveProfil, MAX_SPALTEN_KACHELN,
+  BODENARTEN, HINDERNISSE,
 } from './geologie';
 
 const SAND = 5;
 const SCHLUFF = 9;
 const TON = 10;
 const BETON = 60;
+const FINDLING = 64;
 
 /** Compact profile shape for assertions: "startDepth:nr" per layer. */
 function umriss(schichten: readonly { tiefe: number; nr: number }[]): string[] {
@@ -257,5 +259,98 @@ describe('the ground an obstruction returns to', () => {
 
   it('answers nothing above the first layer, which is what opens the picker', () => {
     expect(grundBei([{ tiefe: 2, nr: SAND }], 1)).toBeNull();
+  });
+});
+
+describe('liveProfil', () => {
+  /*
+   * What the drilling chart draws, which is deliberately *not* what would be
+   * committed. The committed profile has to say the last ground recorded runs
+   * to the next planned boundary — a gapless profile cannot say "and no claim
+   * below that" — so drawing it live would show 4m of boulder the drill has not
+   * reached. Here the layer the drill is in stops at the drill.
+   */
+  const vorgabe = [
+    { tiefe: 0, nr: SAND },
+    { tiefe: 3, nr: SCHLUFF },
+    { tiefe: 7, nr: TON },
+  ];
+  /** What the server commits after a Findling is recorded at 3.1 m. */
+  const nachFund: Parameters<typeof liveProfil>[0] = {
+    schichten: [
+      { tiefe: 0, nr: SAND, vorlaeufig: true },
+      { tiefe: 3, nr: SCHLUFF, vorlaeufig: true },
+      { tiefe: 3.1, nr: FINDLING },
+    ],
+    endTiefe: 12,
+  };
+
+  function umrissV(p: ReturnType<typeof liveProfil>): string[] {
+    return (p?.schichten ?? []).map((s) => `${s.tiefe}:${s.nr}${s.vorlaeufig ? 'v' : ''}`);
+  }
+
+  it('stops the observed layer at the drill, with the plan resuming below', () => {
+    // Drill at 3.4 m: the boulder is 30 cm of hole, not 3.9 m of it.
+    expect(umrissV(liveProfil(nachFund, 3.1, vorgabe, 3.4)))
+      .toEqual(['0:5v', '3:9v', '3.1:64', '3.4:9v']);
+  });
+
+  it('grows the observed layer as the hole advances', () => {
+    const bei = (t: number) => liveProfil(nachFund, 3.1, vorgabe, t)!
+      .schichten.find((s) => s.nr === FINDLING)!;
+    // The boulder starts where it was met and its bottom follows the drill.
+    expect(bei(3.4).tiefe).toBe(3.1);
+    expect(umrissV(liveProfil(nachFund, 3.1, vorgabe, 3.4))[3]).toBe('3.4:9v');
+    expect(umrissV(liveProfil(nachFund, 3.1, vorgabe, 5))[3]).toBe('5:9v');
+  });
+
+  it('keeps a just-recorded layer visible rather than zero-thickness', () => {
+    // Recorded at 3.1 with the drill still at 3.1: the layer gets one grid
+    // step, so it appears immediately instead of flashing.
+    const p = liveProfil(nachFund, 3.1, vorgabe, 3.1)!;
+    const findling = p.schichten.find((s) => s.nr === FINDLING)!;
+    const danach = p.schichten.find((s) => s.tiefe > findling.tiefe)!;
+    expect(danach.tiefe).toBeGreaterThan(findling.tiefe);
+  });
+
+  it('marks the ground below the drill as not yet observed', () => {
+    const p = liveProfil(nachFund, 3.1, vorgabe, 3.4)!;
+    expect(p.schichten.find((s) => s.tiefe === 3.4)?.vorlaeufig).toBe(true);
+    // ...and the observation itself stays confirmed.
+    expect(p.schichten.find((s) => s.nr === FINDLING)?.vorlaeufig).toBeFalsy();
+  });
+
+  it('adds no boundary when the observation confirms the plan', () => {
+    const bestaetigt = {
+      schichten: [
+        { tiefe: 0, nr: SAND, vorlaeufig: true },
+        { tiefe: 2.5, nr: SCHLUFF },
+      ],
+      endTiefe: 12,
+    };
+    // Schluff observed at 2.5 and schluff planned below: nothing to draw.
+    expect(umrissV(liveProfil(bestaetigt, 2.5, vorgabe, 4)))
+      .toEqual(['0:5v', '2.5:9']);
+  });
+
+  it('shows the plan untouched before anything is observed', () => {
+    const nur = { schichten: vorgabe.map((s) => ({ ...s, vorlaeufig: true })), endTiefe: 12 };
+    expect(liveProfil(nur, null, vorgabe, 4)).toBe(nur);
+  });
+
+  it('shows the committed shape once the drill nears the bottom', () => {
+    // Nothing left to resume into, so there is no adjustment to make.
+    expect(liveProfil(nachFund, 3.1, vorgabe, 11.95)).toBe(nachFund);
+  });
+
+  it('shows the committed shape when there is no plan to resume', () => {
+    expect(liveProfil(nachFund, 3.1, null, 4)).toBe(nachFund);
+    expect(liveProfil(nachFund, 3.1, [{ tiefe: 5, nr: SAND }], 4)).toBe(nachFund);
+  });
+
+  it('is null without a profile, and unchanged without a depth', () => {
+    expect(liveProfil(null, 3.1, vorgabe, 4)).toBeNull();
+    expect(liveProfil(nachFund, 3.1, vorgabe, null)).toBe(nachFund);
+    expect(liveProfil(nachFund, 3.1, vorgabe, NaN)).toBe(nachFund);
   });
 });
