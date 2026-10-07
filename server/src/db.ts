@@ -292,6 +292,36 @@ const getAllSessionReadingsStmt = db.prepare(`
   ORDER BY received_at ASC
 `);
 
+// Geology needs two reads of one session's readings, both by sensor id rather
+// than by topic: `session_readings.topic` holds the raw MQTT topic, which
+// differs per rig, while the session's own `sensor_map` resolves a sensor name
+// to the id every reading of it carries.
+//
+// The depth series is restricted the way the geology inversion needs it:
+// `phase = 'bohren'` drops the Rohrverlängerung phantom depths (see
+// rohrwechsel.ts) and `upload_status != 'clipped'` drops anything recorded
+// while the Klemmbacke was closed. A boundary dated against either would sit
+// at a depth the hole never had.
+const getDepthSamplesStmt = db.prepare(`
+  SELECT received_at, value_numeric
+  FROM session_readings
+  WHERE session_id = ? AND sensor_id = ?
+    AND phase = 'bohren' AND upload_status != 'clipped'
+    AND value_numeric IS NOT NULL
+  ORDER BY received_at ASC
+`);
+const getSensorSeriesStmt = db.prepare(`
+  SELECT received_at, value_numeric
+  FROM session_readings
+  WHERE session_id = ? AND sensor_id = ? AND upload_status != 'clipped'
+    AND value_numeric IS NOT NULL
+  ORDER BY received_at ASC
+`);
+const deletePendingForSensorStmt = db.prepare(`
+  DELETE FROM session_readings
+  WHERE session_id = ? AND sensor_id = ? AND upload_status = 'pending'
+`);
+
 // Upload groups: get distinct sensor groups with pending readings
 const getUploadGroupsStmt = db.prepare(`
   SELECT sensor_id, sensor_type
@@ -656,6 +686,47 @@ export function getAllSessionReadings(sessionId: number): SessionReadingRow[] {
     valueText: r.value_text,
     receivedAt: r.received_at,
   }));
+}
+
+/** One point of a numeric series recorded in a session. */
+export interface SeriesPoint {
+  receivedAt: number;
+  value: number;
+}
+
+/**
+ * The session's depth series as the geology inversion needs it: real drilling
+ * only, nothing clipped, nothing without a value.
+ *
+ * See getDepthSamplesStmt for why each filter is there.
+ */
+export function getSessionDepthSamples(sessionId: number, sensorId: string): SeriesPoint[] {
+  const rows = getDepthSamplesStmt.all(sessionId, sensorId) as {
+    received_at: number; value_numeric: number;
+  }[];
+  return rows.map((r) => ({ receivedAt: r.received_at, value: r.value_numeric }));
+}
+
+/** Every recorded value of one sensor in a session, oldest first. */
+export function getSessionSensorSeries(sessionId: number, sensorId: string): SeriesPoint[] {
+  const rows = getSensorSeriesStmt.all(sessionId, sensorId) as {
+    received_at: number; value_numeric: number;
+  }[];
+  return rows.map((r) => ({ receivedAt: r.received_at, value: r.value_numeric }));
+}
+
+/**
+ * Drop a session's not-yet-uploaded readings for one sensor, and say how many
+ * went.
+ *
+ * What makes committing a geology profile repeatable: the operator can reach
+ * the confirmation screen, go back to recording, and stop again, and each
+ * commit replaces the last rather than appending a second, contradictory set of
+ * layers. Restricted to `pending` so it can never touch a reading already on
+ * the platform — nothing the backend has would be removed by it.
+ */
+export function deletePendingSensorReadings(sessionId: number, sensorId: string): number {
+  return deletePendingForSensorStmt.run(sessionId, sensorId).changes;
 }
 
 export function getSessionUploadGroups(sessionId: number): SessionUploadGroup[] {

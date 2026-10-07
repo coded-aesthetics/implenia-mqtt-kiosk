@@ -184,6 +184,28 @@ export function getSensorRole(sensorKey: string): string | null {
 }
 
 /**
+ * The sensor carrying a given CSV role for the configured Verfahren, if it has
+ * one.
+ *
+ * By role rather than by name, because the name differs per machine type: the
+ * `depth` sensor is `Bohrtiefe` for Injektionsbohren and Ankerbohren but
+ * `Tiefe` for DSV. Anything resolving a sensor by a hardcoded name works on one
+ * Verfahren and silently reads nothing on the next — see
+ * `INJEKTIONSBOHREN_BOHREN.depthSensor` in the UI, which names a sensor the
+ * Injektionsbohren CSV does not define.
+ *
+ * Returns the first match. `getSensorRole` already warns when a Verfahren
+ * declares more than one `depth` sensor, which would be a mistake in the shared
+ * CSV rather than something to resolve here.
+ */
+export function findSensorNameByRole(role: string): string | null {
+  for (const [name, meta] of getSensorMetaLookup()) {
+    if (meta.role === role) return name;
+  }
+  return null;
+}
+
+/**
  * The Verfahren this machine was set up for, or `null` if it has not been
  * through the setup wizard yet. Cached after the first read; every mutation
  * path clears the cache.

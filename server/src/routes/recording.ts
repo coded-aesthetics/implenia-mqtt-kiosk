@@ -3,8 +3,12 @@ import { beginRecording, endRecording, uploadSession, getRecordingState, tryAuto
 import {
   getSessions, getSessionById, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
   getSessionReadingCount, setOperatingModeRow, getMostRecentSession, getCompletedElements,
-  unclipSessionReadings,
+  unclipSessionReadings, getActiveSession,
 } from '../db.js';
+import {
+  commitDefaultGeology, commitGeology, getGeologyContext, recordLiveLayer,
+  type GeologyCommitResult, type GeologyLayerInput,
+} from '../geology.js';
 import {
   buildSessionExport,
   getSessionExportStreams,
@@ -20,6 +24,56 @@ const log = createLogger('recording-routes');
 
 function broadcastUploadProgress(progress: import('../recording.js').UploadProgress): void {
   broadcastMessage({ type: 'upload-progress', ...progress });
+}
+
+/**
+ * Read a geology profile out of a request body, keeping whatever is usable.
+ *
+ * Deliberately lenient. A stop must never be refused over its geology: the
+ * operator would be left on a confirmation screen that will not close, with a
+ * shift of measurements trapped behind it — a dead end, which this software
+ * does not get to have. A malformed body therefore costs the geology and
+ * nothing else, and says so in the response.
+ */
+function readGeologyBody(
+  body: unknown,
+): { layers: GeologyLayerInput[]; hinweis?: string } {
+  const raw = (body as { geology?: unknown } | null | undefined)?.geology;
+  if (raw === undefined || raw === null) return { layers: [] };
+  if (!Array.isArray(raw)) {
+    return {
+      layers: [],
+      hinweis: 'Das Geologieprofil wurde nicht in der erwarteten Form übermittelt '
+        + 'und konnte nicht gespeichert werden. Die Messwerte sind vollständig.',
+    };
+  }
+
+  const layers: GeologyLayerInput[] = [];
+  let verworfen = 0;
+  for (const entry of raw) {
+    const l = entry as Record<string, unknown>;
+    const tiefe = typeof l?.tiefe === 'number' ? l.tiefe : Number(l?.tiefe);
+    const nr = typeof l?.nr === 'number' ? l.nr : Number(l?.nr);
+    if (!Number.isFinite(tiefe) || !Number.isInteger(nr) || nr <= 0) {
+      verworfen++;
+      continue;
+    }
+    layers.push({
+      tiefe,
+      nr,
+      name: typeof l.name === 'string' ? l.name : undefined,
+      quelle: l.quelle === 'vorgabe' ? 'vorgabe' : 'ist',
+    });
+  }
+
+  if (verworfen > 0) {
+    return {
+      layers,
+      hinweis: `${verworfen} Schicht(en) waren unvollständig und wurden nicht gespeichert. `
+        + 'Bitte das Geologieprofil im Portal prüfen.',
+    };
+  }
+  return { layers };
 }
 
 export function registerRecordingRoutes(app: FastifyInstance): void {
@@ -39,8 +93,37 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
     }
   });
 
-  app.post('/api/recording/stop', async (_request, reply) => {
+  /**
+   * Stop the recording, optionally committing the confirmed geology profile
+   * first.
+   *
+   * The order matters: the geology readings have to be in `session_readings`
+   * before the session ends, because ending it is what releases the
+   * auto-upload. Committing afterwards would race the upload and, on a fast
+   * link, leave the geology behind for a later retry that never comes.
+   *
+   * **A stop with no profile still back-fills.** Where the body carries none,
+   * the server builds the same profile the sign-off screen would have shown —
+   * the observations with the Vorgabe filling what was never confirmed — and
+   * commits that. This is what makes the sign-off a review step rather than a
+   * gate: stopping by voice, from a second tab, or straight from the recording
+   * bar produces the same complete profile as reviewing it. A Verfahren without
+   * geology, and a session that never really drilled, commit nothing and stop
+   * exactly as this route always has.
+   */
+  app.post('/api/recording/stop', async (request, reply) => {
     try {
+      const { layers, hinweis } = readGeologyBody(request.body);
+
+      // Read the session before ending it: afterwards there is no active one.
+      const active = getActiveSession();
+      let geology: GeologyCommitResult | undefined;
+      if (active) {
+        geology = layers.length > 0
+          ? commitGeology(active, layers)
+          : commitDefaultGeology(active) ?? undefined;
+      }
+
       const result = endRecording();
       broadcastMessage({ type: 'recording-state', ...getRecordingState() });
 
@@ -54,11 +137,76 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
         });
       }
 
-      return reply.send(result);
+      const hinweise = [hinweis, geology?.hinweis].filter(Boolean);
+      return reply.send({
+        ...result,
+        geology,
+        ...(hinweise.length > 0 ? { hinweis: hinweise.join(' ') } : {}),
+      });
     } catch (err) {
       return reply.status(409).send({ error: (err as Error).message });
     }
   });
+
+  /**
+   * Record one layer change at the depth the rig is at right now.
+   *
+   * No depth in the body on purpose — see recordLiveLayer. The response
+   * carries the depth that was used so the screen can confirm what was
+   * recorded, not merely that something was.
+   */
+  app.post<{ Body: { nr?: unknown; name?: unknown } }>(
+    '/api/recording/geology',
+    async (request, reply) => {
+      const session = getActiveSession();
+      if (!session) {
+        return reply.status(409).send({
+          error: 'Es läuft keine Aufzeichnung. Bitte zuerst die Aufzeichnung starten.',
+        });
+      }
+
+      const nr = typeof request.body?.nr === 'number'
+        ? request.body.nr
+        : Number(request.body?.nr);
+      if (!Number.isInteger(nr) || nr <= 0) {
+        return reply.status(400).send({
+          error: 'Bitte eine gültige Bodenart auswählen.',
+        });
+      }
+
+      const name = typeof request.body?.name === 'string' ? request.body.name : undefined;
+      const result = recordLiveLayer(session, nr, name);
+      if ('fehler' in result) {
+        return reply.status(409).send({ error: result.fehler });
+      }
+
+      log.info('Session %d: live geology %d at %s m', session.id, nr, result.tiefe.toFixed(2));
+      return reply.send({ nr, ...result });
+    },
+  );
+
+  /**
+   * Everything the geology confirmation screen needs: the planned profile to
+   * back-fill from, the layers already observed, and whether this session
+   * drilled far enough to be worth confirming at all.
+   *
+   * Works on the still-active session, because the confirmation happens before
+   * the stop.
+   */
+  app.get<{ Params: { id: string } }>(
+    '/api/recording/:id/geology-context',
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) {
+        return reply.status(400).send({ error: 'Ungültige Aufzeichnungs-ID.' });
+      }
+      const session = getSessionById(sessionId);
+      if (!session) {
+        return reply.status(404).send({ error: 'Aufzeichnung nicht gefunden.' });
+      }
+      return reply.send(getGeologyContext(session));
+    },
+  );
 
   app.post('/api/recording/:id/upload', async (request, reply) => {
     const { id } = request.params as { id: string };
