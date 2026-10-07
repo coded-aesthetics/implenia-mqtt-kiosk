@@ -1,6 +1,7 @@
 import type { VoiceCommand, VoiceContext } from './matchCommand';
 import { navigate } from '../hooks/useHashRouter';
 import { geologieVokabular } from './geologiePhrasen';
+import { GEOLOGIE_ERFASST } from '../hooks/useGeologieErfassung';
 
 export function buildCommands(): VoiceCommand[] {
   return [
@@ -245,14 +246,27 @@ function geologieBefehle(): VoiceCommand[] {
   return geologieVokabular().map((v) => ({
     id: `geologie.${v.nr}`,
     phrases: v.phrases,
-    precondition: (ctx) => ctx.recordingState.active,
-    preconditionHint: 'Geologie kann nur während einer Aufzeichnung erfasst werden',
+    // Matches the buttons: geology is only meaningful while the rig is going
+    // down. Without the mode check a layer could be spoken during Auffüllen,
+    // which the touchscreen does not allow.
+    precondition: (ctx) =>
+      ctx.recordingState.active && ctx.recordingState.operatingMode === 'bohren',
+    preconditionHint: 'Geologie kann nur während des Bohrens erfasst werden',
     execute: async () => {
-      await fetch('/api/recording/geology', {
+      const res = await fetch('/api/recording/geology', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nr: v.nr, name: v.name }),
       });
+      // A spoken entry that fails must not be silent — it is a measurement
+      // lost with nothing on screen to say so.
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Die Geologie konnte nicht erfasst werden (Fehler ${res.status}).`);
+      }
+      // This write happened outside React, so nothing would otherwise tell
+      // useGeologieErfassung about it. See GEOLOGIE_ERFASST.
+      window.dispatchEvent(new CustomEvent(GEOLOGIE_ERFASST));
     },
     description: `Geologie: ${v.name}`,
   }));

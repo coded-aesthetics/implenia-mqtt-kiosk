@@ -342,3 +342,27 @@ describe('GET /api/recording/:id/geology-context', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe('the stop is never refused over its geology', () => {
+  it('still ends the session when the geology commit throws', async () => {
+    // The commit used to sit inside the handler's own try/catch, so a throw
+    // returned 409 without ever calling endRecording — the recording stayed
+    // active and the stop button kept failing. better-sqlite3 raises on
+    // SQLITE_FULL, and a kiosk with a full disk is exactly when the stop button
+    // must still work.
+    const id = activeDrilledSession();
+    const geology = await import('../geology.js');
+    const spy = vi.spyOn(geology, 'commitDefaultGeology').mockImplementation(() => {
+      throw new Error('SQLITE_FULL: database or disk is full');
+    });
+
+    const res = await app.inject({ method: 'POST', url: '/api/recording/stop' });
+
+    expect(res.statusCode).toBe(200);
+    expect(db.getSessionById(id)?.status).toBe('ended');
+    expect(res.json().hinweis).toMatch(/Messwerte sind vollständig/);
+    // No English SQLite text on a worker's screen.
+    expect(JSON.stringify(res.json())).not.toContain('SQLITE_FULL');
+    spy.mockRestore();
+  });
+});

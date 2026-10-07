@@ -101,8 +101,13 @@ export function mergeProfile(
 
   if (planned.length === 0 && observed.length === 0) return null;
 
+  // Sorted here, not only inside the observation loop: with nothing observed
+  // the loop never runs, and a Vorgabe whose depths are out of order reached
+  // the sign-off screen unsorted — which also made the top-of-hole decision
+  // below on a layer that was not the shallowest.
   let layers: ProfileLayer[] = planned
-    .map((s) => ({ tiefe: s.tiefe, nr: s.nr, quelle: 'vorgabe' as Quelle }));
+    .map((s) => ({ tiefe: s.tiefe, nr: s.nr, quelle: 'vorgabe' as Quelle }))
+    .sort((a, b) => a.tiefe - b.tiefe);
 
   for (const b of observed) {
     layers = layers.filter((l) => Math.abs(l.tiefe - b.tiefe) > EPS);

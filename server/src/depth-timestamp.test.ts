@@ -41,11 +41,37 @@ describe('alignBoundaries', () => {
     expect(a.receivedAt).toBe(T0 + 5000);
   });
 
-  it('puts the top of the hole on the first reading', () => {
-    const samples = descent(T0, 1.5, 6); // recording began mid-hole
+  it('puts the top of the hole on the first reading when recording started there', () => {
+    const samples = descent(T0, 0, 6);
     const [a] = alignBoundaries(samples, [0]).aligned;
     expect(a.receivedAt).toBe(T0);
-    expect(a.sampleDepth).toBe(1.5);
+    expect(a.sampleDepth).toBe(0);
+  });
+
+  it('tolerates a boundary inside the sampling gap above the first reading', () => {
+    // 0.5 m steps, recording from 0.4: the drill plausibly passed 0 between
+    // collaring and the first reading.
+    const samples = descent(T0, 0.4, 6);
+    expect(alignBoundaries(samples, [0]).aligned).toHaveLength(1);
+  });
+
+  it('refuses a boundary this session never came near', () => {
+    // Session 2 of a resumed element: recording starts at 8 m, and the plan's
+    // boundaries at 0/2/5 were drilled on a previous day. Taking the nearest
+    // free reading for each would commit Sand at 8.0, Schluff at 8.1 and Ton
+    // at 8.2 — three fabricated 10cm layers reported as a clean success, which
+    // is worse than the silent loss this module exists to prevent.
+    const samples = descent(T0, 8, 10, 0.1);
+    const { aligned, aboveHole } = alignBoundaries(samples, [0, 2, 5]);
+    expect(aligned).toEqual([]);
+    expect(aboveHole).toEqual([0, 2, 5]);
+  });
+
+  it('keeps the boundaries a resumed session did drill through', () => {
+    const samples = descent(T0, 8, 10, 0.1);
+    const { aligned, aboveHole } = alignBoundaries(samples, [5, 8.5, 9.5]);
+    expect(aboveHole).toEqual([5]);
+    expect(aligned.map((a) => a.depth)).toEqual([8.5, 9.5]);
   });
 
   it('keeps timestamps strictly increasing', () => {
@@ -133,8 +159,9 @@ describe('alignBoundaries', () => {
   });
 
   it('reports every boundary as beyond the hole when nothing was recorded', () => {
-    const { aligned, beyondHole } = alignBoundaries([], [0, 2]);
+    const { aligned, aboveHole, beyondHole } = alignBoundaries([], [0, 2]);
     expect(aligned).toEqual([]);
+    expect(aboveHole).toEqual([]);
     expect(beyondHole).toEqual([0, 2]);
   });
 

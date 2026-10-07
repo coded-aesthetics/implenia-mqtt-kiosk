@@ -294,6 +294,26 @@ What follows from this, and must not be broken:
   Clamping would assert the drill observed ground it never reached, and several
   such boundaries would all clamp to the same instant, costing real layers to
   report fictional ones.
+- **A boundary shallower than the session recorded is dropped too**, and for a
+  worse reason. On a resumed element whose second session starts at 8 m, every
+  planned boundary above that would take the next free reading and come out as
+  a 10 cm layer at 8.0, 8.1, 8.2 — a plausible-looking profile, entirely
+  fabricated, reported as a clean success. The tolerance is the largest gap
+  between consecutive readings: the drill plausibly passed any depth inside a
+  sampling gap and nothing outside one. Ground above where recording began is
+  what web's `fillInitialGap` covers from the Vorgabe.
+- **A live entry with no new depth reading since the last one replaces it.**
+  The depth series is filtered to `phase = 'bohren'`, so the latest reading
+  stands still for the whole of a Rohrverlängerung — minutes in which every tap
+  lands on one instant. Two readings there are one row to web, and the upload's
+  per-timestamp dedup keeps only the last, so an obstruction entered and left
+  could vanish entirely. Replacing is also what the operator means: two ground
+  types at one depth is not a profile.
+- **Nothing about geology may stop a recording from ending.** The commit runs
+  in its own `try`/`catch` inside the stop route; a failure costs the profile
+  and nothing else. Inside the handler's own catch it returned 409 without
+  ending the session, leaving the operator on a sign-off screen whose stop
+  button kept failing.
 
 ### Obstructions are not a separate concept
 

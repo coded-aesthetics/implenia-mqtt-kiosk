@@ -145,6 +145,15 @@ export function vomServer(
 export function einfuegeTiefe(
   schichten: readonly Schicht[],
   endTiefe: number,
+  /**
+   * How much room the insert needs, in metres.
+   *
+   * A soil layer only has to leave a step either side. An obstruction is
+   * bounded, so it needs its own thickness *plus* a step above and below — and
+   * with the soil figure it was possible to enable the button for an insert
+   * that swallowed the layer whole.
+   */
+  mindestDicke = 2 * RASTER,
 ): number | null {
   let beste: { tiefe: number; dicke: number } | null = null;
   for (let i = 0; i < schichten.length; i++) {
@@ -153,8 +162,7 @@ export function einfuegeTiefe(
     const dicke = bis - von;
     if (!beste || dicke > beste.dicke) beste = { tiefe: runde(von + dicke / 2), dicke };
   }
-  // Both halves of the split need to exist, so the layer must hold two steps.
-  if (!beste || beste.dicke < 2 * RASTER) return null;
+  if (!beste || beste.dicke < mindestDicke) return null;
   return beste.tiefe;
 }
 

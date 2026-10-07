@@ -321,6 +321,10 @@ const deletePendingForSensorStmt = db.prepare(`
   DELETE FROM session_readings
   WHERE session_id = ? AND sensor_id = ? AND upload_status = 'pending'
 `);
+const deletePendingAtStmt = db.prepare(`
+  DELETE FROM session_readings
+  WHERE session_id = ? AND sensor_id = ? AND received_at = ? AND upload_status = 'pending'
+`);
 
 // Upload groups: get distinct sensor groups with pending readings
 const getUploadGroupsStmt = db.prepare(`
@@ -729,6 +733,20 @@ export function deletePendingSensorReadings(sessionId: number, sensorId: string)
   return deletePendingForSensorStmt.run(sessionId, sensorId).changes;
 }
 
+/**
+ * Drop a not-yet-uploaded reading of one sensor at one exact instant.
+ *
+ * What makes a second geology entry at the same depth a correction rather than
+ * a loss. Two readings on one millisecond are one row to implenia-web, and the
+ * upload's own per-timestamp deduplication keeps only the last — so without
+ * this the earlier of two quick taps vanishes with nothing to say so.
+ */
+export function deletePendingSensorReadingAt(
+  sessionId: number, sensorId: string, receivedAt: number,
+): number {
+  return deletePendingAtStmt.run(sessionId, sensorId, receivedAt).changes;
+}
+
 export function getSessionUploadGroups(sessionId: number): SessionUploadGroup[] {
   const groups = getUploadGroupsStmt.all(sessionId) as { sensor_id: string; sensor_type: string }[];
   return groups.map((g) => {
@@ -923,6 +941,19 @@ export function setDeviceMappings(
     }
   });
   tx();
+}
+
+/**
+ * Run a set of writes as one transaction.
+ *
+ * Geology is committed by deleting the previous commit and writing the new one.
+ * Without this, a failure or a PM2 restart between the two leaves the old
+ * profile deleted and the new one truncated mid-way — "data integrity over
+ * features", and the window is exactly when the disk is full or an update is
+ * being applied.
+ */
+export function inTransaction<T>(fn: () => T): T {
+  return db.transaction(fn)();
 }
 
 export function close(): void {
