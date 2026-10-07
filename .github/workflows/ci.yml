@@ -45,3 +45,15 @@ jobs:
       # invisible until someone pushed a tag and got no release at all.
       - name: Build
         run: npm run build
+
+      # Layout is the one thing the unit suites cannot see, and the kiosk runs
+      # at a fixed 1024x768 with no scrolling allowed. Runs after Build because
+      # it serves the built output, which is what actually ships.
+      #
+      # Chromium only (~115 MB) — the kiosk browser is Chromium, so the other
+      # engines would cost CI minutes to test something nobody runs.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Smoke tests (1024x768)
+        run: npm run test:smoke
