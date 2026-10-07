@@ -97,8 +97,9 @@ export function ResetCard() {
           <div style={styles.blockedNotice}>
             Achtung: {resetState.unsafe.clipped} Messwerte wurden als Rohrwechsel
             ausgeblendet und werden mit zurückgesetzt. Falls der Schwellwert der
-            Klemmbacke falsch eingestellt war, lassen sie sich vorher in der
-            Aufzeichnungs-Leiste freigeben und hochladen.
+            Klemmbacke falsch eingestellt war: zuerst unter „Rohrverlängerung"
+            den Schwellwert prüfen, damit die nächste Aufzeichnung stimmt —
+            bereits ausgeblendete Messwerte kann nur der Service freigeben.
           </div>
         )}
 
