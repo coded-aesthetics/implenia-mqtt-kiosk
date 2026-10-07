@@ -1,12 +1,27 @@
 import { useState, useEffect } from 'react';
-import type { RecordingState, UploadProgress, OperatingMode } from '../hooks/useWebSocket';
-import { isVerpressenMode, hasPipeHandling } from '../utils/operating-mode';
+import { imageDataURI, findByNr } from '@coded-aesthetics/din4023';
+import type { RecordingState, UploadProgress } from '../hooks/useWebSocket';
+import { hasPipeHandling } from '../utils/operating-mode';
+import { navigate } from '../hooks/useHashRouter';
+import { shouldConfirmGeology } from '../utils/geology-stop';
+import { farbeVon, nameVon } from '../utils/geologie';
+import type { GeologieErfassung } from '../hooks/useGeologieErfassung';
 
 interface Props {
   currentPage: string;
   elementName?: string;
   recordingState: RecordingState;
   uploadProgress: UploadProgress | null;
+  /**
+   * Live geology entry, where the Verfahren supports it.
+   *
+   * The buttons live here rather than on the drilling screen because the bar is
+   * already ~76 px tall for its own controls, so they cost no vertical space at
+   * all — and in the left column they were taking 136 px off a profile that
+   * only had 596 px to work with. They are also recording actions, which is
+   * what this bar is for.
+   */
+  geologie?: GeologieErfassung;
 }
 
 type SessionStatus = 'idle' | 'recording' | 'ended' | 'empty' | 'uploading' | 'uploaded' | 'partial';
@@ -18,7 +33,7 @@ interface ExportOption {
   exported: boolean;
 }
 
-export function RecordingBar({ currentPage, elementName, recordingState, uploadProgress }: Props) {
+export function RecordingBar({ currentPage, elementName, recordingState, uploadProgress, geologie }: Props) {
   const rohrwechsel = recordingState.rohrwechsel;
   const operatingMode = recordingState.operatingMode;
   const [loading, setLoading] = useState(false);
@@ -118,6 +133,10 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
 
   // Show on element/bohren pages, while recording, or while showing post-upload state
   const hasPostUploadState = lastUploadResult !== null || resumed || emptyWarning;
+  // The geology sign-off carries its own Beenden and Zurück. A second Beenden
+  // in the bar below it would stop without the profile — the one outcome that
+  // screen exists to prevent.
+  if (currentPage === 'geologie') return null;
   if (currentPage !== 'element' && currentPage !== 'bohren' && !recordingState.active && !hasPostUploadState) return null;
 
   async function startRecording() {
@@ -141,25 +160,35 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     }
   }
 
-  async function setMode(mode: OperatingMode) {
-    if (mode === operatingMode) return;
-    setError(null);
-    try {
-      const res = await fetch('/api/recording/mode', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, sessionId: recordingState.sessionId }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || `Fehler ${res.status}`);
+  /**
+   * Beenden.
+   *
+   * A session that actually drilled, on a Verfahren that records geology, goes
+   * to the sign-off screen first — which is where the forgotten layer changes
+   * get caught. Everything else stops straight away, exactly as before:
+   * grouting-only sessions, machines without geology sensors, and a session
+   * that never went down.
+   *
+   * The check costs one request to the local server. If it fails for any
+   * reason, the stop proceeds — geology must never be what stands between an
+   * operator and finishing an element.
+   */
+  async function stopRecording() {
+    const sessionId = recordingState.sessionId;
+    if (recordingState.active && sessionId !== null) {
+      setLoading(true);
+      const confirm = await shouldConfirmGeology(sessionId);
+      setLoading(false);
+      if (confirm) {
+        const name = recordingState.elementName;
+        navigate(name ? `geologie/${encodeURIComponent(name)}` : 'geologie');
+        return;
       }
-    } catch (err) {
-      setError((err as Error).message);
     }
+    await stopNow();
   }
 
-  async function stopRecording() {
+  async function stopNow() {
     const hadReadings = recordingState.readingCount > 0;
     setLoading(true);
     setError(null);
@@ -231,22 +260,72 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
     }
   }
 
-  const inVerpressen = isVerpressenMode(operatingMode);
-  const modeToggle = operatingMode ? (
-    <div style={styles.modeToggle}>
+  /**
+   * Readings are being held back as a pipe change.
+   *
+   * Not merely cosmetic: in this phase the Rohrverlängerung state machine clips
+   * readings out of every upload and export, so this has to be unmistakable at
+   * a glance. Three things change at once — shape (disc to two bars), colour
+   * (danger red to warning orange) and the pulse stopping — which is what
+   * carries the meaning now that no word does.
+   */
+  const pausiert = !!operatingMode && hasPipeHandling(operatingMode)
+    && rohrwechsel?.phase === 'rohrwechsel';
+
+  /**
+   * What is being recorded, as an icon and nothing else.
+   *
+   * No label, in either state. A word that appears only when paused makes every
+   * control in the bar shift sideways at the moment the operator is watching
+   * the rig rather than the screen, and it says nothing the symbol does not.
+   * Both icons occupy the same 20px so there is no movement at all; the state
+   * still reaches assistive tech through `aria-label`.
+   *
+   * Deliberately not a button: there is no manual pause in this kiosk — the
+   * phase is derived from the Klemmbacke — so giving it button chrome would
+   * invite a tap that cannot do anything. The phase the operator *can* change
+   * is the Bohren/Verpressen switch, which lives in the header next to the
+   * state it sets.
+   */
+  const statusIcon = pausiert ? (
+    <span style={styles.pauseIcon} aria-label="Pausiert">
+      <i style={styles.pauseBar} />
+      <i style={styles.pauseBar} />
+    </span>
+  ) : (
+    <span style={styles.recIcon} aria-label="Aufzeichnung läuft" />
+  );
+
+  const geologieButtons = geologie?.verfuegbar ? (
+    <>
       <button
-        style={operatingMode === 'bohren' ? styles.modeButtonActive : styles.modeButton}
-        onClick={() => setMode('bohren')}
+        data-testid="geologie-schicht"
+        style={geologie.vorschlag ? styles.geoButtonVorschlag : styles.geoButton}
+        onClick={() => {
+          if (geologie.vorschlag) {
+            geologie.erfasse(geologie.vorschlag.nr, nameVon(geologie.vorschlag.nr));
+          } else {
+            geologie.oeffnePicker('schicht');
+          }
+        }}
       >
-        B
+        {geologie.vorschlag ? (
+          <>
+            <Hatch nr={geologie.vorschlag.nr} />
+            <span style={styles.geoLabel}>{nameVon(geologie.vorschlag.nr)}?</span>
+          </>
+        ) : (
+          <span style={styles.geoLabel}>Schicht</span>
+        )}
       </button>
       <button
-        style={inVerpressen ? styles.modeButtonActive : styles.modeButton}
-        onClick={() => { if (!inVerpressen) setMode('austausch'); }}
+        data-testid="geologie-hindernis"
+        style={styles.geoButtonHindernis}
+        onClick={() => geologie.oeffnePicker('hindernis')}
       >
-        V
+        Hindernis
       </button>
-    </div>
+    </>
   ) : null;
 
   return (
@@ -263,18 +342,30 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
         </button>
       )}
 
+      {/*
+        One row, and it has to stay one row: `recordingRow` wraps, and a bar
+        that grows a second line eats exactly the vertical space this layout
+        was rearranged to free. The smoke test pins it at 1024x768.
+      */}
       {status === 'recording' && (
-        <div style={styles.recordingRow}>
-          <span style={styles.redDot} />
-          <span style={styles.recordingLabel}>
-            {operatingMode && hasPipeHandling(operatingMode) && rohrwechsel?.phase === 'rohrwechsel'
-              ? 'Pausiert'
-              : 'Aufzeichnung'}
-          </span>
+        <div style={styles.recordingRowFest}>
+          {statusIcon}
           <span style={styles.elapsed}>
             <ElapsedTime startedAt={recordingState.startedAt} />
           </span>
-          {modeToggle}
+          {geologieButtons}
+          {geologie?.rueckmeldung && (
+            <span style={styles.geoRueckmeldung}>✓ {geologie.rueckmeldung}</span>
+          )}
+          {geologie?.fehler && (
+            <span style={styles.geoFehler}>{geologie.fehler}</span>
+          )}
+          {/*
+            Still worded, and still the widest control here. It ends the
+            element, releases the upload and writes the Ausführungsdatum —
+            recoverable via "Wiederaufnehmen", but not something to leave to
+            icon recognition.
+          */}
           <button
             style={{ ...styles.button, ...styles.stopButton }}
             onClick={stopRecording}
@@ -295,7 +386,6 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
       {status === 'ended' && (
         <div style={styles.recordingRow}>
           <span style={styles.count}>{recordingState.readingCount} Messwerte aufgezeichnet</span>
-          {modeToggle}
           {/*
             Auto-upload normally carries the session straight from here to
             "uploading", so reaching this state means it could not: the kiosk
@@ -343,7 +433,6 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
           <span style={styles.uploadPercent}>
             {Math.round((uploadProgress.sensorsCompleted / uploadProgress.sensorsTotal) * 100)}%
           </span>
-          {modeToggle}
         </div>
       )}
 
@@ -377,7 +466,6 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
           <span style={styles.warningLabel}>
             {uploadProgress.sensorsFailed} Sensoren fehlgeschlagen
           </span>
-          {modeToggle}
           <button
             style={{ ...styles.button, ...styles.retryButton }}
             onClick={upload}
@@ -388,6 +476,26 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The DIN 4023 hatch symbol for a ground type — the same one the profile draws,
+ * which is how someone who reads these charts recognises the button without
+ * reading its label. Obstructions carry no symbol in DIN 4023, so they get the
+ * flat colour `farbeVon` assigns them.
+ */
+function Hatch({ nr }: { nr: number }) {
+  const entry = findByNr(nr);
+  const img = entry ? imageDataURI(entry) : undefined;
+  return (
+    <span
+      style={{
+        ...styles.hatch,
+        backgroundColor: farbeVon(nr),
+        ...(img ? { backgroundImage: `url(${img})`, backgroundSize: 'cover' } : {}),
+      }}
+    />
   );
 }
 
@@ -464,22 +572,6 @@ const styles: Record<string, React.CSSProperties> = {
   resumeButtonConfirm: {
     backgroundColor: 'var(--color-accent)',
     color: '#fff',
-  },
-  redDot: {
-    width: '14px',
-    height: '14px',
-    borderRadius: '50%',
-    backgroundColor: 'var(--color-danger)',
-    display: 'inline-block',
-    flexShrink: 0,
-    animation: 'pulse 1.5s ease-in-out infinite',
-  },
-  recordingLabel: {
-    fontSize: '1.1rem',
-    fontWeight: 700,
-    color: 'var(--color-danger)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
   },
   elapsed: {
     fontSize: '1.4rem',
@@ -558,34 +650,117 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--color-danger)',
     marginBottom: '0.5rem',
   },
-  modeToggle: {
+  /** Like recordingRow, but it must never wrap. See the comment at its use. */
+  recordingRowFest: {
     display: 'flex',
-    gap: '2px',
-    borderRadius: '6px',
-    overflow: 'hidden',
+    alignItems: 'center',
+    gap: '0.75rem',
+    flexWrap: 'nowrap',
+    justifyContent: 'center',
+    width: '100%',
+    minWidth: 0,
   },
-  modeButton: {
-    minHeight: '64px',
-    minWidth: '64px',
-    padding: '0 0.75rem',
-    fontSize: '1.2rem',
-    fontWeight: 600,
+  recIcon: {
+    width: '20px',
+    height: '20px',
+    borderRadius: '50%',
+    backgroundColor: 'var(--color-danger)',
+    flexShrink: 0,
+    // The pulse is what reads as "running" now that the word is gone.
+    animation: 'pulse 1.5s ease-in-out infinite',
+  },
+  pauseIcon: {
+    // Same 20px box as recIcon: a different width would reintroduce the sideways
+    // shift that dropping the label was meant to remove.
+    width: '20px',
+    height: '20px',
+    display: 'flex',
+    gap: '4px',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  pauseBar: {
+    display: 'block',
+    width: '7px',
+    height: '20px',
+    borderRadius: '2px',
+    backgroundColor: 'var(--color-warning)',
+  },
+  geoButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '0.5rem',
+    minHeight: 'var(--tap-min)',
+    minWidth: '150px',
+    padding: '0 var(--space-md)',
+    border: '2px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--surface-2)',
+    color: 'var(--text-primary)',
     fontFamily: 'inherit',
-    border: 'none',
     cursor: 'pointer',
-    backgroundColor: 'var(--surface-0)',
-    color: 'var(--text-muted)',
+    flexShrink: 0,
   },
-  modeButtonActive: {
-    minHeight: '64px',
-    minWidth: '64px',
-    padding: '0 0.75rem',
-    fontSize: '1.2rem',
+  geoButtonVorschlag: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '0.5rem',
+    minHeight: 'var(--tap-min)',
+    minWidth: '150px',
+    padding: '0 var(--space-md)',
+    border: '2px solid var(--color-accent)',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--surface-3)',
+    color: 'var(--color-accent-strong)',
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  geoButtonHindernis: {
+    minHeight: 'var(--tap-min)',
+    minWidth: '150px',
+    padding: '0 var(--space-md)',
+    border: '2px solid var(--color-warning)',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--surface-2)',
+    color: 'var(--color-warning-text)',
+    fontSize: 'var(--font-base)',
     fontWeight: 700,
     fontFamily: 'inherit',
-    border: 'none',
     cursor: 'pointer',
-    backgroundColor: 'var(--color-accent)',
-    color: '#fff',
+    flexShrink: 0,
+  },
+  geoLabel: {
+    fontSize: 'var(--font-base)',
+    fontWeight: 700,
+    whiteSpace: 'nowrap',
+  },
+  hatch: {
+    width: '28px',
+    height: '28px',
+    flexShrink: 0,
+    borderRadius: 'var(--radius-sm)',
+    border: '1px solid var(--border)',
+  },
+  geoRueckmeldung: {
+    fontSize: 'var(--font-sm)',
+    fontWeight: 700,
+    color: 'var(--color-success-strong)',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    minWidth: 0,
+  },
+  geoFehler: {
+    fontSize: 'var(--font-sm)',
+    fontWeight: 600,
+    color: 'var(--color-danger-strong)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    minWidth: 0,
   },
 };

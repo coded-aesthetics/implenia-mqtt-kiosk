@@ -44,9 +44,17 @@ interface Props {
   vorgaben: VorgabenData | null;
   config: BohrenConfig;
   recordingState: RecordingState;
+  /**
+   * A planned boundary worth watching for, marked in the profile.
+   *
+   * Passed in rather than derived here: the recording bar's geology buttons are
+   * driven by the same suggestion, and two copies of the rule would let the
+   * button offer one boundary while the chart highlighted another.
+   */
+  markierteGrenze?: number | null;
 }
 
-export function BohrenScreen({ readings, vorgaben, config, recordingState }: Props) {
+export function BohrenScreen({ readings, vorgaben, config, recordingState, markierteGrenze }: Props) {
   const geoRef = useRef<HTMLDivElement>(null);
   const [geoHeight, setGeoHeight] = useState(0);
 
@@ -93,6 +101,7 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
                 hoehe={geoHeight > 0 ? geoHeight : 300}
                 modus="vollbild"
                 tiefenIndikator={depth}
+                markierteGrenze={markierteGrenze ?? null}
                 styleOverrides={geoStyles}
               />
             </div>
@@ -204,6 +213,7 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState }: Pro
           </div>
         </div>
       </div>
+
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { navigate } from '../hooks/useHashRouter';
 import type { OperatingMode } from '../hooks/useWebSocket';
-import { PhaseBadge } from './PhaseBadge';
+import { PhaseSwitch } from './PhaseSwitch';
 import logo from '../../assets/implenia-logo.png';
 
 interface Props {
@@ -17,9 +17,19 @@ interface Props {
   onMicRelease?: () => void;
   commentQueueCount?: number;
   operatingMode?: OperatingMode | null;
+  /**
+   * Switch what the rig is doing. Omit to render the phase read-only.
+   *
+   * In the header because the control and the indicator for it belong together
+   * — and in the *centre* rather than beside the icon cluster on the right: a
+   * mis-tap here changes whether Klemmbacke readings are clipped out of the
+   * upload, so it stays away from where hands already go for the mic and the
+   * settings.
+   */
+  onModeChange?: (mode: OperatingMode) => void;
 }
 
-export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode }: Props) {
+export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode, onModeChange }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -63,7 +73,7 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
       <div style={styles.centerSection}>
         {pageTitle && <span style={styles.pageTitle}>{pageTitle}</span>}
         {operatingMode && (currentPage === 'element' || currentPage === 'bohren') && (
-          <PhaseBadge mode={operatingMode} />
+          <PhaseSwitch mode={operatingMode} onChange={onModeChange} />
         )}
       </div>
 
@@ -170,18 +180,27 @@ const styles: Record<string, React.CSSProperties> = {
     textDecoration: 'none',
   },
   logo: {
-    height: '80px',
+    // 64, not 80: at 80 the logo alone pushed the bar to 96px — overriding its
+    // own minHeight — and spent 12% of a 768px viewport on branding. 64 leaves
+    // the header 80px tall, which is exactly a 64px tap target plus its padding.
+    height: '64px',
     objectFit: 'contain' as const,
     borderRadius: '8px',
   },
   centerSection: {
     flex: 1,
+    minWidth: 0,
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
     gap: '0.75rem',
   },
   pageTitle: {
+    // Element names are free text and the centre now shares its width with the
+    // phase switch, so the title yields rather than pushing the switch off.
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
     fontSize: '2.0rem',
     fontWeight: 600,
     color: 'var(--text-primary)',
