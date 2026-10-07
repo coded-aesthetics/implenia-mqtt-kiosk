@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 import type { CSSProperties } from 'react';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import {
@@ -84,17 +85,7 @@ export function GeologieBestaetigung({
   const [entfernenBestaetigt, setEntfernenBestaetigt] = useState(false);
   const [sendet, setSendet] = useState(false);
 
-  const chartRef = useRef<HTMLDivElement>(null);
-  const [chartHoehe, setChartHoehe] = useState(0);
-
-  useEffect(() => {
-    if (!chartRef.current) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setChartHoehe(Math.floor(entry.contentRect.height));
-    });
-    ro.observe(chartRef.current);
-    return () => ro.disconnect();
-  }, []);
+  const [chartRef, chartHoehe] = useMeasuredHeight();
 
   // Load the context and build the profile to present. Deliberately not
   // retried in a loop: if this cannot be read, the operator still has Beenden,

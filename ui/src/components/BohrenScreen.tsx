@@ -1,4 +1,5 @@
-import { useMemo, useRef, useEffect, useState } from 'react';
+import { useMemo } from 'react';
+import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 import type { CSSProperties } from 'react';
 import type { SensorReading, RecordingState } from '../hooks/useWebSocket';
 import type { VorgabenData } from '../hooks/useImplenia';
@@ -63,20 +64,10 @@ interface Props {
 }
 
 export function BohrenScreen({ readings, vorgaben, config, recordingState, markierteGrenze, geologie }: Props) {
-  const geoRef = useRef<HTMLDivElement>(null);
-  const [geoHeight, setGeoHeight] = useState(0);
+  const [geoRef, geoHeight] = useMeasuredHeight();
 
   const rohrwechsel = recordingState.rohrwechsel;
   const operatingMode = recordingState.operatingMode;
-
-  useEffect(() => {
-    if (!geoRef.current) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setGeoHeight(Math.floor(entry.contentRect.height));
-    });
-    ro.observe(geoRef.current);
-    return () => ro.disconnect();
-  }, []);
 
   const allEntries = useMemo(() => collectVorgabeEntries(vorgaben), [vorgaben]);
   const geologyProfile = useMemo(() => buildSchichten(allEntries), [allEntries]);
@@ -113,7 +104,7 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
               onAndere={geologie.auswahl === 'schicht' ? geologie.oeffneAndere : undefined}
             />
           ) : geologyProfile ? (
-            <div ref={geoRef} style={styles.geoContainer}>
+            <div ref={geoRef} data-testid="geologie-profil" style={styles.geoContainer}>
               <BohrprofilLog
                 schichten={geologyProfile.schichten}
                 endTiefe={geologyProfile.endTiefe}
