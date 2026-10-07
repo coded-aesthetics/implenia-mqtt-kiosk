@@ -123,3 +123,41 @@ test('the recording bar stays a single row while recording', async ({ page }) =>
   // Still glove-sized targets after being packed into one row.
   for (const b of boxes) expect(b.height).toBeGreaterThanOrEqual(48);
 });
+
+test('the profile still fills its column after picking a ground type', async ({ page }) => {
+  /*
+   * A regression guard, not a layout assertion — this one shipped twice.
+   *
+   * The profile takes its height as a prop, measured with a ResizeObserver. The
+   * observer used to be attached once on the component's mount, which silently
+   * failed for an element that renders conditionally: absent on first paint
+   * while the Vorgaben loaded, and left watching a detached node once picking a
+   * ground type swapped the column for the picker and back. Both looked the
+   * same on screen — the chart at its hardcoded fallback height, no error
+   * anywhere.
+   *
+   * Deliberately compared against the fallback rather than an exact height:
+   * what is being checked is that the measurement happened at all.
+   */
+  await page.goto(DRILLING);
+  await waitForRecordingBar(page);
+
+  const profil = page.getByTestId('geologie-profil');
+  const chart = profil.locator('> *').first();
+  const FALLBACK = 300;
+
+  const before = (await chart.boundingBox())!.height;
+  expect(before, 'profile never measured on load').toBeGreaterThan(FALLBACK);
+
+  // Open the quick picker — the column swaps out — then close it again.
+  await page.getByTestId('geologie-schicht').click();
+  await expect(profil).toBeHidden();
+  await page.getByTestId('geologie-schicht').click();
+  await expect(profil).toBeVisible();
+
+  const after = (await chart.boundingBox())!.height;
+  expect(after, 'profile lost its height after the column came back')
+    .toBeGreaterThan(FALLBACK);
+  expect(Math.abs(after - before), 'profile height changed across the swap')
+    .toBeLessThan(2);
+});

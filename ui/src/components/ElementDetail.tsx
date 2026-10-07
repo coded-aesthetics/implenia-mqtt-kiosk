@@ -1,4 +1,5 @@
-import { useMemo, useRef, useEffect, useState } from 'react';
+import { useMemo } from 'react';
+import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 import { useVorgabenUnits, useHerstellenUnits, useHerstellenSensors, useVorgabenSensors } from '../hooks/useImplenia';
 import type { VorgabenData } from '../hooks/useImplenia';
 import type { SensorReading } from '../hooks/useWebSocket';
@@ -31,17 +32,7 @@ function sensorNameOf(reading: SensorReading): string {
 }
 
 export function ElementDetail({ elementName, readings, vorgaben, activeTab, setActiveTab, commentQueue, onCommentEdit, onCommentDelete, onCommentRetry }: Props) {
-  const geoRef = useRef<HTMLDivElement>(null);
-  const [geoHeight, setGeoHeight] = useState(0);
-
-  useEffect(() => {
-    if (!geoRef.current) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setGeoHeight(Math.floor(entry.contentRect.height));
-    });
-    ro.observe(geoRef.current);
-    return () => ro.disconnect();
-  }, []);
+  const [geoRef, geoHeight] = useMeasuredHeight();
 
   const vorgabenUnits = useVorgabenUnits(elementName);
   const herstellenUnits = useHerstellenUnits(elementName);
