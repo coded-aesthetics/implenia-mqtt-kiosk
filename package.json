@@ -11,12 +11,15 @@
     "build": "npm run build -w server && npm run build -w ui",
     "start": "node server/dist/index.js",
     "replay": "npm run replay -w server",
-    "lint": "npm run lint -w server && npm run lint -w ui"
+    "lint": "npm run lint -w server && npm run lint -w ui",
+    "test": "npm test -w server && npm test -w ui",
+    "test:smoke": "playwright test"
   },
   "overrides": {
     "lodash": "4.17.21"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "concurrently": "^9.1.2"
   }
 }
