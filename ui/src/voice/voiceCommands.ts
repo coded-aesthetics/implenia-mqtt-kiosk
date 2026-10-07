@@ -1,5 +1,6 @@
 import type { VoiceCommand, VoiceContext } from './matchCommand';
 import { navigate } from '../hooks/useHashRouter';
+import { geologieVokabular } from './geologiePhrasen';
 
 export function buildCommands(): VoiceCommand[] {
   return [
@@ -45,6 +46,16 @@ export function buildCommands(): VoiceCommand[] {
       ],
       precondition: (ctx) => ctx.recordingState.active,
       preconditionHint: 'Keine aktive Aufzeichnung',
+      /**
+       * Stops directly, unlike the Beenden button, which goes to the geology
+       * sign-off first.
+       *
+       * Deliberate, and it costs nothing: the server back-fills the profile on
+       * every stop, so a spoken stop uploads exactly what a reviewed one would.
+       * Routing voice through the sign-off would strand a hands-free operator
+       * on a screen with no spoken way off it — saying "beenden" again would
+       * only open it a second time.
+       */
       execute: async () => {
         await fetch('/api/recording/stop', { method: 'POST' });
       },
@@ -212,5 +223,37 @@ export function buildCommands(): VoiceCommand[] {
       },
       description: 'Element herstellen',
     },
+
+    ...geologieBefehle(),
   ];
+}
+
+/**
+ * One command per ground type reachable by voice.
+ *
+ * Generated rather than written out: the vocabulary is the DIN 4023 tables, and
+ * a hand-maintained copy would drift from the tiles the picker shows. One
+ * command per type instead of a `{boden}` placeholder because the matcher only
+ * expands `{element}`, and twenty-one generated commands are cheaper than a new
+ * placeholder kind in the hot path of every utterance.
+ *
+ * No depth is sent: the server dates the reading at the exact `received_at` of
+ * its latest depth reading, which is what implenia-web needs to turn it into a
+ * layer at all.
+ */
+function geologieBefehle(): VoiceCommand[] {
+  return geologieVokabular().map((v) => ({
+    id: `geologie.${v.nr}`,
+    phrases: v.phrases,
+    precondition: (ctx) => ctx.recordingState.active,
+    preconditionHint: 'Geologie kann nur während einer Aufzeichnung erfasst werden',
+    execute: async () => {
+      await fetch('/api/recording/geology', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nr: v.nr, name: v.name }),
+      });
+    },
+    description: `Geologie: ${v.name}`,
+  }));
 }

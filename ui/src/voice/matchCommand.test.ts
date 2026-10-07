@@ -5,6 +5,7 @@ import {
   type VoiceCommand,
   type VoiceContext,
 } from './matchCommand';
+import { geologieVokabular } from './geologiePhrasen';
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -427,5 +428,143 @@ describe('elementNameVariants', () => {
     expectElement('gehe zu b fünf', 'B-05', homeCtx);
     expectElement('gehe zu b null fünf', 'B-05', homeCtx);
     expectElement('gehe zu b 05', 'B-05', homeCtx);
+  });
+});
+
+// ── Geology ──────────────────────────────────────────────────────────────────
+
+/**
+ * The real DIN vocabulary, as voiceCommands.ts generates it.
+ *
+ * Built from `geologieVokabular()` rather than restated, because the thing
+ * worth testing is exactly the generated phrase set: 76 new phrases entering
+ * the matcher is the kind of change that quietly steals an existing command.
+ */
+function geologyCommands(): VoiceCommand[] {
+  return geologieVokabular().map((v) => ({
+    id: `geologie.${v.nr}`,
+    phrases: v.phrases,
+    precondition: (ctx: VoiceContext) => ctx.recordingState.active,
+    preconditionHint: 'Geologie kann nur während einer Aufzeichnung erfasst werden',
+    execute: () => {},
+    description: `Geologie: ${v.name}`,
+  }));
+}
+
+/** The full command set a kiosk actually runs with. */
+function allCommands(): VoiceCommand[] {
+  return [...testCommands(), ...geologyCommands()];
+}
+
+function matchAll(transcript: string, ctx?: VoiceContext) {
+  return matchCommandWithReason(
+    transcript,
+    expandCommands(allCommands(), ELEMENT_NAMES),
+    ctx ?? makeCtx(),
+  );
+}
+
+function expectGeology(transcript: string, nr: number, ctx?: VoiceContext) {
+  const result = matchAll(transcript, ctx ?? makeCtx({ active: true, sessionId: 1 }));
+  expect(result).toHaveProperty('result');
+  if ('result' in result) {
+    expect(result.result.command.id).toBe(`geologie.${nr}`);
+  }
+}
+
+function expectCommand(transcript: string, id: string, ctx?: VoiceContext) {
+  const result = matchAll(transcript, ctx);
+  expect(result).toHaveProperty('result');
+  if ('result' in result) {
+    expect(result.result.command.id).toBe(id);
+  }
+}
+
+describe('geology by voice', () => {
+  const recording = () => makeCtx({ active: true, sessionId: 1 });
+
+  it('records a soil from its bare name', () => {
+    expectGeology('schluff', 9);
+    expectGeology('sand', 5);
+    expectGeology('kies', 1);
+  });
+
+  it('records a soil from a prefixed phrase', () => {
+    expectGeology('schicht schluff', 9);
+    expectGeology('bodenart feinsand', 8);
+    expectGeology('geologie ton', 10);
+  });
+
+  it('distinguishes the grain sizes', () => {
+    expectGeology('grobsand', 6);
+    expectGeology('mittelsand', 7);
+    expectGeology('feinsand', 8);
+    expectGeology('grobkies', 2);
+  });
+
+  it('records each obstruction', () => {
+    expectGeology('hindernis beton', 60);
+    expectGeology('hindernis stahl', 59);
+    expectGeology('hindernis holz', 61);
+    expectGeology('findling', 64);
+  });
+
+  it('accepts either word of a two-named soil', () => {
+    // "Torf, Humus" is one entry; nobody says the comma.
+    expectGeology('torf', 11);
+    expectGeology('humus', 11);
+  });
+
+  it('tolerates a polite prefix', () => {
+    expectGeology('bitte schicht sand', 5);
+  });
+
+  it('is blocked when nothing is being recorded', () => {
+    const result = matchAll('schluff', makeCtx({ active: false }));
+    expect(result).toHaveProperty('blocked');
+  });
+
+  it('does not steal the recording commands', () => {
+    // 76 new phrases must not outscore the commands that were already there.
+    expectCommand('stopp', 'recording.stop', recording());
+    expectCommand('aufzeichnung beenden', 'recording.stop', recording());
+    expectCommand('aufzeichnung starten', 'recording.start');
+    expectCommand('beenden', 'recording.stop', recording());
+  });
+
+  it('does not steal navigation or tab commands', () => {
+    expectCommand('zurück', 'nav.home', makeCtx({ page: 'element' }));
+    expectCommand('messwerte', 'tab.messwerte');
+    expectCommand('vorgaben', 'tab.vorgabe');
+    expectCommand('kommentare', 'tab.kommentare');
+  });
+
+  it('does not steal element navigation from the start page', () => {
+    expectCommand('c drei', 'nav.element', makeCtx({ page: 'home' }));
+  });
+
+  it('matches nothing for a word outside the vocabulary', () => {
+    expect(matchAll('granit', recording())).toHaveProperty('noMatch', true);
+  });
+
+  it('keeps every generated id unique', () => {
+    const ids = geologyCommands().map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('generates no empty phrase', () => {
+    for (const cmd of geologyCommands()) {
+      expect(cmd.phrases.length).toBeGreaterThan(0);
+      for (const p of cmd.phrases) expect(p.trim()).not.toBe('');
+    }
+  });
+
+  it('leaves the rock types to the touchscreen', () => {
+    // Felsarten are names a small offline model mishears; a misheard ground
+    // type records a layer nobody said.
+    const ids = new Set(geologyCommands().map((c) => c.id));
+    expect(ids.has('geologie.18')).toBe(false); // Sandstein
+    expect(ids.has('geologie.25')).toBe(false); // Gipsstein
+    expect(ids.size).toBe(21);
   });
 });
