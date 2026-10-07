@@ -8,8 +8,8 @@ import {
 } from '@coded-aesthetics/din4023/profile';
 import { formatNumber } from '../utils/format';
 import {
-  farbeVon, istHindernis, kurzLabel, nameVon, vomServer, zumCommit,
-  type Profil,
+  einfuegeTiefe, farbeVon, istHindernis, kurzLabel, nameVon, vomServer,
+  zumCommit, type Profil,
 } from '../utils/geologie';
 import { GeologiePicker, type PickerArt } from './GeologiePicker';
 
@@ -82,7 +82,15 @@ export function GeologieBestaetigung({
   const [fehler, setFehler] = useState<string | null>(null);
   const [hinweis, setHinweis] = useState<string | null>(null);
   const [ziel, setZiel] = useState<PickerZiel | null>(null);
-  const [entfernenBestaetigt, setEntfernenBestaetigt] = useState(false);
+  /**
+   * The row whose delete is armed, if any.
+   *
+   * CLAUDE.md's tap-to-confirm: the first tap turns the whole row into the
+   * confirm target rather than growing a small yes/no pair, and a tap anywhere
+   * else disarms it. Held here rather than per-row so that arming one row
+   * disarms another.
+   */
+  const [loeschIndex, setLoeschIndex] = useState<number | null>(null);
   const [sendet, setSendet] = useState(false);
 
   const [chartRef, chartHoehe] = useMeasuredHeight();
@@ -176,18 +184,25 @@ export function GeologieBestaetigung({
       aendern(fuegeSchichtEin(schichten, endTiefe, ziel.tiefe, nr, { vorlaeufig: false }));
     }
     setZiel(null);
-    setEntfernenBestaetigt(false);
   }
 
-  function entferne() {
-    if (!ziel || ziel.art !== 'typ') return;
-    if (!entfernenBestaetigt) {
-      setEntfernenBestaetigt(true);
-      return;
-    }
-    aendern(entferneSchicht(schichten, endTiefe, ziel.index));
-    setZiel(null);
-    setEntfernenBestaetigt(false);
+  function entferne(index: number) {
+    aendern(entferneSchicht(schichten, endTiefe, index));
+    setLoeschIndex(null);
+  }
+
+  /**
+   * Add a layer, or an obstruction, in the middle of the thickest layer.
+   *
+   * The depth is chosen rather than asked for — see einfuegeTiefe. The picker
+   * opens straight away, because an operator asking for a layer already knows
+   * what it is; the steppers move it afterwards.
+   */
+  function fuegeEin(kind: PickerArt) {
+    const tiefe = einfuegeTiefe(schichten, endTiefe);
+    if (tiefe == null) return;
+    setLoeschIndex(null);
+    setZiel({ art: 'neu', kind, tiefe });
   }
 
   async function beenden() {
@@ -217,9 +232,7 @@ export function GeologieBestaetigung({
         art={kind}
         untertitel={untertitel}
         onWaehlen={waehleTyp}
-        onAbbrechen={() => { setZiel(null); setEntfernenBestaetigt(false); }}
-        onEntfernen={ziel.art === 'typ' && schichten.length > 1 ? entferne : undefined}
-        entfernenBestaetigt={entfernenBestaetigt}
+        onAbbrechen={() => setZiel(null)}
       />
     );
   }
@@ -287,22 +300,34 @@ export function GeologieBestaetigung({
                   key={`${s.id ?? ''}-${i}-${s.tiefe}`}
                   schicht={s}
                   istErste={i === 0}
-                  onTyp={() => setZiel({ art: 'typ', index: i })}
-                  onMinus={() => verschiebeGrenze(i, -1)}
-                  onPlus={() => verschiebeGrenze(i, +1)}
+                  // The last layer standing cannot go: a profile with no layers
+                  // is not a profile.
+                  loeschbar={schichten.length > 1}
+                  loeschBereit={loeschIndex === i}
+                  onTyp={() => { setLoeschIndex(null); setZiel({ art: 'typ', index: i }); }}
+                  onMinus={() => { setLoeschIndex(null); verschiebeGrenze(i, -1); }}
+                  onPlus={() => { setLoeschIndex(null); verschiebeGrenze(i, +1); }}
+                  onLoeschen={() => setLoeschIndex(i)}
+                  onLoeschenBestaetigen={() => entferne(i)}
                 />
               ))}
             </div>
-            <button
-              style={styles.hindernisHinzu}
-              onClick={() => setZiel({
-                art: 'neu',
-                kind: 'hindernis',
-                tiefe: runde(Math.max(0, endTiefe / 2)),
-              })}
-            >
-              + Hindernis
-            </button>
+            <div style={styles.hinzuReihe}>
+              <button
+                style={styles.hinzu}
+                onClick={() => fuegeEin('schicht')}
+                disabled={einfuegeTiefe(schichten, endTiefe) == null}
+              >
+                + Schicht
+              </button>
+              <button
+                style={styles.hinzuHindernis}
+                onClick={() => fuegeEin('hindernis')}
+                disabled={einfuegeTiefe(schichten, endTiefe) == null}
+              >
+                + Hindernis
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -311,15 +336,32 @@ export function GeologieBestaetigung({
 }
 
 function SchichtZeile({
-  schicht, istErste, onTyp, onMinus, onPlus,
+  schicht, istErste, loeschbar, loeschBereit,
+  onTyp, onMinus, onPlus, onLoeschen, onLoeschenBestaetigen,
 }: {
   schicht: Schicht;
   istErste: boolean;
+  loeschbar: boolean;
+  loeschBereit: boolean;
   onTyp: () => void;
   onMinus: () => void;
   onPlus: () => void;
+  onLoeschen: () => void;
+  onLoeschenBestaetigen: () => void;
 }) {
   const hindernis = istHindernis(schicht.nr);
+
+  // Armed: the whole row becomes the confirm target, rather than growing a
+  // small yes/no pair a gloved hand cannot hit. Tapping any other control
+  // disarms it.
+  if (loeschBereit) {
+    return (
+      <button style={styles.zeileLoeschen} onClick={onLoeschenBestaetigen}>
+        {nameVon(schicht.nr)} ab {formatNumber(schicht.tiefe)} m — wirklich entfernen?
+      </button>
+    );
+  }
+
   return (
     <div style={styles.zeile}>
       <button style={styles.typ} onClick={onTyp}>
@@ -331,23 +373,32 @@ function SchichtZeile({
           }}
         />
         <span style={styles.typText}>
-          <span style={styles.typKurz}>{kurzLabel(schicht.nr)}</span>
-          <span style={styles.typName}>{nameVon(schicht.nr)}</span>
+          <span style={styles.typKurz}>
+            {kurzLabel(schicht.nr)}
+            <span style={styles.typName}> {nameVon(schicht.nr)}</span>
+          </span>
+          <span style={styles.typTiefe}>
+            {istErste ? 'ab 0,00 m' : `ab ${formatNumber(schicht.tiefe)} m`}
+            {schicht.vorlaeufig && <span style={styles.vorlaeufig}> Vorgabe</span>}
+          </span>
         </span>
       </button>
 
-      {istErste ? (
-        // Layer 0 starts at the top of the hole; there is no boundary to move.
-        <span style={styles.tiefeFest}>ab 0,00 m</span>
-      ) : (
-        <div style={styles.tiefeGruppe}>
+      {!istErste && (
+        <>
           <button style={styles.schritt} onClick={onMinus} aria-label="Grenze nach oben">−</button>
-          <span style={styles.tiefeWert}>
-            {formatNumber(schicht.tiefe)} m
-            {schicht.vorlaeufig && <span style={styles.vorlaeufig}>Vorgabe</span>}
-          </span>
           <button style={styles.schritt} onClick={onPlus} aria-label="Grenze nach unten">+</button>
-        </div>
+        </>
+      )}
+
+      {loeschbar && (
+        <button
+          style={styles.loeschen}
+          onClick={onLoeschen}
+          aria-label={`${nameVon(schicht.nr)} entfernen`}
+        >
+          ✕
+        </button>
       )}
     </div>
   );
@@ -522,6 +573,74 @@ const styles: Record<string, CSSProperties> = {
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
+  /** Armed for deletion: the whole row, in danger red, is the confirm target. */
+  zeileLoeschen: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    textAlign: 'center',
+    minHeight: 'var(--tap-min)',
+    padding: '0 var(--space-sm)',
+    border: 'none',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--color-danger)',
+    color: '#fff',
+    fontSize: 'var(--font-base)',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    lineHeight: 1.2,
+  },
+  loeschen: {
+    width: 'var(--tap-min)',
+    height: 'var(--tap-min)',
+    flexShrink: 0,
+    border: '2px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--surface-3)',
+    color: 'var(--color-danger)',
+    fontSize: 'var(--font-md)',
+    fontWeight: 800,
+    fontFamily: 'inherit',
+    lineHeight: 1,
+    cursor: 'pointer',
+  },
+  hinzuReihe: {
+    display: 'flex',
+    gap: 'var(--space-sm)',
+    flexShrink: 0,
+  },
+  hinzu: {
+    flex: 1,
+    minHeight: 'var(--tap-min)',
+    border: '2px dashed var(--border)',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--surface-2)',
+    color: 'var(--text-primary)',
+    fontSize: 'var(--font-base)',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+  },
+  hinzuHindernis: {
+    flex: 1,
+    minHeight: 'var(--tap-min)',
+    border: '2px dashed var(--color-warning)',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--surface-2)',
+    color: 'var(--color-warning-text)',
+    fontSize: 'var(--font-base)',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+  },
+  typTiefe: {
+    fontSize: 'var(--font-sm)',
+    fontWeight: 700,
+    color: 'var(--text-muted)',
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
+  },
   tiefeGruppe: {
     display: 'flex',
     alignItems: 'center',
@@ -567,17 +686,5 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--color-warning-text)',
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
-  },
-  hindernisHinzu: {
-    minHeight: 'var(--tap-min)',
-    flexShrink: 0,
-    border: '2px dashed var(--color-warning)',
-    borderRadius: 'var(--radius-md)',
-    backgroundColor: 'var(--surface-2)',
-    color: 'var(--color-warning-text)',
-    fontSize: 'var(--font-base)',
-    fontWeight: 700,
-    fontFamily: 'inherit',
-    cursor: 'pointer',
   },
 };
