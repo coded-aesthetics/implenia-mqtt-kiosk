@@ -44,6 +44,18 @@ export interface BoundaryAlignment {
   /** Boundaries that landed on a reading, in ascending depth and time. */
   aligned: AlignedBoundary[];
   /**
+   * Boundaries shallower than this session ever recorded.
+   *
+   * The drill never crossed them *here*. On a resumed element whose second
+   * session starts at 8 m, every planned boundary above that would otherwise
+   * take the next free sample and come out as a 10 cm layer at 8.0, 8.1, 8.2 —
+   * a plausible-looking profile, entirely fabricated, reported as a success.
+   * That is worse than the silent loss this module exists to prevent, so they
+   * are dropped like the too-deep ones. Ground above where recording began is
+   * what implenia-web's `fillInitialGap` covers from the Vorgabe.
+   */
+  aboveHole: number[];
+  /**
    * Boundaries deeper than the hole ever got.
    *
    * Dropped rather than clamped to the last reading. Clamping would assert the
@@ -97,13 +109,29 @@ export function alignBoundaries(
   const wanted = [...new Set(depths.filter((d) => Number.isFinite(d)))]
     .sort((a, b) => a - b);
 
-  const result: BoundaryAlignment = { aligned: [], beyondHole: [], unalignable: [] };
+  const result: BoundaryAlignment = {
+    aligned: [], aboveHole: [], beyondHole: [], unalignable: [],
+  };
   if (usable.length === 0) {
     result.beyondHole = wanted;
     return result;
   }
 
   const deepest = usable.reduce((max, s) => (s.depth > max ? s.depth : max), -Infinity);
+
+  /**
+   * How far an aligned reading may sit from the boundary it stands for.
+   *
+   * The largest step between consecutive readings: the drill plausibly passed
+   * any depth inside a sampling gap, and nothing outside one. This is what
+   * separates "the boundary fell between two readings" from "the boundary is
+   * nowhere near anything this session recorded".
+   */
+  let toleranz = 0;
+  for (let i = 1; i < usable.length; i++) {
+    toleranz = Math.max(toleranz, Math.abs(usable[i].depth - usable[i - 1].depth));
+  }
+  toleranz = Math.max(toleranz, EPS);
 
   // The crossing index rises with depth, so one forward-only cursor serves
   // every boundary. It also doubles as the "already consumed" marker that
@@ -129,6 +157,14 @@ export function alignBoundaries(
       // The hole did reach this depth, but only before a sample a shallower
       // boundary already took, and it never got back down here.
       result.unalignable.push(depth);
+      continue;
+    }
+
+    // The reading has to actually stand for this boundary. Without this a
+    // boundary above everything recorded takes the first sample regardless of
+    // how far away it is — see `aboveHole`.
+    if (Math.abs(usable[i].depth - depth) > toleranz) {
+      result.aboveHole.push(depth);
       continue;
     }
 

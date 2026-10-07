@@ -99,6 +99,17 @@ describe('environment parsing', () => {
     expect(cfg.LOG_SENSOR_LEVEL).toBe('error');
   });
 
+  it('reads LOG_SENSOR_UPLOAD=false as false', () => {
+    // z.coerce.boolean() reads every non-empty string as true, so "false"
+    // switched log upload *on* — against its documented default, on a metered
+    // mobile link, for anyone who uncommented the line in .env.example.
+    expect(environmentSchema.parse({ LOG_SENSOR_UPLOAD: 'false' }).LOG_SENSOR_UPLOAD).toBe(false);
+    expect(environmentSchema.parse({ LOG_SENSOR_UPLOAD: '0' }).LOG_SENSOR_UPLOAD).toBe(false);
+    expect(environmentSchema.parse({ LOG_SENSOR_UPLOAD: 'true' }).LOG_SENSOR_UPLOAD).toBe(true);
+    expect(environmentSchema.parse({ LOG_SENSOR_UPLOAD: '1' }).LOG_SENSOR_UPLOAD).toBe(true);
+    expect(environmentSchema.parse({}).LOG_SENSOR_UPLOAD).toBe(false);
+  });
+
   it('still rejects a value that is present and wrong', () => {
     // Blank is forgiving; nonsense is not. A typo must still be reported
     // rather than silently replaced by a default.

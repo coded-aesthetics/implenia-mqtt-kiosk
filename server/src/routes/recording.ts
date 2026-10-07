@@ -118,10 +118,27 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       // Read the session before ending it: afterwards there is no active one.
       const active = getActiveSession();
       let geology: GeologyCommitResult | undefined;
+      let geologieFehler: string | undefined;
       if (active) {
-        geology = layers.length > 0
-          ? commitGeology(active, layers)
-          : commitDefaultGeology(active) ?? undefined;
+        /*
+         * Its own try/catch, and that is the whole point of it.
+         *
+         * Inside the outer one, a throw from here returns 409 without ever
+         * calling endRecording — the recording stays active and the stop button
+         * keeps failing, which is the dead end this route is written to avoid.
+         * The throw surface is small but real: better-sqlite3 raises on
+         * SQLITE_FULL, and a kiosk with a full disk is exactly the state in
+         * which the stop button must still work.
+         */
+        try {
+          geology = layers.length > 0
+            ? commitGeology(active, layers)
+            : commitDefaultGeology(active) ?? undefined;
+        } catch (err) {
+          log.error('Session %d: geology commit failed: %s', active.id, (err as Error).message);
+          geologieFehler = 'Das Geologieprofil konnte nicht gespeichert werden. '
+            + 'Die Messwerte sind vollständig und werden normal hochgeladen.';
+        }
       }
 
       const result = endRecording();
@@ -137,14 +154,23 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
         });
       }
 
-      const hinweise = [hinweis, geology?.hinweis].filter(Boolean);
+      const hinweise = [hinweis, geologieFehler, geology?.hinweis].filter(Boolean);
       return reply.send({
         ...result,
         geology,
         ...(hinweise.length > 0 ? { hinweis: hinweise.join(' ') } : {}),
       });
     } catch (err) {
-      return reply.status(409).send({ error: (err as Error).message });
+      // endRecording's own message is German and actionable ("Keine aktive
+      // Aufzeichnung."); anything else reaching here is not, so it is logged
+      // rather than put on a worker's screen.
+      const msg = (err as Error).message;
+      log.error('Stop failed: %s', msg);
+      return reply.status(409).send({
+        error: msg.startsWith('Keine aktive')
+          ? msg
+          : 'Die Aufzeichnung konnte nicht beendet werden. Bitte erneut versuchen.',
+      });
     }
   });
 

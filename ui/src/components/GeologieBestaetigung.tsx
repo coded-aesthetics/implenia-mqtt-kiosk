@@ -45,6 +45,17 @@ import { GeologiePicker, type PickerArt } from './GeologiePicker';
  */
 const NEUES_HINDERNIS_DICKE = 0.2;
 
+/**
+ * How much room an insert of each kind needs.
+ *
+ * An obstruction is bounded, so it needs its own thickness plus a layer either
+ * side of it; a soil layer only has to leave a step. Sharing the soil figure
+ * let the obstruction button enable for an insert that swallowed the layer.
+ */
+function platzBedarf(kind: PickerArt): number {
+  return kind === 'hindernis' ? NEUES_HINDERNIS_DICKE + 2 * RASTER : 2 * RASTER;
+}
+
 interface GeologyContext {
   verfuegbar: boolean;
   gebohrt: boolean;
@@ -199,7 +210,7 @@ export function GeologieBestaetigung({
    * what it is; the steppers move it afterwards.
    */
   function fuegeEin(kind: PickerArt) {
-    const tiefe = einfuegeTiefe(schichten, endTiefe);
+    const tiefe = einfuegeTiefe(schichten, endTiefe, platzBedarf(kind));
     if (tiefe == null) return;
     setLoeschIndex(null);
     setZiel({ art: 'neu', kind, tiefe });
@@ -250,7 +261,13 @@ export function GeologieBestaetigung({
           </span>
         </div>
         <div style={styles.aktionen}>
-          <button style={styles.zurueck} onClick={onZurueck} disabled={sendet}>
+          {/*
+            Deliberately not disabled while the stop is in flight. It only
+            navigates, and if the request never answers this is the only way off
+            a screen whose other control is dead — "error states must be
+            recoverable", and a screen with two dead buttons is a dead end.
+          */}
+          <button style={styles.zurueck} onClick={onZurueck}>
             Zurück zur Aufzeichnung
           </button>
           <button style={styles.beenden} onClick={beenden} disabled={sendet}>
@@ -316,14 +333,14 @@ export function GeologieBestaetigung({
               <button
                 style={styles.hinzu}
                 onClick={() => fuegeEin('schicht')}
-                disabled={einfuegeTiefe(schichten, endTiefe) == null}
+                disabled={einfuegeTiefe(schichten, endTiefe, platzBedarf('schicht')) == null}
               >
                 + Schicht
               </button>
               <button
                 style={styles.hinzuHindernis}
                 onClick={() => fuegeEin('hindernis')}
-                disabled={einfuegeTiefe(schichten, endTiefe) == null}
+                disabled={einfuegeTiefe(schichten, endTiefe, platzBedarf('hindernis')) == null}
               >
                 + Hindernis
               </button>
@@ -519,12 +536,29 @@ const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     gap: 'var(--space-sm)',
   },
+  /**
+   * The one place in the app that scrolls, and deliberately.
+   *
+   * Two columns of 64px targets hold about fourteen rows in this column's
+   * height. A profile can exceed that — four planned layers plus six recorded
+   * obstructions is sixteen boundaries — and before this the surplus rows were
+   * simply **below the fold: invisible, untappable, and with no scrollbar to
+   * admit it**, on the one screen whose job is correcting the profile. Rows the
+   * operator cannot reach are rows they cannot fix.
+   *
+   * Scrolling a dense editing list is the lesser evil against hiding data, and
+   * it is contained to this column — the page itself never scrolls, the chart
+   * and both exits stay put. The screen still wants a better answer than a
+   * scrollbar for twenty layers; this stops it losing them in the meantime.
+   */
   liste: {
     flex: 1,
     minHeight: 0,
     display: 'grid',
     gridAutoFlow: 'column',
     gap: 'var(--space-sm)',
+    overflowY: 'auto',
+    overscrollBehavior: 'contain',
   },
   zeile: {
     display: 'flex',
@@ -539,7 +573,8 @@ const styles: Record<string, CSSProperties> = {
   typ: {
     flex: 1,
     minWidth: 0,
-    minHeight: 56,
+    // 64, not 56: this is the row's main target and the rule is 64px for gloves.
+    minHeight: 'var(--tap-min)',
     display: 'flex',
     alignItems: 'center',
     gap: 'var(--space-sm)',

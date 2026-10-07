@@ -84,7 +84,16 @@ const envSchema = z.object({
   GITHUB_TOKEN: z.preprocess(blankAsUndefined, z.string().optional()),
 
   // Upload logs as string sensor readings to the Implenia platform
-  LOG_SENSOR_UPLOAD: z.preprocess(blankAsUndefined, z.coerce.boolean().default(false)),
+  /**
+   * `z.coerce.boolean()` would read the *string* "false" as true — every
+   * non-empty string is truthy — so a service tech uncommenting
+   * `LOG_SENSOR_UPLOAD=false` in .env.example would silently switch log upload
+   * **on**, against its documented default and on a metered mobile link.
+   */
+  LOG_SENSOR_UPLOAD: z.preprocess(
+    blankAsUndefined,
+    z.enum(['true', 'false', '1', '0']).default('false').transform((v) => v === 'true' || v === '1'),
+  ),
   LOG_SENSOR_LEVEL: z.preprocess(
     blankAsUndefined,
     z.enum(['debug', 'info', 'warn', 'error', 'fatal']).default('warn'),

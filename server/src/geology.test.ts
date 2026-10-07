@@ -510,3 +510,91 @@ describe('commitDefaultGeology', () => {
     expect(geoDinRows(id).map((r) => r.nr)).toEqual([SAND, TON]);
   });
 });
+
+describe('entries that would otherwise be lost or invented', () => {
+  it('replaces an earlier entry rather than colliding on one millisecond', () => {
+    // Two taps with no depth reading between them — the whole of a
+    // Rohrverlängerung is such a window, since the depth series is filtered to
+    // phase 'bohren'. Both readings would land on one instant, and the
+    // upload's per-timestamp dedup keeps only the last, so the obstruction the
+    // operator entered and left would disappear entirely.
+    const { id, session } = drilledSession(0, 2);
+    const a = geology.recordLiveLayer(session, BETON, 'Beton');
+    const b = geology.recordLiveLayer(session, SAND, 'Sand');
+    expect(a).toHaveProperty('tiefe');
+    expect(b).toHaveProperty('tiefe');
+
+    const rows = geoDinRows(id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].nr).toBe(SAND);
+    expect(new Set(rows.map((r) => r.receivedAt)).size).toBe(rows.length);
+    expect(geologieTexts(id)).toEqual(['Sand']);
+  });
+
+  it('commits nothing for planned ground this session never came near', () => {
+    // Session 2 of a resumed element: recording starts at 8 m and the plan's
+    // boundaries were drilled the day before. Aligning them to the nearest free
+    // reading would commit three fabricated 10cm layers at 8.0/8.1/8.2 and
+    // report a clean success.
+    const id = db.createSession('P-resumed', SENSOR_MAP);
+    let i = 0;
+    for (let d = 8; d <= 10.0001; d += 0.1) {
+      db.insertSessionReading(
+        id, 'rig/depth', DEPTH_ID, 'float', Math.round(d * 1e6) / 1e6, null,
+        { receivedAt: T0 + i * 1000 },
+      );
+      i++;
+    }
+    db.setElementVorgaben('P-resumed', {
+      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': SCHLUFF, 'Geologie 3': TON },
+      float_sensors: {
+        'Tiefe Geologie 1': 2, 'Tiefe Geologie 2': 5,
+        'Tiefe Geologie 3': 12, 'Säulenhöhe': 12,
+      },
+    });
+
+    const result = geology.commitDefaultGeology(db.getSessionById(id)!)!;
+    expect(result.geschrieben).toBe(0);
+    expect(result.zuFlach).toEqual([0, 2, 5]);
+    expect(geoDinRows(id)).toEqual([]);
+  });
+
+  it('keeps the boundaries a resumed session did drill through', () => {
+    const id = db.createSession('P-resumed2', SENSOR_MAP);
+    let i = 0;
+    for (let d = 8; d <= 10.0001; d += 0.1) {
+      db.insertSessionReading(
+        id, 'rig/depth', DEPTH_ID, 'float', Math.round(d * 1e6) / 1e6, null,
+        { receivedAt: T0 + i * 1000 },
+      );
+      i++;
+    }
+    const result = geology.commitGeology(db.getSessionById(id)!, [
+      { tiefe: 0, nr: SAND }, { tiefe: 9, nr: TON },
+    ]);
+    expect(result.zuFlach).toEqual([0]);
+    expect(geoDinRows(id).map((r) => r.nr)).toEqual([TON]);
+  });
+
+  it('ignores a negative boundary instead of letting it take the top reading', () => {
+    const { id, session } = drilledSession(0, 2);
+    geology.commitGeology(session, [{ tiefe: -5, nr: SAND }, { tiefe: 0, nr: SCHLUFF }]);
+    const samples = db.getSessionDepthSamples(id, DEPTH_ID)
+      .map((p) => ({ receivedAt: p.receivedAt, depth: p.value }));
+    // The real top-of-hole layer keeps the first reading.
+    expect(depthTimestamp.observedLayers(samples, geoDinRows(id)))
+      .toEqual([{ tiefe: 0, nr: SCHLUFF }]);
+  });
+
+  it('keeps the shallowest planned type when a Vorgabe names no depths', () => {
+    // "Geologie 1..3" with no "Tiefe Geologie n" puts every layer at 0 m.
+    // Keeping the last committed Ton from the surface; the plan's own topmost
+    // type is the better guess.
+    const { id, session } = drilledSession(0, 6);
+    db.setElementVorgaben(session.element_name, {
+      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': SCHLUFF, 'Geologie 3': TON },
+    });
+    geology.commitDefaultGeology(db.getSessionById(id)!);
+    expect(geoDinRows(id).map((r) => r.nr)).toEqual([SAND]);
+  });
+});

@@ -725,6 +725,9 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '0.5rem',
     minHeight: 'var(--tap-min)',
     minWidth: '150px',
+    // Capped, and allowed to shrink: see geoLabel.
+    maxWidth: '260px',
+    flexShrink: 1,
     padding: '0 var(--space-md)',
     border: '2px solid var(--border)',
     borderRadius: 'var(--radius-md)',
@@ -732,7 +735,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--text-primary)',
     fontFamily: 'inherit',
     cursor: 'pointer',
-    flexShrink: 0,
   },
   geoButtonVorschlag: {
     display: 'flex',
@@ -741,6 +743,9 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '0.5rem',
     minHeight: 'var(--tap-min)',
     minWidth: '150px',
+    // Capped, and allowed to shrink: see geoLabel.
+    maxWidth: '260px',
+    flexShrink: 1,
     padding: '0 var(--space-md)',
     border: '2px solid var(--color-accent)',
     borderRadius: 'var(--radius-md)',
@@ -748,7 +753,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--color-accent-strong)',
     fontFamily: 'inherit',
     cursor: 'pointer',
-    flexShrink: 0,
   },
   /** The quick picker is open in the column; tapping again closes it. */
   geoButtonOffen: {
@@ -758,6 +762,9 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '0.5rem',
     minHeight: 'var(--tap-min)',
     minWidth: '150px',
+    // Capped, and allowed to shrink: see geoLabel.
+    maxWidth: '260px',
+    flexShrink: 1,
     padding: '0 var(--space-md)',
     border: '2px solid var(--color-accent)',
     borderRadius: 'var(--radius-md)',
@@ -765,7 +772,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#fff',
     fontFamily: 'inherit',
     cursor: 'pointer',
-    flexShrink: 0,
   },
   geoButtonHindernisOffen: {
     minHeight: 'var(--tap-min)',
@@ -814,6 +820,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 'var(--font-base)',
     fontWeight: 700,
     whiteSpace: 'nowrap',
+    // DIN names run to 71 characters ("Blättrige, feinschichtige Metamorphite
+    // (z. B. Glimmerschiefer, Phyllit)"). Unbounded, that grew the button to
+    // 651px and pushed Beenden's right edge to 1064 on a 1024px screen — the
+    // stop control simply gone, with no scrollbar to reveal it, until the drill
+    // passed the boundary. The common names are short enough to show in full.
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    minWidth: 0,
   },
   hatch: {
     width: '28px',

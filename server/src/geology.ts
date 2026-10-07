@@ -36,7 +36,9 @@
 
 import { findByNr } from '@coded-aesthetics/din4023';
 import {
+  deletePendingSensorReadingAt,
   deletePendingSensorReadings,
+  inTransaction,
   getElementVorgaben,
   getSessionDepthSamples,
   getSessionSensorSeries,
@@ -298,6 +300,8 @@ export interface GeologyCommitResult {
   geschrieben: number;
   /** Boundaries dropped because the hole never got that deep. */
   zuTief: number[];
+  /** Boundaries dropped because this session never recorded that shallow. */
+  zuFlach: number[];
   /** Boundaries dropped for want of a distinct depth reading. */
   nichtZuordenbar: number[];
   /** Readings from an earlier commit that this one replaced. */
@@ -323,7 +327,7 @@ export function commitGeology(
   layers: readonly GeologyLayerInput[],
 ): GeologyCommitResult {
   const empty: GeologyCommitResult = {
-    geschrieben: 0, zuTief: [], nichtZuordenbar: [], ersetzt: 0,
+    geschrieben: 0, zuTief: [], zuFlach: [], nichtZuordenbar: [], ersetzt: 0,
   };
 
   const sensors = resolveSensors(session);
@@ -333,7 +337,10 @@ export function commitGeology(
   }
 
   const usable = layers
-    .filter((l) => Number.isFinite(l.tiefe) && Number.isInteger(l.nr) && l.nr > 0)
+    // `tiefe >= 0` matters: a negative depth is not merely ignored downstream,
+    // it consumes the top-of-hole reading and pushes the real first layer down.
+    .filter((l) => Number.isFinite(l.tiefe) && l.tiefe >= 0
+      && Number.isInteger(l.nr) && l.nr > 0)
     .slice()
     .sort((a, b) => a.tiefe - b.tiefe);
 
@@ -345,53 +352,61 @@ export function commitGeology(
     return { ...empty, hinweis };
   }
 
-  const ersetzt = deletePendingSensorReadings(session.id, sensors.nrId)
-    + (sensors.textId ? deletePendingSensorReadings(session.id, sensors.textId) : 0);
-
-  const { aligned, beyondHole, unalignable } = alignBoundaries(
+  const { aligned, aboveHole, beyondHole, unalignable } = alignBoundaries(
     samples, usable.map((l) => l.tiefe),
   );
 
   // alignBoundaries works on depths; map back to the layer each depth came
-  // from. Depths are deduplicated there, so the last layer at a repeated depth
-  // is the one that stands — the same rule the upload's own per-timestamp
-  // deduplication applies.
+  // from. At a repeated depth the *first* layer wins: a Schichtauftrag that
+  // names ground types without their end depths produces several layers at one
+  // depth, and keeping the last committed the deepest planned type from 0 m —
+  // failing in the wrong direction. The shallowest is the better guess.
   const byDepth = new Map<number, GeologyLayerInput>();
-  for (const l of usable) byDepth.set(l.tiefe, l);
+  for (const l of usable) if (!byDepth.has(l.tiefe)) byDepth.set(l.tiefe, l);
 
-  for (const boundary of aligned) {
-    const layer = byDepth.get(boundary.depth);
-    if (!layer) continue;
+  // One transaction: a failure between dropping the previous commit and
+  // writing this one would leave the session with neither.
+  const ersetzt = inTransaction(() => {
+    const weg = deletePendingSensorReadings(session.id, sensors.nrId)
+      + (sensors.textId ? deletePendingSensorReadings(session.id, sensors.textId) : 0);
 
-    insertSessionReading(
-      session.id, sensors.nrName, sensors.nrId, sensors.nrType,
-      layer.nr, null, { receivedAt: boundary.receivedAt },
-    );
+    for (const boundary of aligned) {
+      const layer = byDepth.get(boundary.depth);
+      if (!layer) continue;
 
-    if (sensors.textId && sensors.textName && sensors.textType) {
-      const base = geologieText(layer.nr, layer.name);
       insertSessionReading(
-        session.id, sensors.textName, sensors.textId, sensors.textType,
-        null, layer.quelle === 'vorgabe' ? base + VORGABE_SUFFIX : base,
-        { receivedAt: boundary.receivedAt },
+        session.id, sensors.nrName, sensors.nrId, sensors.nrType,
+        layer.nr, null, { receivedAt: boundary.receivedAt },
       );
+
+      if (sensors.textId && sensors.textName && sensors.textType) {
+        const base = geologieText(layer.nr, layer.name);
+        insertSessionReading(
+          session.id, sensors.textName, sensors.textId, sensors.textType,
+          null, layer.quelle === 'vorgabe' ? base + VORGABE_SUFFIX : base,
+          { receivedAt: boundary.receivedAt },
+        );
+      }
     }
-  }
+    return weg;
+  });
 
   const result: GeologyCommitResult = {
     geschrieben: aligned.length,
     zuTief: beyondHole,
+    zuFlach: aboveHole,
     nichtZuordenbar: unalignable,
     ersetzt,
   };
 
-  if (beyondHole.length > 0 || unalignable.length > 0) {
-    // Not an error the operator needs to act on: these are layers below the
-    // bottom of the hole, which nothing observed and nothing can report.
+  if (beyondHole.length > 0 || aboveHole.length > 0 || unalignable.length > 0) {
+    // Not errors the operator needs to act on: ground below the bottom of the
+    // hole, or above where this session began, which nothing here observed.
+    const tiefen = (ds: number[]): string => ds.map((d) => d.toFixed(2)).join(', ') || '–';
     log.info(
-      'Session %d: %d geology boundaries written, %d below the hole (%s), %d unalignable',
-      session.id, aligned.length, beyondHole.length,
-      beyondHole.map((d) => d.toFixed(2)).join(', '), unalignable.length,
+      'Session %d: %d geology boundaries written; below the hole: %s; above this session: %s; unalignable: %s',
+      session.id, aligned.length,
+      tiefen(beyondHole), tiefen(aboveHole), tiefen(unalignable),
     );
   } else {
     log.info('Session %d: %d geology boundaries written', session.id, aligned.length);
@@ -433,6 +448,24 @@ export function recordLiveLayer(
     };
   }
 
+  /*
+   * A second entry before the next depth reading replaces the first.
+   *
+   * `getSessionDepthSamples` is filtered to `phase = 'bohren'`, so the latest
+   * reading stands still for the whole of a Rohrverlängerung — minutes in which
+   * every tap would otherwise land on one instant. Two readings there are one
+   * row to implenia-web, and the upload's per-timestamp deduplication keeps
+   * only the last, so the earlier tap would disappear with no trace: an
+   * obstruction entered and left could vanish entirely.
+   *
+   * Replacing is also what the operator means. Two ground types at one depth
+   * is not a profile; the second tap is a correction.
+   */
+  const ersetzt = deletePendingSensorReadingAt(session.id, sensors.nrId, latest.receivedAt)
+    + (sensors.textId
+      ? deletePendingSensorReadingAt(session.id, sensors.textId, latest.receivedAt)
+      : 0);
+
   insertSessionReading(
     session.id, sensors.nrName, sensors.nrId, sensors.nrType,
     nr, null, { receivedAt: latest.receivedAt },
@@ -441,6 +474,12 @@ export function recordLiveLayer(
     insertSessionReading(
       session.id, sensors.textName, sensors.textId, sensors.textType,
       null, geologieText(nr, name), { receivedAt: latest.receivedAt },
+    );
+  }
+  if (ersetzt > 0) {
+    log.info(
+      'Session %d: geology %d replaced an earlier entry at %s m',
+      session.id, nr, latest.depth.toFixed(2),
     );
   }
 

@@ -127,6 +127,7 @@ function makeCtx(overrides: Partial<{
   active: boolean;
   sessionId: number | null;
   readingCount: number;
+  operatingMode: string | null;
 }> = {}): VoiceContext {
   return {
     route: {
@@ -138,6 +139,7 @@ function makeCtx(overrides: Partial<{
       sessionId: overrides.sessionId ?? null,
       elementName: null,
       readingCount: overrides.readingCount ?? 0,
+      operatingMode: overrides.operatingMode ?? 'bohren',
     },
     elementNames: ELEMENT_NAMES,
     setActiveTab: () => {},
@@ -444,8 +446,9 @@ function geologyCommands(): VoiceCommand[] {
   return geologieVokabular().map((v) => ({
     id: `geologie.${v.nr}`,
     phrases: v.phrases,
-    precondition: (ctx: VoiceContext) => ctx.recordingState.active,
-    preconditionHint: 'Geologie kann nur während einer Aufzeichnung erfasst werden',
+    precondition: (ctx: VoiceContext) =>
+      ctx.recordingState.active && ctx.recordingState.operatingMode === 'bohren',
+    preconditionHint: 'Geologie kann nur während des Bohrens erfasst werden',
     execute: () => {},
     description: `Geologie: ${v.name}`,
   }));
@@ -521,6 +524,13 @@ describe('geology by voice', () => {
 
   it('is blocked when nothing is being recorded', () => {
     const result = matchAll('schluff', makeCtx({ active: false }));
+    expect(result).toHaveProperty('blocked');
+  });
+
+  it('is blocked once the rig has stopped drilling', () => {
+    // The touchscreen buttons disappear outside `bohren`; speaking must not be
+    // a way around that.
+    const result = matchAll('schluff', makeCtx({ active: true, operatingMode: 'auffuellen' }));
     expect(result).toHaveProperty('blocked');
   });
 

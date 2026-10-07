@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Schicht } from '@coded-aesthetics/din4023/profile';
 import { grundBei } from '@coded-aesthetics/din4023/profile';
 import {
@@ -30,6 +30,18 @@ const FENSTER_M = 0.3;
 /** All six obstruction kinds — few enough that the column shows them all. */
 const HINDERNIS_NRS = HINDERNISSE.map((e) => e.nr);
 
+/**
+ * Announces a geology entry made outside React.
+ *
+ * The voice commands post to `/api/recording/geology` directly — they are built
+ * once, outside the component tree, and have no way to call into this hook.
+ * Without this the hook never learns a layer was recorded: `imHindernis` stays
+ * false, so the hands-free operator the one-tap "Hindernis Ende" exists for is
+ * the one person who cannot use it; the live profile never shows the layer; and
+ * the suggestion keeps offering ground that was already spoken.
+ */
+export const GEOLOGIE_ERFASST = 'kiosk:geologie-erfasst';
+
 export type PickerArt = 'schicht' | 'hindernis';
 
 export interface GeologieErfassung {
@@ -49,8 +61,6 @@ export interface GeologieErfassung {
   auswahl: PickerArt | null;
   /** The ground types the quick picker offers, in column order. */
   kandidaten: number[];
-  /** True when the Vorgabe names more soils than the column can show. */
-  mehrVorhanden: boolean;
   /** The planned ground at the current depth, for marking the list. */
   aktuelleArt: number | null;
   /** The full-screen picker, if open. */
@@ -137,6 +147,8 @@ export function useGeologieErfassung({
    * put a second copy of the recorded profile outside the database.
    */
   const [letzteNr, setLetzteNr] = useState<number | null>(null);
+  /** The session a context response must still belong to when it lands. */
+  const aktuelleSession = useRef<number | null>(null);
 
   const drillt = active && operatingMode === 'bohren';
 
@@ -149,10 +161,18 @@ export function useGeologieErfassung({
    * truth instead of a browser-side tally that a restart would lose.
    */
   const ladeKontext = useCallback(async (id: number) => {
+    // Every response is checked against the session that is current when it
+    // lands. Without this, a request still in flight when the operator stops
+    // one element and starts the next overwrites the new session's state with
+    // the old one's — and if the old element ended inside an obstruction, the
+    // new one's bar offers "Hindernis Ende", which writes a bogus layer to it.
+    aktuelleSession.current = id;
     try {
       const res = await fetch(`/api/recording/${id}/geology-context`);
+      if (aktuelleSession.current !== id) return;
       if (!res.ok) throw new Error(String(res.status));
       const ctx = await res.json();
+      if (aktuelleSession.current !== id) return;
       setVerfuegbar(ctx?.verfuegbar === true);
       const beobachtet = Array.isArray(ctx?.beobachtet) ? ctx.beobachtet : [];
       const letzte = beobachtet[beobachtet.length - 1];
@@ -167,7 +187,7 @@ export function useGeologieErfassung({
     } catch {
       // A Verfahren that cannot be asked gets no buttons. Nothing else about
       // the recording is affected.
-      setVerfuegbar(false);
+      if (aktuelleSession.current === id) setVerfuegbar(false);
     }
   }, []);
 
@@ -180,8 +200,18 @@ export function useGeologieErfassung({
     void ladeKontext(sessionId);
   }, [sessionId, active, ladeKontext]);
 
+  // A spoken entry is a write this hook did not make; re-read so the buttons
+  // and the live profile agree with the database. See GEOLOGIE_ERFASST.
+  useEffect(() => {
+    if (sessionId === null || !active) return;
+    const onErfasst = (): void => { void ladeKontext(sessionId); };
+    window.addEventListener(GEOLOGIE_ERFASST, onErfasst);
+    return () => window.removeEventListener(GEOLOGIE_ERFASST, onErfasst);
+  }, [sessionId, active, ladeKontext]);
+
   // A new session starts with nothing confirmed.
   useEffect(() => {
+    aktuelleSession.current = sessionId;
     setLetzteNr(null);
     setKontext({ profil: null, letzteTiefe: null });
     setAuswahl(null);
@@ -218,8 +248,6 @@ export function useGeologieErfassung({
       : alleArten.slice(0, MAX_SPALTEN_KACHELN)),
     [auswahl, alleArten],
   );
-  const mehrVorhanden = auswahl === 'schicht' && alleArten.length > MAX_SPALTEN_KACHELN;
-
   /** The ground the plan expects right here, for marking the list. */
   const aktuelleArt = useMemo(() => {
     if (!vorgabeSchichten || tiefe == null) return null;
@@ -313,7 +341,6 @@ export function useGeologieErfassung({
     vorschlag,
     auswahl,
     kandidaten,
-    mehrVorhanden,
     aktuelleArt,
     vollbild,
     oeffne,

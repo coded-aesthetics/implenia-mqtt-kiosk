@@ -19,6 +19,8 @@ export interface VoiceContext {
     sessionId: number | null;
     elementName: string | null;
     readingCount: number;
+    /** What the rig is doing; geology entry only applies while drilling. */
+    operatingMode: string | null;
   };
   elementNames: string[];
   setActiveTab: (tab: 'messwerte' | 'vorgabe' | 'kommentare') => void;
