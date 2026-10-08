@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Schicht } from '@coded-aesthetics/din4023/profile';
 import { grundBei } from '@coded-aesthetics/din4023/profile';
 import {
-  HINDERNISSE, MAX_SPALTEN_KACHELN, istHindernis, liveProfil, naechsteGrenze,
-  nameVon, vomServer, vorgabeArten, type Profil, type ServerSchicht,
+  HINDERNISSE, istHindernis, liveProfil, naechsteGrenze, nameVon,
+  spaltenKandidaten, vomServer, vorgabeArten, type Profil, type ServerSchicht,
 } from '../utils/geologie';
 import { formatNumber } from '../utils/format';
 
@@ -61,8 +61,18 @@ export interface GeologieErfassung {
   auswahl: PickerArt | null;
   /** The ground types the quick picker offers, in column order. */
   kandidaten: number[];
-  /** The planned ground at the current depth, for marking the list. */
-  aktuelleArt: number | null;
+  /**
+   * The ground the drill is in: what the operator last recorded, or — until
+   * they have recorded anything — what the Vorgabe plans at this depth.
+   *
+   * What the picker highlights. Marking the plan instead was wrong in exactly
+   * the case that matters: an operator who had recorded Kies at 4,2 m came back
+   * after a restart to a picker marking Schluff, because that is what the
+   * Schichtauftrag expects there. The plan is still marked, as the plan.
+   */
+  aktiveArt: number | null;
+  /** The planned ground at the current depth, marked as such. */
+  vorgabeArt: number | null;
   /** The full-screen picker, if open. */
   vollbild: PickerArt | null;
   /** Open the quick picker, or the full one where no column can show it. */
@@ -242,17 +252,22 @@ export function useGeologieErfassung({
    */
   /** The soils this Vorgabe names, trimmed to what the column can show. */
   const alleArten = useMemo(() => vorgabeArten(vorgabeSchichten), [vorgabeSchichten]);
-  const kandidaten = useMemo(
-    () => (auswahl === 'hindernis'
-      ? HINDERNIS_NRS
-      : alleArten.slice(0, MAX_SPALTEN_KACHELN)),
-    [auswahl, alleArten],
-  );
-  /** The ground the plan expects right here, for marking the list. */
-  const aktuelleArt = useMemo(() => {
+  /** The ground the plan expects right here. */
+  const vorgabeArt = useMemo(() => {
     if (!vorgabeSchichten || tiefe == null) return null;
     return grundBei(vorgabeSchichten as Parameters<typeof grundBei>[0], tiefe);
   }, [vorgabeSchichten, tiefe]);
+  /**
+   * Where the drill actually is. What was recorded outranks what was planned —
+   * the operator saw the ground, the Schichtauftrag only predicted it.
+   */
+  const aktiveArt = letzteNr ?? vorgabeArt;
+  const kandidaten = useMemo(
+    () => (auswahl === 'hindernis'
+      ? HINDERNIS_NRS
+      : spaltenKandidaten(alleArten, aktiveArt)),
+    [auswahl, alleArten, aktiveArt],
+  );
 
   const imHindernis = letzteNr !== null && istHindernis(letzteNr);
 
@@ -327,21 +342,25 @@ export function useGeologieErfassung({
   }, []);
 
   const beendeHindernis = useCallback(async () => {
-    const zurueck = aktuelleArt;
+    // The plan, not the active ground: the active ground *is* the obstruction
+    // being left, and what the obstruction interrupted is what the Vorgabe
+    // names here.
+    const zurueck = vorgabeArt;
     if (zurueck == null) {
       // No plan to resume, so the operator has to say what the ground is.
       oeffne('schicht');
       return;
     }
     await erfasse(zurueck, nameVon(zurueck));
-  }, [aktuelleArt, erfasse, oeffne]);
+  }, [vorgabeArt, erfasse, oeffne]);
 
   return {
     verfuegbar: drillt && verfuegbar,
     vorschlag,
     auswahl,
     kandidaten,
-    aktuelleArt,
+    aktiveArt,
+    vorgabeArt,
     vollbild,
     oeffne,
     oeffneAndere,

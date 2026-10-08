@@ -3,7 +3,7 @@ import { grundBei } from '@coded-aesthetics/din4023/profile';
 import {
   vomServer, naechsteGrenze, kurzLabel, farbeVon, nameVon, istHindernis,
   zumCommit, vorgabeArten, liveProfil, einfuegeTiefe, MAX_SPALTEN_KACHELN,
-  BODENARTEN, HINDERNISSE,
+  spaltenKandidaten, BODENARTEN, HINDERNISSE,
 } from './geologie';
 
 const SAND = 5;
@@ -219,6 +219,54 @@ describe('vorgabeArten', () => {
   it('leaves room for the Andere tile within the column', () => {
     // The column holds eight 64px targets; the last is always Andere.
     expect(MAX_SPALTEN_KACHELN).toBe(7);
+  });
+});
+
+describe('spaltenKandidaten', () => {
+  const KIES = 3;
+
+  it('offers the planned soils when the drill is in one of them', () => {
+    expect(spaltenKandidaten([SAND, SCHLUFF, TON], SCHLUFF))
+      .toEqual([SAND, SCHLUFF, TON]);
+  });
+
+  it('adds the ground actually recorded when the plan never named it', () => {
+    // The case this exists for: Kies in a sand/silt/clay hole. Without it the
+    // operator opens the picker and nothing is marked as where they are.
+    expect(spaltenKandidaten([SAND, SCHLUFF, TON], KIES))
+      .toEqual([SAND, SCHLUFF, TON, KIES]);
+  });
+
+  it('appends rather than leading, so the list still reads like the profile', () => {
+    expect(spaltenKandidaten([SAND, SCHLUFF, TON], KIES).indexOf(KIES)).toBe(3);
+  });
+
+  it('keeps the column within its cap, giving up a planned tile if it must', () => {
+    const neun = [1, 2, 4, 5, 6, 7, 8, 9, 10];
+    const mit = spaltenKandidaten(neun, KIES);
+    expect(mit).toHaveLength(MAX_SPALTEN_KACHELN);
+    expect(mit[mit.length - 1]).toBe(KIES);
+  });
+
+  it('reaches a planned soil that the cap would have cut off', () => {
+    const neun = [1, 2, 4, 5, 6, 7, 8, 9, 10];
+    expect(spaltenKandidaten(neun, 10)).toContain(10);
+  });
+
+  it('never injects an obstruction into the soil list', () => {
+    // A tap there would record the code that is already current — no layer
+    // change at all. Leaving the obstruction is the bar's job.
+    expect(spaltenKandidaten([SAND, SCHLUFF, TON], BETON))
+      .toEqual([SAND, SCHLUFF, TON]);
+  });
+
+  it('passes the plan straight through when nothing is active', () => {
+    expect(spaltenKandidaten([SAND, SCHLUFF], null)).toEqual([SAND, SCHLUFF]);
+    expect(spaltenKandidaten([SAND, SCHLUFF], undefined)).toEqual([SAND, SCHLUFF]);
+  });
+
+  it('offers the recorded ground alone when there is no plan at all', () => {
+    expect(spaltenKandidaten([], KIES)).toEqual([KIES]);
   });
 });
 

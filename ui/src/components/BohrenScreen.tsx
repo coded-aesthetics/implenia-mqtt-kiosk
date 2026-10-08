@@ -107,7 +107,8 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
             <GeologieSpalte
               art={geologie.auswahl}
               nrs={geologie.kandidaten}
-              aktuelleNr={geologie.aktuelleArt}
+              aktiveNr={geologie.aktiveArt}
+              vorgabeNr={geologie.vorgabeArt}
               onWaehlen={geologie.erfasse}
               // "Andere" only where it leads somewhere: for soils, always (the
               // ground can differ from the plan), and for a Vorgabe with more
