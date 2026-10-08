@@ -93,6 +93,32 @@ export function vorgabeArten(schichten: readonly Schicht[] | null | undefined): 
   return arten;
 }
 
+/**
+ * The ground types the quick picker offers, with the ground the drill is
+ * actually in guaranteed a place.
+ *
+ * The planned soils alone are not enough: an operator who recorded something
+ * the Schichtauftrag never named — Kies in a sand/silt/clay hole — would open
+ * the picker and find no tile marked as where they are, which is exactly the
+ * case where knowing matters. So an active ground outside the plan is appended
+ * (at the end, because the list is otherwise ordered like the profile and an
+ * unplanned ground has no place in that order) and the cap gives way to it.
+ *
+ * An obstruction is never injected. The drill being inside one is said by the
+ * bar's "Hindernis Ende" button, and a Bodenart list offering `Hindernis Beton`
+ * would be offering a tap that records nothing — the same code again is no
+ * layer change at all.
+ */
+export function spaltenKandidaten(
+  arten: readonly number[],
+  aktiv: number | null | undefined,
+  max: number = MAX_SPALTEN_KACHELN,
+): number[] {
+  const sichtbar = arten.slice(0, max);
+  if (aktiv == null || istHindernis(aktiv) || sichtbar.includes(aktiv)) return sichtbar;
+  return [...arten.slice(0, max - 1), aktiv];
+}
+
 export interface Profil {
   schichten: Schicht[];
   endTiefe: number;

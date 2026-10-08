@@ -28,14 +28,19 @@ interface Props {
   art: PickerArt;
   /** Ground types to offer, in column order. */
   nrs: readonly number[];
-  /** The ground the plan expects at the current depth, marked if present. */
-  aktuelleNr?: number | null;
+  /**
+   * The ground the drill is in — what was last recorded, or the plan's answer
+   * until something is. Highlighted and labelled "Aktuell".
+   */
+  aktiveNr?: number | null;
+  /** The ground the Vorgabe plans at this depth. Labelled "Vorgabe". */
+  vorgabeNr?: number | null;
   /** Offered when the Vorgabe names more soils than fit, and for rare ground. */
   onAndere?: () => void;
   onWaehlen: (nr: number, name: string) => void;
 }
 
-export function GeologieSpalte({ art, nrs, aktuelleNr, onAndere, onWaehlen }: Props) {
+export function GeologieSpalte({ art, nrs, aktiveNr, vorgabeNr, onAndere, onWaehlen }: Props) {
   return (
     <div style={styles.spalte}>
       <div style={art === 'hindernis' ? styles.kopfHindernis : styles.kopf}>
@@ -47,7 +52,7 @@ export function GeologieSpalte({ art, nrs, aktuelleNr, onAndere, onWaehlen }: Pr
           key={nr}
           style={{
             ...styles.kachel,
-            ...(nr === aktuelleNr ? styles.kachelAktuell : {}),
+            ...(nr === aktiveNr ? styles.kachelAktuell : {}),
           }}
           onClick={() => onWaehlen(nr, nameVon(nr))}
         >
@@ -55,6 +60,23 @@ export function GeologieSpalte({ art, nrs, aktuelleNr, onAndere, onWaehlen }: Pr
           <span style={styles.text}>
             <span style={styles.kurz}>{kurzLabel(nr)}</span>
             <span style={styles.name}>{nameVon(nr)}</span>
+            {/*
+              Both markers, each said in a word, because the highlight alone
+              cannot distinguish them — and when they sit on different tiles
+              that difference is the whole point: the operator recorded ground
+              the Schichtauftrag did not plan here.
+              Stacked rather than joined on one line. "Aktuell · Vorgabe" is 17
+              characters and the column is 170px wide, so it clipped to
+              "Aktuell · Vorgal" — in the *ordinary* case, where the ground
+              matches the plan. One word per line always fits, and the layout
+              does not depend on how wide the column happens to be.
+            */}
+            {(nr === aktiveNr || nr === vorgabeNr) && (
+              <span style={styles.marker}>
+                {nr === aktiveNr && <span style={styles.markerAktiv}>Aktuell</span>}
+                {nr === vorgabeNr && <span style={styles.markerVorgabe}>Vorgabe</span>}
+              </span>
+            )}
           </span>
         </button>
       ))}
@@ -132,11 +154,28 @@ const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
     overflow: 'hidden',
   },
-  /** The ground the plan expects at this depth. */
+  /** The ground the drill is in. */
   kachelAktuell: {
     border: '2px solid var(--color-accent)',
     backgroundColor: 'var(--surface-3)',
   },
+  marker: {
+    display: 'flex',
+    flexDirection: 'column',
+    // The kiosk minimum (1rem). This is information the operator reads, not
+    // decoration — it is what says whether they are on the plan or off it.
+    fontSize: 'var(--font-sm)',
+    fontWeight: 700,
+    lineHeight: 1.15,
+    whiteSpace: 'nowrap' as const,
+  },
+  markerAktiv: {
+    color: 'var(--color-accent-strong)',
+  },
+  markerVorgabe: {
+    color: 'var(--text-muted)',
+  },
+
   symbol: {
     width: 30,
     height: 30,
