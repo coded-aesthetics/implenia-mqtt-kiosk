@@ -3,15 +3,17 @@ import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 import type { CSSProperties } from 'react';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import {
-  RASTER, entferneSchicht, fuegeHindernisEin, fuegeSchichtEin, runde, setzeGrenze,
-  type Auswahl, type Schicht,
+  RASTER, entferneSchicht, fuegeHindernisEin, fuegeSchichtEin, grundBei, runde,
+  setzeGrenze, type Auswahl, type Schicht,
 } from '@coded-aesthetics/din4023/profile';
 import { formatNumber } from '../utils/format';
 import {
-  einfuegeTiefeBei, farbeVon, istHindernis, kurzLabel, mitIds, nameVon, neueId,
-  vomServer, zumCommit, type Profil,
+  HINDERNISSE, WAEHLBAR, einfuegeTiefeBei, farbeVon, istHindernis, kurzLabel,
+  mitIds, nameVon, neueId, spaltenKandidaten, vomServer, vorgabeArten, zumCommit,
+  type Profil,
 } from '../utils/geologie';
 import { GeologiePicker, type PickerArt } from './GeologiePicker';
+import { GeologieSpalte } from './GeologieSpalte';
 
 /**
  * The geology profile the operator signs off before the data goes up.
@@ -101,6 +103,9 @@ function neuLabel(kind: PickerArt): string {
   return kind === 'hindernis' ? 'Neues Hindernis' : 'Neue Schicht';
 }
 
+/** All six obstruction kinds — few enough that the column shows them all. */
+const HINDERNIS_NRS = HINDERNISSE.map((e) => e.nr);
+
 interface GeologyContext {
   verfuegbar: boolean;
   gebohrt: boolean;
@@ -113,6 +118,15 @@ interface GeologyContext {
    * same thing.
    */
   profil: { schichten: { tiefe: number; nr: number; quelle: 'ist' | 'vorgabe' }[]; endTiefe: number } | null;
+  /**
+   * The planned profile from the Schichtauftrag, as `vorgabe-geology.ts`
+   * parsed it.
+   *
+   * Already in the response — this screen simply never read it. It is what
+   * makes the quick picker possible: the three to five soils that can
+   * plausibly occur in *this* hole, rather than 58 ways to mis-tap.
+   */
+  vorgabe: { schichten: { tiefe: number; nr: number }[]; endTiefe: number } | null;
   hinweis?: string;
 }
 
@@ -134,6 +148,17 @@ export function GeologieBestaetigung({
   sessionId, elementName, onBeenden, onZurueck,
 }: Props) {
   const [profil, setProfil] = useState<Profil | null>(null);
+  /** The planned layers, for the quick picker and its "Vorgabe" marker. */
+  const [vorgabeSchichten, setVorgabeSchichten] = useState<Schicht[]>([]);
+  /**
+   * Whether the full DIN catalogue is open on top of the quick picker.
+   *
+   * Two levels, exactly as the drilling screen has them: the column offers
+   * what this element's Schichtauftrag names, and "Andere…" opens all 58 for
+   * the ground nobody planned for. Separate from `ziel` because escalating
+   * must not lose which layer is being retyped.
+   */
+  const [vollbild, setVollbild] = useState(false);
   const [laden, setLaden] = useState(true);
   const [fehler, setFehler] = useState<string | null>(null);
   const [hinweis, setHinweis] = useState<string | null>(null);
@@ -191,6 +216,7 @@ export function GeologieBestaetigung({
         if (abgebrochen) return;
         const geladen = vomServer(ctx.profil);
         setProfil(geladen && { ...geladen, schichten: mitIds(geladen.schichten) });
+        setVorgabeSchichten(ctx.vorgabe?.schichten ?? []);
         if (ctx.hinweis) setHinweis(ctx.hinweis);
         setLaden(false);
       })
@@ -299,6 +325,7 @@ export function GeologieBestaetigung({
   }
 
   function waehleTyp(nr: number) {
+    setVollbild(false);
     if (!ziel) return;
     if (ziel.art === 'typ') {
       const s = schichten[ziel.index];
@@ -365,21 +392,58 @@ export function GeologieBestaetigung({
     [schichten],
   );
 
-  if (ziel) {
+  /** The soils this element's Schichtauftrag names, shallowest first. */
+  const geplanteArten = useMemo(
+    () => vorgabeArten(vorgabeSchichten),
+    [vorgabeSchichten],
+  );
+
+  /**
+   * Everything the open ground-type choice needs, or null when none is open.
+   *
+   * The choice takes the profile column rather than covering the screen — the
+   * same move the drilling screen makes, and for the same reason: the panel
+   * beside it keeps saying *which* layer is being typed, the header keeps its
+   * exits, and the whole interaction is over in a tap. A full-screen picker
+   * here threw away the one piece of context the operator needs, which is
+   * where in the hole the layer they just tapped actually sits.
+   */
+  const wahl = useMemo(() => {
+    if (!ziel) return null;
+    const schicht = ziel.art === 'typ' ? schichten[ziel.index] : null;
+    if (ziel.art === 'typ' && !schicht) return null;
+
     const kind: PickerArt = ziel.art === 'neu'
       ? ziel.kind
-      : istHindernis(schichten[ziel.index]?.nr ?? 0) ? 'hindernis' : 'schicht';
+      : istHindernis(schicht!.nr) ? 'hindernis' : 'schicht';
+    const tiefe = ziel.art === 'typ' ? schicht!.tiefe : ziel.tiefe;
     const untertitel = ziel.art === 'typ'
-      ? `Schicht ab ${formatNumber(schichten[ziel.index].tiefe)} m`
-      : `${neuLabel(ziel.kind)} ab ${formatNumber(ziel.tiefe)} m`;
-    return (
-      <GeologiePicker
-        art={kind}
-        untertitel={untertitel}
-        onWaehlen={waehleTyp}
-        onAbbrechen={() => setZiel(null)}
-      />
-    );
+      ? `Schicht ab ${formatNumber(tiefe)} m`
+      : `${neuLabel(ziel.kind)} ab ${formatNumber(tiefe)} m`;
+
+    // Only a retype has a ground type to call "Aktuell". For a new layer the
+    // ground at that depth is what is about to be split, so marking it would
+    // offer a tap that changes nothing — `fuegeSchichtEin` merges it straight
+    // back into its neighbour.
+    const aktiveNr = ziel.art === 'typ' ? schicht!.nr : null;
+    const vorgabeNr = vorgabeSchichten.length > 0
+      ? grundBei(vorgabeSchichten as Parameters<typeof grundBei>[0], tiefe)
+      : null;
+
+    return {
+      kind,
+      untertitel,
+      aktiveNr,
+      vorgabeNr: vorgabeNr != null && !istHindernis(vorgabeNr) ? vorgabeNr : null,
+      kandidaten: kind === 'hindernis'
+        ? HINDERNIS_NRS
+        : spaltenKandidaten(geplanteArten, aktiveNr),
+    };
+  }, [ziel, schichten, vorgabeSchichten, geplanteArten]);
+
+  function brichWahlAb() {
+    setVollbild(false);
+    setZiel(null);
   }
 
   return (
@@ -428,9 +492,26 @@ export function GeologieBestaetigung({
             ref={chartRef}
             style={{
               ...styles.chartSpalte,
-              ...(einfuegen ? styles.chartSpalteScharf : {}),
+              ...(einfuegen || wahl ? styles.chartSpalteScharf : {}),
+              // The quick picker divides the column between its tiles, which
+              // needs the column to be a flex parent. The chart sizes itself
+              // from a measured height instead, so it neither needs this nor
+              // wants it.
+              ...(wahl ? styles.chartSpalteWahl : {}),
             }}
           >
+            {wahl ? (
+              <GeologieSpalte
+                art={wahl.kind}
+                nrs={wahl.kandidaten}
+                aktiveNr={wahl.aktiveNr}
+                vorgabeNr={wahl.vorgabeNr}
+                onWaehlen={(nr) => waehleTyp(nr)}
+                // Obstructions need no escalation: all six fit the column, and
+                // there is no seventh kind behind "Andere…".
+                onAndere={wahl.kind === 'schicht' ? () => setVollbild(true) : undefined}
+              />
+            ) : (
             <BohrprofilLog
               schichten={schichten}
               endTiefe={endTiefe}
@@ -447,10 +528,18 @@ export function GeologieBestaetigung({
               onAuswahl={onAuswahl}
               styleOverrides={chartStyles}
             />
+            )}
           </div>
 
           <div style={styles.panel}>
-            {einfuegen ? (
+            {wahl ? (
+              <WahlPanel
+                kind={wahl.kind}
+                untertitel={wahl.untertitel}
+                geplant={wahl.kandidaten.length > 0 && wahl.kind === 'schicht'}
+                onAbbrechen={brichWahlAb}
+              />
+            ) : einfuegen ? (
               <EinfuegenPanel kind={einfuegen} meldung={meldung} />
             ) : gewaehlt ? (
               <SchichtPanel
@@ -469,29 +558,89 @@ export function GeologieBestaetigung({
               <LeerPanel />
             )}
 
-            <div style={styles.hinzuReihe}>
-              <button
-                style={{
-                  ...styles.hinzu,
-                  ...(einfuegen === 'schicht' ? styles.hinzuScharf : {}),
-                }}
-                onClick={() => fuegeEin('schicht')}
-              >
-                {einfuegen === 'schicht' ? 'Abbrechen' : '+ Schicht'}
-              </button>
-              <button
-                style={{
-                  ...styles.hinzuHindernis,
-                  ...(einfuegen === 'hindernis' ? styles.hinzuScharf : {}),
-                }}
-                onClick={() => fuegeEin('hindernis')}
-              >
-                {einfuegen === 'hindernis' ? 'Abbrechen' : '+ Hindernis'}
-              </button>
-            </div>
+            {/*
+              Hidden while a ground type is being chosen. The column is the
+              picker at that moment, so there is nowhere for a new layer's
+              depth tap to land — and the panel's own Abbrechen is the way out.
+            */}
+            {!wahl && (
+              <div style={styles.hinzuReihe}>
+                <button
+                  style={{
+                    ...styles.hinzu,
+                    ...(einfuegen === 'schicht' ? styles.hinzuScharf : {}),
+                  }}
+                  onClick={() => fuegeEin('schicht')}
+                >
+                  {einfuegen === 'schicht' ? 'Abbrechen' : '+ Schicht'}
+                </button>
+                <button
+                  style={{
+                    ...styles.hinzuHindernis,
+                    ...(einfuegen === 'hindernis' ? styles.hinzuScharf : {}),
+                  }}
+                  onClick={() => fuegeEin('hindernis')}
+                >
+                  {einfuegen === 'hindernis' ? 'Abbrechen' : '+ Hindernis'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
+
+      {/*
+        The full DIN catalogue, one level above the column. It covers the
+        screen, so it is rendered last and outside the layout — and cancelling
+        it returns to the quick picker rather than dropping the layer being
+        typed.
+      */}
+      {wahl && vollbild && (
+        <GeologiePicker
+          art={wahl.kind}
+          untertitel={wahl.untertitel}
+          vorgabeNrs={geplanteArten}
+          aktiveNr={wahl.aktiveNr}
+          onWaehlen={waehleTyp}
+          onAbbrechen={() => setVollbild(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * What the panel says while a ground type is being chosen in the column.
+ *
+ * It carries the context the full-screen picker used to put in its own header
+ * — which layer, at what depth — so swapping the column for the picker costs
+ * the operator nothing they were reading.
+ */
+function WahlPanel({
+  kind, untertitel, geplant, onAbbrechen,
+}: {
+  kind: PickerArt;
+  untertitel: string;
+  geplant: boolean;
+  onAbbrechen: () => void;
+}) {
+  return (
+    <div style={styles.wahlPanel}>
+      <span style={styles.wahlTitel}>
+        <span style={styles.leerPfeil} aria-hidden>← </span>
+        {kind === 'hindernis' ? 'Hindernis wählen' : 'Bodenart wählen'}
+      </span>
+      <span style={styles.wahlZiel}>{untertitel}</span>
+      <span style={styles.wahlText}>
+        {kind === 'hindernis'
+          ? 'Links die Art des Hindernisses antippen.'
+          : geplant
+            ? `Links stehen die Bodenarten aus der Vorgabe für dieses Element. Alle ${WAEHLBAR.length} DIN-Bodenarten stehen unter „Andere…“.`
+            : `Für dieses Element sind keine Bodenarten vorgegeben. Unter „Andere…“ stehen alle ${WAEHLBAR.length} DIN-Bodenarten.`}
+      </span>
+      <button style={styles.wahlAbbrechen} onClick={onAbbrechen}>
+        Abbrechen
+      </button>
     </div>
   );
 }
@@ -781,6 +930,12 @@ const styles: Record<string, CSSProperties> = {
     border: '3px solid var(--color-accent)',
     backgroundColor: 'var(--surface-2)',
   },
+  chartSpalteWahl: {
+    display: 'flex',
+    flexDirection: 'column',
+    paddingLeft: 'var(--space-sm)',
+    paddingRight: 'var(--space-sm)',
+  },
   panel: {
     flex: 1,
     minWidth: 0,
@@ -820,6 +975,54 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--text-muted)',
     lineHeight: 1.4,
     maxWidth: '36ch',
+  },
+
+  // ── Ground type being chosen in the column ───────────────
+  wahlPanel: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    gap: 'var(--space-sm)',
+    padding: 'var(--space-lg)',
+    borderRadius: 'var(--radius-md)',
+    border: '3px solid var(--color-accent)',
+    backgroundColor: 'var(--surface-2)',
+  },
+  wahlTitel: {
+    fontSize: 'var(--font-md)',
+    fontWeight: 800,
+    color: 'var(--text-primary)',
+    lineHeight: 1.2,
+  },
+  wahlZiel: {
+    fontSize: 'var(--font-base)',
+    fontWeight: 800,
+    color: 'var(--color-accent-strong)',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  wahlText: {
+    fontSize: 'var(--font-base)',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    lineHeight: 1.4,
+    maxWidth: '40ch',
+  },
+  wahlAbbrechen: {
+    marginTop: 'var(--space-sm)',
+    minWidth: 220,
+    minHeight: 'var(--tap-min)',
+    padding: '0 var(--space-md)',
+    border: '2px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--surface-3)',
+    color: 'var(--text-primary)',
+    fontSize: 'var(--font-base)',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
   },
 
   // ── Insert armed ─────────────────────────────────────────

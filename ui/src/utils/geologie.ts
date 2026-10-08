@@ -11,18 +11,67 @@ import {
  */
 
 /**
- * The ground types the operator can choose from, grouped as the picker shows
- * them.
+ * The ground types the operator can choose from, grouped as the picker's tabs
+ * show them — the whole DIN 4023 catalogue bar the obstructions, which have
+ * their own picker.
  *
- * A closed vocabulary: the whole point of a tile grid is that a gloved hand
- * never types. `Zusammengesetzt` (nr 48–58) is left out deliberately — those
- * are compound descriptions like `U, fs*` that a drilling supervisor does not
- * distinguish at the rig, and 11 more near-identical tiles would cost the
- * screen the room the common ones need.
+ * It used to be Bodenarten + Felsarten, 33 of 64, and the 14
+ * non-petrographic types were the costly omission: `Auffüllung`,
+ * `Mutterboden`, `Geschiebemergel`, `Löß`, `Hangschutt`, `Klei` are the most
+ * common *top* layers on a German site. Worse, it was asymmetric —
+ * `vorgabeArten` happily offers nr 34–47 in the quick column when a
+ * Schichtauftrag names one, but the full picker could not reproduce it, so
+ * "Andere…" was a one-way door away from a planned ground type.
+ *
+ * What made 33 the limit was the screen, not the vocabulary: one flat grid of
+ * everything cannot be both complete and readable at 1024x768. A tab per
+ * table fixes that — no tab exceeds five rows, so every entry gets a tile wide
+ * enough for its whole name.
  */
 export const BODENARTEN = ALLE_EINTRAEGE.filter((e) => e.tabelle === 'Bodenarten');
 export const FELSARTEN = ALLE_EINTRAEGE.filter((e) => e.tabelle === 'Felsarten');
 export const HINDERNISSE = ALLE_EINTRAEGE.filter((e) => e.tabelle === 'Hindernis');
+/** Soils named for how they came to be rather than their grain: `Auffüllung`. */
+export const SONSTIGE_BODEN = ALLE_EINTRAEGE
+  .filter((e) => e.tabelle === 'Nicht-petrographisch');
+/** Compound descriptions: `U, fs*`, `mS, u, h`. */
+export const ZUSAMMENGESETZT = ALLE_EINTRAEGE
+  .filter((e) => e.tabelle === 'Zusammengesetzt');
+
+/** Everything a layer may be typed as. Obstructions have their own picker. */
+export const WAEHLBAR = [
+  ...BODENARTEN, ...SONSTIGE_BODEN, ...FELSARTEN, ...ZUSAMMENGESETZT,
+];
+
+/**
+ * The picker's tabs, in the order a hole is usually described: grain-size
+ * soils first, then the soils named for their origin, then rock, then the
+ * compounds nobody reaches for at the rig.
+ *
+ * Short labels on purpose — four tabs plus a search field share one 64px row,
+ * and "Nicht-petrographisch" is a word no operator needs to read to find
+ * `Auffüllung` under it.
+ */
+export const GRUPPEN = [
+  { id: 'boden', titel: 'Boden', eintraege: BODENARTEN },
+  { id: 'sonstige', titel: 'Sonstige', eintraege: SONSTIGE_BODEN },
+  { id: 'fels', titel: 'Fels', eintraege: FELSARTEN },
+  { id: 'zusammen', titel: 'Gemischt', eintraege: ZUSAMMENGESETZT },
+] as const;
+
+/**
+ * A name split into what it is and the examples that follow in brackets.
+ *
+ * `Vulkanite (z. B. Basalt)` is two different things to a reader: the type,
+ * which has to be legible at a glance, and a hint that only matters once the
+ * type is in question. Drawn as one string it either wraps to four lines or
+ * gets cut — the tiles in the screenshot that started this read `Vulk…` and
+ * `(z. B. Basa…`, which names neither.
+ */
+export function nameTeile(name: string): { haupt: string; hinweis?: string } {
+  const m = name.match(/^(.*?)\s*\((.+)\)\s*$/);
+  return m ? { haupt: m[1], hinweis: m[2] } : { haupt: name };
+}
 
 /** Is this ground type an obstruction rather than soil or rock? */
 export function istHindernis(nr: number): boolean {
