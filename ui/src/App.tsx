@@ -409,6 +409,11 @@ export function App() {
         <GeologiePicker
           art={geologie.vollbild}
           untertitel={liveTiefe != null ? `Aktuelle Tiefe ${formatNumber(liveTiefe)} m` : undefined}
+          // Badged, not re-offered: the quick column already had these, and
+          // the operator who escalated anyway is usually looking for ground
+          // the plan does not name. Marking them is what tells the two apart.
+          vorgabeNrs={geologie.kandidaten}
+          aktiveNr={geologie.aktiveArt}
           onWaehlen={(nr, name) => geologie.erfasse(nr, name)}
           onAbbrechen={geologie.schliesse}
         />

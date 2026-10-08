@@ -194,14 +194,19 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--text-primary)',
     lineHeight: 1.1,
   },
+  /**
+   * Wrapped, not clipped. It was `nowrap` with an ellipsis, which in a 170px
+   * column turns `Verwitterungslehm, Hanglehm` into `Verwitterungsle…` — and
+   * the sign-off screen hosts this same column at 370px, where there is room
+   * for the whole name and no reason to cut it.
+   */
   name: {
     fontSize: 'var(--font-sm)',
     fontWeight: 600,
     color: 'var(--text-muted)',
     lineHeight: 1.15,
     overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    overflowWrap: 'anywhere',
   },
   andere: {
     flexShrink: 0,
