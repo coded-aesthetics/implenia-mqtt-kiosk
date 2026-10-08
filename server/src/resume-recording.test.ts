@@ -221,6 +221,54 @@ describe('a recording interrupted by a restart', () => {
     db.endSession(sessionId);
   });
 
+  /**
+   * The server knows the depth and the volume after a restart; the browser
+   * does not. It holds no readings of its own, and the WebSocket only pushes
+   * values as they arrive — so on a rig standing still (a Rohrwechsel, a pause,
+   * a shift change) every tile reads 0 for a pillar that is half drilled, for
+   * as long as the rig stays quiet.
+   */
+  it('offers the last known depth and volume to a screen that has just loaded', () => {
+    const { ingestion } = ingestionMod;
+    const sessionId = db.createSession('A-17', SENSOR_MAP_JSON);
+    ingestion.startRecording(sessionId, SENSOR_MAP);
+
+    publish(DEPTH_TOPIC, '4.2');
+    publish(VOLUME_TOPIC, '100');
+    publish(VOLUME_TOPIC, '1170');
+
+    // The process dies, boots, and a browser connects before the rig has
+    // published anything new.
+    ingestion.stopRecording();
+    expect(recordingMod.resumeRecording()).toEqual({ sessionId });
+
+    const byTopic = new Map(ingestion.latestReadings().map((r) => [r.topic, r.payload]));
+    expect(byTopic.get(DEPTH_TOPIC)).toBe('4.2');
+    // The delta, not the rig's running total — the screen shows what this
+    // element has had.
+    expect(byTopic.get('Q_Suspension')).toBe('1070');
+
+    ingestion.stopRecording();
+    db.endSession(sessionId);
+  });
+
+  it('does not let the snapshot overwrite a newer live reading', () => {
+    const { ingestion } = ingestionMod;
+    const sessionId = db.createSession('A-18', SENSOR_MAP_JSON);
+    ingestion.startRecording(sessionId, SENSOR_MAP);
+    publish(DEPTH_TOPIC, '4.2');
+
+    ingestion.stopRecording();
+    recordingMod.resumeRecording();
+    publish(DEPTH_TOPIC, '4.5');
+
+    const byTopic = new Map(ingestion.latestReadings().map((r) => [r.topic, r.payload]));
+    expect(byTopic.get(DEPTH_TOPIC)).toBe('4.5');
+
+    ingestion.stopRecording();
+    db.endSession(sessionId);
+  });
+
   it('does nothing when no session was left open', () => {
     expect(recordingMod.resumeRecording()).toBeNull();
     expect(ingestionMod.ingestion.drillStatus).toBeNull();

@@ -3,7 +3,7 @@ import type { DataSource, SensorReading } from './data-source.js';
 import {
   insertBuffer, pruneBuffer, insertSessionReading, getDrillState, setDrillState,
   getOperatingMode, setOperatingModeRow, clearSessionReadings,
-  createSession, endSession, getActiveSession,
+  createSession, endSession, getActiveSession, getLatestSessionReadings,
 } from './db.js';
 import { parsePayload } from './parse-payload.js';
 import { getResolverContext, resolveSensorKey } from './topic-resolver.js';
@@ -21,7 +21,10 @@ import {
   getRohrwechselConfig, isClampTopic, type RohrwechselConfig,
 } from './rohrwechsel-config.js';
 import { applyCalibration, calibrationFor, isNeutral } from './calibration.js';
-import { VolumeTracker, baselinesFromSession, getVolumeMappings } from './volume-integration.js';
+import {
+  VolumeTracker, baselinesFromSession, getVolumeMappings, volumeSnapshot,
+  type CumulativeVolumeMapping,
+} from './volume-integration.js';
 
 const log = createLogger('ingestion');
 
@@ -136,7 +139,7 @@ export class DataIngestion extends EventEmitter {
     // Only a depth on a retrofitted rig is ever rewritten, and only then does
     // the live screen show something other than what arrived — the corrected
     // depth is the one the worker needs.
-    this.emit('reading', { ...reading, payload: corrected.payload });
+    this.emitReading({ ...reading, payload: corrected.payload });
 
     if (this.activeSession) {
       const mapping = key ? this.activeSession.sensorMap.get(key) : undefined;
@@ -158,7 +161,9 @@ export class DataIngestion extends EventEmitter {
         );
         if (volResult) {
           const volPayload = String(roundValue(volResult.volume));
-          this.emit('reading', { topic: volResult.topic, payload: volPayload, receivedAt: reading.receivedAt });
+          this.emitReading({
+            topic: volResult.topic, payload: volPayload, receivedAt: reading.receivedAt,
+          });
         }
       }
     }
@@ -291,6 +296,9 @@ export class DataIngestion extends EventEmitter {
       this.source.off('replay-stop', this.onReplayStop);
       this.source.stop();
     }
+    // Another transport publishes other topics; keeping the old ones would
+    // show a screen full of values nothing can ever update again.
+    this.lastReadings.clear();
     this.source = source;
     if (wasStarted) {
       this.source.on('reading', this.onReading);
@@ -393,6 +401,7 @@ export class DataIngestion extends EventEmitter {
       clearSessionReadings(this.activeSession.id);
       this.activeSession.drill = initialDrillState();
       this.activeSession.volumeTracker.reset();
+      this.lastReadings.clear();
     }
   }
 
@@ -423,6 +432,7 @@ export class DataIngestion extends EventEmitter {
       ),
     };
     this.pendingMode = null;
+    this.seedLastReadings(sessionId, sensorMap, mappings);
     this.recordStatusReading(this.activeSession);
   }
 
@@ -439,6 +449,68 @@ export class DataIngestion extends EventEmitter {
   restartSource(): void {
     this.source.stop();
     this.source.start();
+  }
+
+  /**
+   * The last value emitted for each topic.
+   *
+   * A browser that has just loaded holds nothing: the WebSocket only pushes
+   * readings as they arrive, so every tile reads 0 until the rig publishes
+   * again — after a PM2 restart, after a page reload, after the kiosk browser
+   * is reopened. On a rig standing still that is not a flicker, it is the
+   * screen lying about the hole. `CLAUDE.md`: no data source → show last known
+   * state.
+   *
+   * Values as emitted, not as they arrived: calibrated, carrying the
+   * Schlittenweg offset, and including the volume deltas that are computed for
+   * the display and never recorded. Replaying `mqtt_buffer` instead would put
+   * the carriage position on screen as if it were the depth.
+   */
+  private lastReadings = new Map<string, SensorReading>();
+
+  private emitReading(reading: SensorReading): void {
+    this.lastReadings.set(reading.topic, reading);
+    this.emit('reading', reading);
+  }
+
+  /** What a screen that has just connected starts from. */
+  latestReadings(): SensorReading[] {
+    return [...this.lastReadings.values()];
+  }
+
+  /**
+   * Rebuild the last-known values of a session that is being resumed.
+   *
+   * Only what this session recorded, which is also the only place the stored
+   * value is the corrected one. A session that has just been created has
+   * nothing, so a normal start seeds nothing and the map fills as data
+   * arrives.
+   */
+  private seedLastReadings(
+    sessionId: number,
+    sensorMap: Map<string, SensorMapEntry>,
+    mappings: CumulativeVolumeMapping[],
+  ): void {
+    for (const row of getLatestSessionReadings(sessionId)) {
+      const payload = row.valueNumeric !== null ? String(row.valueNumeric) : row.valueText;
+      if (payload === null) continue;
+      const known = this.lastReadings.get(row.topic);
+      if (known && known.receivedAt >= row.receivedAt) continue;
+      this.lastReadings.set(row.topic, {
+        topic: row.topic, payload, receivedAt: row.receivedAt,
+      });
+    }
+
+    for (const { topic, volume } of volumeSnapshot(sessionId, sensorMap, mappings)) {
+      if (this.lastReadings.has(topic)) continue;
+      this.lastReadings.set(topic, {
+        topic, payload: String(roundValue(volume)), receivedAt: Date.now(),
+      });
+    }
+
+    if (this.lastReadings.size > 0) {
+      log.info('Session %d: %d last-known values restored', sessionId, this.lastReadings.size);
+    }
   }
 
   private onSeekStart = (): void => { this.resetForSeek(); };

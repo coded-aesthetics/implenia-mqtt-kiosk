@@ -68,6 +68,22 @@ export function setupWebSocket(app: FastifyInstance): void {
       })
     );
 
+    /*
+     * Last-known values, so a screen that has just loaded is not blank.
+     *
+     * The push only carries readings as they arrive, so without this every
+     * tile sits at 0 until the rig publishes again — which on a restart
+     * mid-element means the depth and the slurry volume of a half-drilled
+     * pillar read zero, indefinitely if the rig is standing still. Sent before
+     * anything live can arrive, and each entry carries its own `receivedAt`,
+     * so a value that arrives in between wins on merge rather than being
+     * overwritten by the older snapshot.
+     */
+    const snapshot = ingestion.latestReadings();
+    if (snapshot.length > 0) {
+      socket.send(JSON.stringify({ type: 'snapshot', readings: snapshot }));
+    }
+
     // Rohrverlängerung state, so a screen that connects mid-Rohrwechsel does
     // not claim the rig is drilling.
     const drill = ingestion.drillStatus;

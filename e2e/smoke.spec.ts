@@ -111,11 +111,12 @@ test('the recording bar stays a single row while recording', async ({ page }) =>
   // One row: every control shares a vertical band. Compared loosely, because
   // controls of different heights legitimately sit at slightly different tops.
   //
-  // Note the geology button is in its idle state here — the suggestion needs a
-  // *live* depth reading, and there is no data source in this environment. That
-  // costs this assertion nothing: both states carry the same `minWidth: 150`,
-  // so if the idle bar fits on one row the suggesting bar does too. The
-  // suggestion rule itself is unit-tested (`naechsteGrenze`).
+  // The layer button is in its *suggesting* state here — the widest the bar
+  // gets — because the server now hands a screen that has just loaded its last
+  // known depth, which the seed puts at 2.9 m against a planned 3 m boundary.
+  // Before that snapshot existed the browser had no depth at all in this
+  // environment and the button sat idle, so this assertion used to argue from
+  // both states sharing `minWidth: 150`. It no longer has to.
   const spread = Math.max(...tops) - Math.min(...tops);
   expect(spread, `bar wrapped onto separate rows (tops: ${tops.join(', ')})`)
     .toBeLessThan(20);
@@ -149,10 +150,18 @@ test('the profile still fills its column after picking a ground type', async ({ 
   const before = (await chart.boundingBox())!.height;
   expect(before, 'profile never measured on load').toBeGreaterThan(FALLBACK);
 
-  // Open the quick picker — the column swaps out — then close it again.
-  await page.getByTestId('geologie-schicht').click();
+  /*
+   * Open the quick picker — the column swaps out — then close it again.
+   *
+   * Through the obstruction button, which always opens the picker. The layer
+   * button does not: with the seeded hole at 2.9 m and a planned boundary at
+   * 3 m it is showing a suggestion, and a tap there *records* that layer
+   * instead of opening anything — which would also write geology into the
+   * shared smoke database. Reaching the picker is all this step needs.
+   */
+  await page.getByTestId('geologie-hindernis').click();
   await expect(profil).toBeHidden();
-  await page.getByTestId('geologie-schicht').click();
+  await page.getByTestId('geologie-hindernis').click();
   await expect(profil).toBeVisible();
 
   const after = (await chart.boundingBox())!.height;
