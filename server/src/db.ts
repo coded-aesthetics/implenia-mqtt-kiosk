@@ -317,6 +317,20 @@ const getSensorSeriesStmt = db.prepare(`
     AND value_numeric IS NOT NULL
   ORDER BY received_at ASC
 `);
+// The oldest recorded value of one sensor, used to rebuild the volume tracker's
+// baseline after a restart. Deliberately unfiltered beyond "has a value": the
+// live tracker baselines on the first finite value it sees, clipped or not, so
+// any filter here would hand a resumed session a different baseline than the
+// original run had — which is the whole thing this query exists to avoid. The
+// `id` tiebreak picks the first-inserted of two readings sharing a millisecond,
+// which is the one the live tracker would have taken.
+const getFirstSessionValueStmt = db.prepare(`
+  SELECT value_numeric
+  FROM session_readings
+  WHERE session_id = ? AND sensor_id = ? AND value_numeric IS NOT NULL
+  ORDER BY received_at ASC, id ASC
+  LIMIT 1
+`);
 const deletePendingForSensorStmt = db.prepare(`
   DELETE FROM session_readings
   WHERE session_id = ? AND sensor_id = ? AND upload_status = 'pending'
@@ -718,6 +732,19 @@ export function getSessionSensorSeries(sessionId: number, sensorId: string): Ser
   }[];
   return rows.map((r) => ({ receivedAt: r.received_at, value: r.value_numeric }));
 }
+
+/**
+ * The first value recorded for one sensor in a session, or null if it recorded
+ * none.
+ *
+ * See getFirstSessionValueStmt for why it is unfiltered.
+ */
+export function getFirstSessionValue(sessionId: number, sensorId: string): number | null {
+  const row = getFirstSessionValueStmt.get(sessionId, sensorId) as
+    { value_numeric: number } | undefined;
+  return row ? row.value_numeric : null;
+}
+
 
 /**
  * Drop a session's not-yet-uploaded readings for one sensor, and say how many

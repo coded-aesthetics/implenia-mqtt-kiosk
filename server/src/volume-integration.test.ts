@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { VolumeTracker, type CumulativeVolumeMapping } from './volume-integration.js';
+import {
+  VolumeTracker,
+  baselinesFromSession,
+  type CumulativeVolumeMapping,
+} from './volume-integration.js';
+import { createSession, insertSessionReading } from './db.js';
 
 const MAPPINGS: CumulativeVolumeMapping[] = [
   { cumulativeKey: 'q_verpressen', syntheticTopic: 'Q_verpressen' },
@@ -75,5 +80,70 @@ describe('VolumeTracker', () => {
     vt.observe('q_verpressen', 100);
     vt.observe('q_verpressen', NaN);
     expect(vt.observe('q_verpressen', 200)!.volume).toBe(100);
+  });
+});
+
+/**
+ * What a restart mid-element has to recover.
+ *
+ * The tracker's baselines live in memory, so a resumed session gets them back
+ * out of the readings it already holds — the rig's cumulative total, recorded
+ * correctly throughout. Without this the worker's slurry volume restarts at
+ * zero halfway up a pillar.
+ */
+describe('baselinesFromSession', () => {
+  const sensorMap = new Map([
+    ['q_verpressen', { sensorId: 'sensor-v' }],
+    ['q_bohren', { sensorId: 'sensor-b' }],
+  ]);
+
+  it('is empty for a session that has recorded nothing', () => {
+    const id = createSession('P-01', '{}');
+    expect(baselinesFromSession(id, sensorMap, MAPPINGS).size).toBe(0);
+  });
+
+  it('recovers the first recorded value per sensor', () => {
+    const id = createSession('P-02', '{}');
+    insertSessionReading(id, 'rig/qv', 'sensor-v', 'float', 98, null, { receivedAt: 1000 });
+    insertSessionReading(id, 'rig/qv', 'sensor-v', 'float', 1168, null, { receivedAt: 2000 });
+    insertSessionReading(id, 'rig/qb', 'sensor-b', 'float', 200, null, { receivedAt: 1500 });
+
+    expect(baselinesFromSession(id, sensorMap, MAPPINGS)).toEqual(
+      new Map([['q_verpressen', 98], ['q_bohren', 200]]),
+    );
+  });
+
+  it('continues the original delta rather than restarting it', () => {
+    const id = createSession('P-03', '{}');
+    // Before the restart: baseline 98, so the screen last showed 1070 l.
+    insertSessionReading(id, 'rig/qv', 'sensor-v', 'float', 98, null, { receivedAt: 1000 });
+    insertSessionReading(id, 'rig/qv', 'sensor-v', 'float', 1168, null, { receivedAt: 2000 });
+
+    const resumed = new VolumeTracker(MAPPINGS, baselinesFromSession(id, sensorMap, MAPPINGS));
+    expect(resumed.observe('q_verpressen', 1168)!.volume).toBe(1070);
+    expect(resumed.observe('q_verpressen', 1200)!.volume).toBe(1102);
+  });
+
+  it('takes a clipped first reading, as the live tracker would have', () => {
+    const id = createSession('P-04', '{}');
+    insertSessionReading(id, 'rig/qv', 'sensor-v', 'float', 500, null,
+      { receivedAt: 1000, clipped: true });
+    insertSessionReading(id, 'rig/qv', 'sensor-v', 'float', 600, null, { receivedAt: 2000 });
+
+    expect(baselinesFromSession(id, sensorMap, MAPPINGS).get('q_verpressen')).toBe(500);
+  });
+
+  it('skips a reading with no numeric value', () => {
+    const id = createSession('P-05', '{}');
+    insertSessionReading(id, 'rig/qv', 'sensor-v', 'float', null, 'nan', { receivedAt: 1000 });
+    insertSessionReading(id, 'rig/qv', 'sensor-v', 'float', 300, null, { receivedAt: 2000 });
+
+    expect(baselinesFromSession(id, sensorMap, MAPPINGS).get('q_verpressen')).toBe(300);
+  });
+
+  it('skips a cumulative sensor the session map does not cover', () => {
+    const id = createSession('P-06', '{}');
+    insertSessionReading(id, 'rig/qv', null, null, 98, null, { receivedAt: 1000 });
+    expect(baselinesFromSession(id, new Map(), MAPPINGS).size).toBe(0);
   });
 });

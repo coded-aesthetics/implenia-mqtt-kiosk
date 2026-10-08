@@ -21,7 +21,7 @@ import {
   getRohrwechselConfig, isClampTopic, type RohrwechselConfig,
 } from './rohrwechsel-config.js';
 import { applyCalibration, calibrationFor, isNeutral } from './calibration.js';
-import { VolumeTracker, getVolumeMappings } from './volume-integration.js';
+import { VolumeTracker, baselinesFromSession, getVolumeMappings } from './volume-integration.js';
 
 const log = createLogger('ingestion');
 
@@ -405,6 +405,11 @@ export class DataIngestion extends EventEmitter {
       log.info('Resuming session %d at Rohr %d (%s)', sessionId, restored.pipeCount, restored.phase);
     }
     const storedMode = getOperatingMode(sessionId);
+    // Baselines come out of the readings this session already holds, which is
+    // nothing at all for a fresh one. A resumed session would otherwise show
+    // the slurry volume restarting from zero, having recorded the rig's
+    // cumulative total correctly all along.
+    const mappings = getVolumeMappings();
     this.activeSession = {
       id: sessionId,
       sensorMap,
@@ -412,7 +417,10 @@ export class DataIngestion extends EventEmitter {
       rohrwechsel: getRohrwechselConfig(),
       operatingMode: (storedMode ? normalizeOperatingMode(storedMode) : null)
         ?? this.pendingMode ?? 'bohren',
-      volumeTracker: new VolumeTracker(getVolumeMappings()),
+      volumeTracker: new VolumeTracker(
+        mappings,
+        baselinesFromSession(sessionId, sensorMap, mappings),
+      ),
     };
     this.pendingMode = null;
     this.recordStatusReading(this.activeSession);
