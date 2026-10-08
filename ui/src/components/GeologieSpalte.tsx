@@ -159,9 +159,25 @@ const styles: Record<string, CSSProperties> = {
     border: '2px solid var(--color-accent)',
     backgroundColor: 'var(--surface-3)',
   },
+  /**
+   * Both markers side by side, wrapping to two lines only where they must.
+   *
+   * They were stacked unconditionally because "Aktuell · Vorgabe" is 17
+   * characters and the drilling screen's column is 170px wide, where it
+   * clipped to "Aktuell · Vorgal" — in the *ordinary* case, where the ground
+   * matches the plan. But the sign-off screen hosts this same column at
+   * 370px, and there the second line was 18px the tile did not have: a long
+   * name carrying both markers cut "Aktuell" through the top of its glyphs
+   * and "Vorgabe" through the bottom.
+   *
+   * `flexWrap` settles it per width instead of per guess — one row at 370px,
+   * two at 170px — with no media query and nothing to keep in sync with the
+   * column's actual size.
+   */
   marker: {
     display: 'flex',
-    flexDirection: 'column',
+    flexWrap: 'wrap',
+    columnGap: '0.4rem',
     // The kiosk minimum (1rem). This is information the operator reads, not
     // decoration — it is what says whether they are on the plan or off it.
     fontSize: 'var(--font-sm)',

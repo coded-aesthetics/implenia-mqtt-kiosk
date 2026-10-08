@@ -276,13 +276,22 @@ function Kachel({
     </span>
   );
 
+  /*
+    Every obstruction shares the Kurzform `Hi`, so `kurzLabel` falls back to
+    the name without its `Hindernis ` prefix — which is the same string
+    `nameTeile` produces, and every tile read "Stahl / Stahl", "Beton /
+    Beton". `SchichtPanel` already guards this; the tile did not.
+  */
+  const kurz = kurzLabel(eintrag.nr);
+  const nameZeigen = haupt !== kurz;
+
   if (gross) {
     return (
       <button style={styles.kachelGross} onClick={onClick}>
         {symbol}
         <span style={styles.kachelTextGross}>
-          <span style={styles.kurz}>{kurzLabel(eintrag.nr)}</span>
-          <span style={styles.name}>{haupt}</span>
+          <span style={styles.kurz}>{kurz}</span>
+          {nameZeigen && <span style={styles.name}>{haupt}</span>}
           {hinweis && <span style={styles.hinweis}>{hinweis}</span>}
         </span>
       </button>
@@ -302,16 +311,27 @@ function Kachel({
       onClick={onClick}
     >
       <span style={styles.symbolFliessend}>{symbol}</span>
-      <span style={styles.kurz}>{kurzLabel(eintrag.nr)}</span>
+      {/*
+        The badges ride on the Kurzform's line rather than taking one of their
+        own. On their own line they cost 19px, and the tallest entry in the
+        catalogue had exactly zero headroom without them: badging `Meb` on the
+        five-row Fels tab cut 19px off the bottom of its own tile and put the
+        word "Vorgabe" 2px below the edge of the screen — losing the one
+        signal that says planned from unplanned, on the tile where the
+        operator is least likely to know the ground by name.
+      */}
+      <span style={styles.kurzZeile}>
+        <span style={styles.kurz}>{kurz}</span>
+        {marker}
+      </span>
       {/*
         The bracketed part on its own line, one size down. `Vulkanite
         (z. B. Basalt)` is a type plus an example, and drawn as one string it
         either wraps to four lines or gets cut mid-word — which is how a tile
         came to read `(z. B. Basa…` and name neither.
       */}
-      <span style={styles.name}>{haupt}</span>
+      {nameZeigen && <span style={styles.name}>{haupt}</span>}
       {hinweis && <span style={styles.hinweis}>{hinweis}</span>}
-      {marker}
     </button>
   );
 }
@@ -408,6 +428,11 @@ const styles: Record<string, CSSProperties> = {
   },
   sucheFeld: {
     width: 260,
+    // Explicit, and `border-box` with it. Stretching to the tab row's 64px
+    // and then subtracting its own 2px borders left a 62px target — and the
+    // ✕ inside it 60px — which is under the glove minimum by the width of
+    // the borders.
+    minHeight: 'var(--tap-min)',
     flexShrink: 0,
     display: 'flex',
     alignItems: 'center',
@@ -427,7 +452,9 @@ const styles: Record<string, CSSProperties> = {
   sucheEingabe: {
     flex: 1,
     minWidth: 0,
-    height: '100%',
+    alignSelf: 'stretch',
+    minHeight: 'var(--tap-min)',
+    boxSizing: 'border-box',
     border: 'none',
     outline: 'none',
     background: 'transparent',
@@ -438,6 +465,8 @@ const styles: Record<string, CSSProperties> = {
   },
   sucheLeeren: {
     width: 'var(--tap-min)',
+    minHeight: 'var(--tap-min)',
+    boxSizing: 'border-box',
     alignSelf: 'stretch',
     flexShrink: 0,
     border: 'none',
@@ -467,16 +496,31 @@ const styles: Record<string, CSSProperties> = {
     minHeight: 0,
     display: 'grid',
     gridTemplateColumns: 'repeat(3, 1fr)',
-    gridAutoRows: 'minmax(var(--tap-min), 1fr)',
+    // Content-sized, and `start` so the two rows do not stretch to fill the
+    // screen. Sharing the soil grid's `1fr` rows blew the six tiles up from
+    // ~110px to 332px each, two text lines marooned in the middle of a slab.
+    gridAutoRows: 'minmax(110px, auto)',
+    alignContent: 'start',
     gap: 'var(--space-md)',
   },
   kachel: {
     display: 'block',
     minHeight: 'var(--tap-min)',
-    // 6px rather than 8 top and bottom. Measured, not chosen: the tallest
-    // entry in the catalogue (Meb, a three-line name plus its examples) needs
-    // 114px and the five-row Fels tab gives a tile 115.
-    padding: '6px var(--space-sm)',
+    /*
+      4px rather than 8 top and bottom. Measured at 1024x768, not chosen.
+
+      The five-row Fels tab is what sizes this whole screen, and one entry in
+      it is the binding constraint: `Meb`, whose name wraps to three lines and
+      which, when it is both the layer's current type and one the plan names,
+      also carries two badges. Measured content 99.9px in 104px of tile — 4px
+      of headroom, against 25.8px for the next-tallest (`Vst`, `Mem`).
+
+      So: anything that adds a line to a tile, or a point to a font size,
+      overflows this one tile first. It is why the badges ride on the
+      Kurzform's line, why `hinweis` is clamped to one line and why `kurz` is
+      set solid. Re-measure before changing any of them.
+    */
+    padding: '4px var(--space-sm)',
     border: '2px solid var(--border)',
     borderRadius: 'var(--radius-md)',
     backgroundColor: 'var(--surface-2)',
@@ -527,12 +571,30 @@ const styles: Record<string, CSSProperties> = {
     minWidth: 0,
     flex: 1,
   },
+  /**
+   * The Kurzform and any badges, on one line.
+   *
+   * `baseline` so a 1rem badge sits on the 1.4rem Kurzform's own line rather
+   * than centring against it, and `wrap` because the line is only ~168px wide
+   * beside the floated symbol — a four-letter Kurzform carrying both badges
+   * would otherwise be cut off horizontally, which is the same information
+   * loss moved sideways. Wrapping costs the line back in that one case, which
+   * is what the layout had before anyway.
+   */
+  kurzZeile: {
+    display: 'flex',
+    alignItems: 'baseline',
+    flexWrap: 'wrap',
+    columnGap: '0.5rem',
+  },
   kurz: {
     display: 'block',
     fontSize: 'var(--font-md)',
     fontWeight: 800,
     color: 'var(--text-primary)',
-    lineHeight: 1.1,
+    // Set solid. At 1.4rem the leading is 2px the tallest tile does not have,
+    // and a Kurzform is one short line that never needs the breathing room.
+    lineHeight: 1,
   },
   /**
    * The whole name, wrapped. No ellipsis and no `nowrap`: a ground type the
@@ -550,12 +612,18 @@ const styles: Record<string, CSSProperties> = {
   hinweis: {
     // The kiosk minimum. It is an example, not decoration — it is what tells
     // `Vulkanite` from `Plutonite` for anyone who does not know the words.
-    // Clamped at two lines, and it is the only text here that may be: the
-    // type's own name is never cut, and `z. B. Glimmerschiefer, Phyllit` has
-    // said what it is for long before it runs out.
+    // Clamped at ONE line, and it is the only text here that may be cut: the
+    // type's own name never is, and `z. B. Glimmerschiefer, Phyllit` has said
+    // what it is for long before it runs out.
+    //
+    // One rather than two because the badges have to fit somewhere. With a
+    // two-line hint the tallest entry came to 120px in a 114px box even with
+    // the badges moved onto the Kurzform's line; at one line it is 102, which
+    // is the margin this tile needs — it had none, and a 1px budget is not a
+    // layout, it is a coincidence waiting to break.
     display: '-webkit-box',
     WebkitBoxOrient: 'vertical' as CSSProperties['WebkitBoxOrient'],
-    WebkitLineClamp: 2,
+    WebkitLineClamp: 1,
     overflow: 'hidden',
     fontSize: 'var(--font-sm)',
     fontWeight: 600,
