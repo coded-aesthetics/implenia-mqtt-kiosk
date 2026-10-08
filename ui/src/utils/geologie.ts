@@ -62,7 +62,22 @@ export function farbeVon(nr: number): string {
  * deepest ones to the full picker rather than shrinking the tiles — a target
  * too small for a gloved hand is worse than one more tap.
  */
-export const MAX_SPALTEN_KACHELN = 7;
+/**
+ * How many soil tiles the column shows.
+ *
+ * Measured at 1024x768, not derived from the 64px tap minimum. The column has
+ * about 515px between the depth hero and the recording bar, and a tile that
+ * carries both markers needs 76px of text — `kurz`, the name, and two marker
+ * lines. Five tiles leave ~81px each and still fit the Andere button; six put
+ * every tile back on the 64px floor, where the second marker line is clipped
+ * mid-glyph and Andere slides behind the recording bar.
+ *
+ * It was 7, which never fit: Andere was already half-hidden at that count
+ * before the markers existed. A Vorgabe naming more distinct soils keeps the
+ * shallowest five and leaves the rest to Andere — one extra tap, against text
+ * the operator cannot read at all.
+ */
+export const MAX_SPALTEN_KACHELN = 5;
 
 /**
  * The soil types this element's Vorgabe actually names, shallowest first.

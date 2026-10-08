@@ -226,9 +226,17 @@ export function ShiftAssignment({
     ? data.measuring_devices.filter((d) => d.name.toLowerCase().includes(lower))
     : [...data.measuring_devices].sort((a, b) =>
       Number(b.name === recordingElement) - Number(a.name === recordingElement));
+  /*
+   * And the same for the resumed ones, because a running recording can be
+   * here instead: "Wiederaufnehmen" clears the completion and refetches, and
+   * when that refetch fails — offline, which is the whole scenario this exists
+   * for — the element stays listed as begonnen while being recorded. Three
+   * tiles fit, so without the hoist it can be cut from the screen entirely.
+   */
   const startedMatches = isSearching
     ? allStarted.filter((e) => e.elementName.toLowerCase().includes(lower))
-    : allStarted;
+    : [...allStarted].sort((a, b) =>
+      Number(b.elementName === recordingElement) - Number(a.elementName === recordingElement));
 
   const unfinishedTiles = unfinishedMatches.slice(0, MAX_UNFINISHED);
   const startedTiles = startedMatches.slice(0, MAX_STARTED);
@@ -284,14 +292,25 @@ export function ShiftAssignment({
                   <button
                     key={el.elementName}
                     onClick={() => resumeAndOpen(el.elementName, shift.refetch)}
-                    style={{ ...styles.tile, ...styles.startedTile }}
+                    style={{
+                      ...styles.tile,
+                      ...styles.startedTile,
+                      ...(el.elementName === recordingElement ? styles.recordingTile : {}),
+                    }}
                   >
                     <div style={styles.startedTileName}>{el.elementName}</div>
-                    <div style={styles.startedTileDate}>
-                      {new Date(el.lastUpload).toLocaleDateString('de-DE', {
-                        day: '2-digit', month: '2-digit', year: 'numeric',
-                      })}
-                    </div>
+                    {el.elementName === recordingElement ? (
+                      <div style={styles.recordingBadge}>
+                        <span style={styles.recordingDot} />
+                        Aufzeichnung läuft
+                      </div>
+                    ) : (
+                      <div style={styles.startedTileDate}>
+                        {new Date(el.lastUpload).toLocaleDateString('de-DE', {
+                          day: '2-digit', month: '2-digit', year: 'numeric',
+                        })}
+                      </div>
+                    )}
                   </button>
                 ))}
               </div>

@@ -216,9 +216,12 @@ describe('vorgabeArten', () => {
     expect(vorgabeArten([])).toEqual([]);
   });
 
-  it('leaves room for the Andere tile within the column', () => {
-    // The column holds eight 64px targets; the last is always Andere.
-    expect(MAX_SPALTEN_KACHELN).toBe(7);
+  it('leaves room for the Andere tile and for both markers', () => {
+    // Measured at 1024x768: a tile carrying "Aktuell" and "Vorgabe" needs 76px
+    // of text, and six tiles push every one of them back to the 64px floor —
+    // where the second marker line is clipped and Andere slides behind the
+    // recording bar. See MAX_SPALTEN_KACHELN.
+    expect(MAX_SPALTEN_KACHELN).toBe(5);
   });
 });
 
@@ -242,15 +245,15 @@ describe('spaltenKandidaten', () => {
   });
 
   it('keeps the column within its cap, giving up a planned tile if it must', () => {
-    const neun = [1, 2, 4, 5, 6, 7, 8, 9, 10];
-    const mit = spaltenKandidaten(neun, KIES);
+    const viele = [1, 2, 4, 5, 6, 7, 8, 9, 10];
+    const mit = spaltenKandidaten(viele, KIES);
     expect(mit).toHaveLength(MAX_SPALTEN_KACHELN);
     expect(mit[mit.length - 1]).toBe(KIES);
   });
 
   it('reaches a planned soil that the cap would have cut off', () => {
-    const neun = [1, 2, 4, 5, 6, 7, 8, 9, 10];
-    expect(spaltenKandidaten(neun, 10)).toContain(10);
+    const viele = [1, 2, 4, 5, 6, 7, 8, 9, 10];
+    expect(spaltenKandidaten(viele, 10)).toContain(10);
   });
 
   it('never injects an obstruction into the soil list', () => {
