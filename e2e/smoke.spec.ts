@@ -159,9 +159,14 @@ test('the profile still fills its column after picking a ground type', async ({ 
    * instead of opening anything — which would also write geology into the
    * shared smoke database. Reaching the picker is all this step needs.
    */
-  await page.getByTestId('geologie-hindernis').click();
+  // Asserted, not assumed: that same testid becomes "Hindernis Ende" while the
+  // drill is inside an obstruction, and a tap there records a layer into the
+  // shared smoke database rather than opening anything.
+  const hindernis = page.getByTestId('geologie-hindernis');
+  await expect(hindernis).toHaveText('Hindernis');
+  await hindernis.click();
   await expect(profil).toBeHidden();
-  await page.getByTestId('geologie-hindernis').click();
+  await hindernis.click();
   await expect(profil).toBeVisible();
 
   const after = (await chart.boundingBox())!.height;
