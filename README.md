@@ -472,13 +472,24 @@ It is a **review step, not a gate.** The server back-fills the profile on *every
 
 The screen shows the profile the server is about to commit: the layers confirmed during production, with the stretches nobody confirmed filled in from the Schichtauftrag and drawn **dashed**, marked `Vorgabe`. Anything touched stops being marked `Vorgabe`.
 
-Each layer is a row carrying everything that can be done to it:
+**The chart is the index.** The operator taps a layer in the profile and edits it in the panel beside it:
 
-- **tap the name** → change the ground type
-- **−/+** → move its upper boundary by 0.1 m (the first layer starts at the top of the hole, so it has none)
-- **✕** → remove it. Tap-to-confirm: the whole row turns red and reads `Sand ab 3,00 m — wirklich entfernen?`, and a tap on anything else disarms it. The last remaining layer cannot be removed.
+- **Bodenart ändern** → change the ground type
+- **−1 m / −10 cm / +10 cm / +1 m** → move its upper boundary (the first layer starts at the top of the hole, so it has none). Coarse and fine, because without a drag a boundary that turned out five metres deeper would otherwise be fifty taps
+- **Schicht entfernen** → remove it. Tap-to-confirm: the button turns solid red and reads `Wirklich entfernen?`, and a tap on anything else — including selecting another layer — disarms it. The last remaining layer cannot be removed
 
-**+ Schicht** and **+ Hindernis** add one in the middle of the thickest layer — the place most likely to be hiding an unrecorded boundary, and the one spot guaranteed to have room for a split. The picker opens immediately, since an operator asking for a layer already knows what it is; the steppers move it afterwards. Both are disabled when no layer has room for two 0.1 m steps.
+Before anything is selected the panel says so, and it says so again after a delete: this is an empty state, not a dismissible hint, because it is the only thing on screen that says the chart can be tapped at all.
+
+**+ Schicht** and **+ Hindernis** arm an insert and the *next tap on the profile* sets its depth — which is the point, since a layer born where the operator pointed needs the steppers only for the last few centimetres. The button relabels to `Abbrechen` while armed, so the control that armed it is also the way out. The tapped depth is kept inside the layer it landed in (`einfuegeTiefeBei`): a depth that already carries a boundary would re-type that layer instead of splitting it, and an obstruction needs room for both its edges. A tap into a layer too thin to take the insert says so rather than doing nothing.
+
+There was a row of controls per layer here before, in two columns. It does not survive a real profile: four controls is 192px of buttons, so a row cannot shrink below about 408px and two columns need 824px of a column that has 646px at 1024x768 — the second column was cut off, with no scrollbar to admit it, on the one screen whose job is correcting the profile. One panel pays for those controls once, and the chart holds twenty layers in the same column it holds four (`modus="vollbild"` floors every layer at 32px), so it is the one representation that structurally cannot lose one.
+
+**Nothing on this screen is dragged**, although the DIN 4023 component supports it. Two reasons:
+
+- A press that travels just past the tap threshold moves a boundary silently, and 4,0 m becoming 4,3 m with nothing to notice it is a worse failure here than any amount of extra tapping. Every edit is a labelled button instead.
+- There would be nothing to tap. A boundary handle is centred on its boundary and 64px tall for gloves, so it claims 32px either side: any layer under ~64px tall — in `vollbild`, guaranteed for the thin ones most in need of correction — is drag target from edge to edge.
+
+Selection is held by layer **id**, not index, because every edit reshuffles indices: an insert shifts everything below it, a delete closes a gap, and two adjacent layers of one ground type merge into the shallower one. An index kept across an edit would leave the panel editing a different layer than the one that is ringed.
 
 Boundaries can also be dragged directly in the chart with 64 px touch handles, and obstructions drag freely through the profile.
 
@@ -635,7 +646,7 @@ ui/src/
     ShiftAssignment.tsx — Shift import + element tiles
     RecordingBar.tsx   — Session recording controls, geology entry, Rohrwechsel indicator
     PhaseStepper.tsx   — Bohren → Austausch → Einbauen → Auffüllen, in the header
-    GeologieBestaetigung.tsx — Geology sign-off before a stop (editable DIN 4023 profile)
+    GeologieBestaetigung.tsx — Geology sign-off before a stop (tap a layer in the DIN 4023 profile, edit it beside)
     GeologiePicker.tsx — Full-screen DIN 4023 tile grid, behind "Andere"
     GeologieSpalte.tsx — Quick picker in the profile column: the plan's soils,
                          marked Aktuell (where the drill is) and Vorgabe

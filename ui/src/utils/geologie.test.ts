@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { grundBei } from '@coded-aesthetics/din4023/profile';
+import { grundBei, RASTER } from '@coded-aesthetics/din4023/profile';
 import {
   vomServer, naechsteGrenze, kurzLabel, farbeVon, nameVon, istHindernis,
-  zumCommit, vorgabeArten, liveProfil, einfuegeTiefe, MAX_SPALTEN_KACHELN,
+  zumCommit, vorgabeArten, liveProfil, MAX_SPALTEN_KACHELN,
   spaltenKandidaten, bisZurBohrung, BODENARTEN, HINDERNISSE,
+  einfuegeTiefeBei, mitIds, _resetIds,
 } from './geologie';
 
 const SAND = 5;
@@ -495,50 +496,102 @@ describe('liveProfil', () => {
   });
 });
 
-describe('einfuegeTiefe', () => {
-  it('picks the middle of the thickest layer', () => {
-    // 0–3 sand, 3–4 schluff, 4–12 ton: the ton layer has the room.
-    expect(einfuegeTiefe(
-      [{ tiefe: 0, nr: SAND }, { tiefe: 3, nr: SCHLUFF }, { tiefe: 4, nr: TON }], 12,
-    )).toBe(8);
+describe('einfuegeTiefeBei', () => {
+  const SOIL = 2 * RASTER;
+  /** A soil insert plus a 0.2 m obstruction, the screen's own figure. */
+  const HINDERNIS_BEDARF = 0.2 + 2 * RASTER;
+
+  const profil = [
+    { tiefe: 0, nr: SAND },
+    { tiefe: 3, nr: SCHLUFF },
+    { tiefe: 7, nr: TON },
+  ];
+
+  it('inserts at the depth that was tapped', () => {
+    expect(einfuegeTiefeBei(profil, 12, 4.7, SOIL)).toBe(4.7);
   });
 
-  it('counts the last layer against endTiefe, not against nothing', () => {
-    expect(einfuegeTiefe([{ tiefe: 0, nr: SAND }, { tiefe: 1, nr: TON }], 11)).toBe(6);
+  it('snaps a tap between grid steps', () => {
+    expect(einfuegeTiefeBei(profil, 12, 4.73, SOIL)).toBe(4.7);
+    expect(einfuegeTiefeBei(profil, 12, 4.76, SOIL)).toBe(4.8);
   });
 
-  it('splits a single layer down the middle', () => {
-    expect(einfuegeTiefe([{ tiefe: 0, nr: SAND }], 12)).toBe(6);
-  });
-
-  it('snaps to the editing grid', () => {
-    // 0–3.7 would halve to 1.85, which no stepper could ever return to.
-    expect(einfuegeTiefe([{ tiefe: 0, nr: SAND }], 3.7)).toBe(1.9);
-  });
-
-  it('refuses when nothing has room for two steps', () => {
-    // Every layer is one grid step; splitting makes a layer of no thickness.
-    expect(einfuegeTiefe(
-      [{ tiefe: 0, nr: SAND }, { tiefe: 0.1, nr: SCHLUFF }], 0.2,
-    )).toBeNull();
-  });
-
-  it('refuses on an empty profile', () => {
-    expect(einfuegeTiefe([], 12)).toBeNull();
-  });
-
-  it('always lands strictly inside a layer, never on a boundary', () => {
-    const profile: { tiefe: number; nr: number }[][] = [
-      [{ tiefe: 0, nr: SAND }, { tiefe: 3, nr: SCHLUFF }, { tiefe: 7, nr: TON }],
-      [{ tiefe: 0, nr: SAND }, { tiefe: 0.4, nr: BETON }, { tiefe: 0.6, nr: SAND }],
-      [{ tiefe: 2, nr: SAND }],
-    ];
-    for (const schichten of profile) {
-      const t = einfuegeTiefe(schichten, 12)!;
-      const grenzen = schichten.map((x) => x.tiefe);
-      expect(grenzen, JSON.stringify(schichten)).not.toContain(t);
-      expect(t).toBeGreaterThan(schichten[0].tiefe);
-      expect(t).toBeLessThan(12);
+  it('never returns the boundary itself, which would re-type the layer above', () => {
+    // A tap right on the 3 m boundary, and just above and below it. All three
+    // have to produce a depth that splits something rather than one that lands
+    // on an existing boundary.
+    for (const tap of [2.99, 3, 3.01]) {
+      const t = einfuegeTiefeBei(profil, 12, tap, SOIL)!;
+      expect(t, `tap at ${tap}`).not.toBe(3);
+      expect(profil.map((s) => s.tiefe)).not.toContain(t);
     }
+  });
+
+  it('keeps an insert inside the layer that was tapped', () => {
+    // Tapped at the very top of the silt layer: it belongs in the silt, one
+    // grid step down, not in the sand above it.
+    expect(einfuegeTiefeBei(profil, 12, 3, SOIL)).toBe(3.1);
+    // And at the very bottom of it: one step above the clay.
+    expect(einfuegeTiefeBei(profil, 12, 7, SOIL)).toBe(7.1);
+    expect(einfuegeTiefeBei(profil, 12, 6.99, SOIL)).toBe(6.9);
+  });
+
+  it('leaves an obstruction room for its lower edge', () => {
+    // 0.2 m thick, tapped at the bottom of the hole: it has to end a grid step
+    // above `endTiefe`, or it swallows the bottom boundary.
+    const t = einfuegeTiefeBei(profil, 12, 11.95, HINDERNIS_BEDARF)!;
+    expect(t).toBe(11.7);
+    expect(t + 0.2).toBeLessThan(12);
+  });
+
+  it('refuses a layer with no room for what is being inserted', () => {
+    // A 0.2 m seam takes a soil boundary at its midpoint, but not a 0.2 m
+    // obstruction — that needs a step either side as well.
+    const seam = [{ tiefe: 0, nr: SAND }, { tiefe: 4, nr: BETON }, { tiefe: 4.2, nr: SAND }];
+    expect(einfuegeTiefeBei(seam, 12, 4.1, SOIL)).toBe(4.1);
+    expect(einfuegeTiefeBei(seam, 12, 4.1, HINDERNIS_BEDARF)).toBeNull();
+  });
+
+  it('refuses an empty profile and a depth that is not one', () => {
+    expect(einfuegeTiefeBei([], 12, 4, SOIL)).toBeNull();
+    expect(einfuegeTiefeBei(profil, 12, NaN, SOIL)).toBeNull();
+  });
+
+  it('always lands on the grid and strictly inside the tapped layer', () => {
+    const endTiefe = 11.37; // a drilled depth, not a round number
+    for (let tap = 0; tap <= endTiefe; tap += 0.07) {
+      const t = einfuegeTiefeBei(profil, endTiefe, tap, SOIL);
+      if (t == null) continue;
+      expect(Math.round(t * 10), `tap at ${tap}`).toBeCloseTo(t * 10, 6);
+      expect(profil.map((s) => s.tiefe), `tap at ${tap}`).not.toContain(t);
+      expect(t, `tap at ${tap}`).toBeGreaterThan(0);
+      expect(t, `tap at ${tap}`).toBeLessThan(endTiefe);
+    }
+  });
+});
+
+describe('mitIds', () => {
+  it('gives an id to every layer that has none', () => {
+    _resetIds();
+    const mit = mitIds([{ tiefe: 0, nr: SAND }, { tiefe: 3, nr: TON }]);
+    expect(mit.map((s) => s.id)).toEqual(['s1', 's2']);
+  });
+
+  it('leaves an existing id alone, so a selection survives the edit', () => {
+    _resetIds();
+    const mit = mitIds([
+      { tiefe: 0, nr: SAND, id: 'behalten' },
+      { tiefe: 3, nr: TON },
+    ]);
+    expect(mit.map((s) => s.id)).toEqual(['behalten', 's1']);
+  });
+
+  it('never hands out an id twice', () => {
+    _resetIds();
+    const ids = [
+      ...mitIds([{ tiefe: 0, nr: SAND }]),
+      ...mitIds([{ tiefe: 1, nr: TON }]),
+    ].map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

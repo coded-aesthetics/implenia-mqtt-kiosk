@@ -12,7 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@coded-aesthetics/din4023": "^0.2.0",
+    "@coded-aesthetics/din4023": "^0.3.0",
     "date-fns": "^4.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
