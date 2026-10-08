@@ -50,25 +50,26 @@ import { GeologiePicker, type PickerArt } from './GeologiePicker';
  * same column it holds four — `modus="vollbild"` floors every layer at 32px —
  * so it is the one representation that structurally cannot lose one.
  *
- * ── Why nothing here is dragged ──────────────────────────────
+ * ── Tap and drag on the same targets ─────────────────────────
  *
- * `editierbar` is deliberately absent, and the chart is a pointing surface
- * only. Two reasons, in order of weight:
+ * Both are on. A tap selects, a drag moves what it grabbed — and they share
+ * every target, because there is nowhere else to put the tap: a boundary
+ * handle is centred on its boundary and 64px tall for gloves, so it claims
+ * 32px either side, and any layer under ~64px tall is drag target from edge to
+ * edge. In `vollbild` that is guaranteed for exactly the thin layers most in
+ * need of correction, so "tap the body, drag the handle" would leave them
+ * selectable only by accident.
  *
- * - **A drag changes a committed depth silently.** A press that travels just
- *   past the tap threshold moves a boundary, and 4,0 m becoming 4,3 m with
- *   nothing to notice it is a worse failure on this screen than any amount of
- *   extra tapping. Every edit here is a labelled button instead.
- * - **There is no body to tap.** A boundary handle is centred on its boundary
- *   and 64px tall for gloves, so it claims 32px either side: any layer under
- *   ~64px tall — which in `vollbild` is guaranteed for the thin ones most in
- *   need of correction — is drag target from edge to edge. "Tap the body, drag
- *   the handle" has nothing to tap.
+ * What makes sharing safe is that a press takes hold of nothing until it has
+ * travelled the tap threshold (`istZug` in the din4023 package). Inside it
+ * nothing moves, so a tap never shows an edit it is about to take back, and a
+ * boundary cannot be nudged by a press that was meant as a tap — the silent
+ * change that matters most on the screen that decides the committed profile.
  *
- * Coarse positioning, which is what drag was good for, comes from the tap
- * instead: a new layer is born at the depth the operator pointed at, so the
- * steppers only ever correct. A planned boundary that turned out five metres
- * deeper is five taps of the coarse stepper, not fifty of the fine one.
+ * The panel is still the way to make a small, exact change: 10 cm steps where
+ * a drag would be a guess, and 1 m steps for a boundary that turned out metres
+ * from where it was planned. Insertion does not need either, because a new
+ * layer is born at the depth the operator pointed at.
  */
 
 /**
@@ -95,8 +96,9 @@ function platzBedarf(kind: PickerArt): number {
   return kind === 'hindernis' ? NEUES_HINDERNIS_DICKE + 2 * RASTER : 2 * RASTER;
 }
 
-function artName(kind: PickerArt): string {
-  return kind === 'hindernis' ? 'Hindernis' : 'Schicht';
+/** "Neues Hindernis", not "Neue Hindernis" — the article follows the gender. */
+function neuLabel(kind: PickerArt): string {
+  return kind === 'hindernis' ? 'Neues Hindernis' : 'Neue Schicht';
 }
 
 interface GeologyContext {
@@ -215,6 +217,32 @@ export function GeologieBestaetigung({
    */
   const aendern = useCallback((naechste: Schicht[]) => {
     setProfil((p) => (p ? { ...p, schichten: mitIds(naechste) } : p));
+  }, []);
+
+  /**
+   * A boundary the operator dragged is one they looked at, so it stops being
+   * an assumption.
+   *
+   * The drag reports the whole list, not which layer moved, so the moved ones
+   * are the layers sitting at a depth no layer held before. The flag describes
+   * exactly one boundary — a layer's own start — so clearing it on those and
+   * nothing else is what "they confirmed this boundary, not the ones below it"
+   * means.
+   *
+   * Only ever called for a real drag: a press that did not travel far enough
+   * takes hold of nothing, so a tap meant as a selection cannot arrive here
+   * and quietly mark a planned boundary as confirmed.
+   */
+  const onSchichtenChange = useCallback((naechste: Schicht[]) => {
+    setProfil((p) => {
+      if (!p) return p;
+      const vorher = new Set(p.schichten.map((s) => s.tiefe));
+      return {
+        ...p,
+        schichten: mitIds(naechste.map((s) =>
+          (vorher.has(s.tiefe) ? s : { ...s, vorlaeufig: false }))),
+      };
+    });
   }, []);
 
   const auswahlIndex = auswahlId == null
@@ -343,7 +371,7 @@ export function GeologieBestaetigung({
       : istHindernis(schichten[ziel.index]?.nr ?? 0) ? 'hindernis' : 'schicht';
     const untertitel = ziel.art === 'typ'
       ? `Schicht ab ${formatNumber(schichten[ziel.index].tiefe)} m`
-      : `Neue ${artName(ziel.kind)} ab ${formatNumber(ziel.tiefe)} m`;
+      : `${neuLabel(ziel.kind)} ab ${formatNumber(ziel.tiefe)} m`;
     return (
       <GeologiePicker
         art={kind}
@@ -409,6 +437,9 @@ export function GeologieBestaetigung({
               breite={340}
               hoehe={chartHoehe > 0 ? chartHoehe : 400}
               modus="vollbild"
+              editierbar
+              beruehrungsmodus
+              onSchichtenChange={onSchichtenChange}
               // Nothing is ringed while an insert waits for a depth: the next
               // tap is about a height, not about a layer, and a ring would say
               // the opposite.
@@ -624,12 +655,15 @@ const chartStyles = {
    * The ring has to win against every hatch pattern DIN 4023 defines, several
    * of which are dense black on white. A white ring inside a dark one reads on
    * all of them, which a single accent-coloured line does not.
+   *
+   * No `zIndex`: the package pins it below the rails and the boundary handles,
+   * because a ring above them would make the selected layer swallow presses
+   * meant for its own edges.
    */
   schichtAusgewaehlt: {
     outline: '4px solid var(--color-accent)',
     outlineOffset: -4,
     boxShadow: 'inset 0 0 0 7px rgba(255,255,255,0.9)',
-    zIndex: 11,
   } as CSSProperties,
 };
 

@@ -484,10 +484,11 @@ Before anything is selected the panel says so, and it says so again after a dele
 
 There was a row of controls per layer here before, in two columns. It does not survive a real profile: four controls is 192px of buttons, so a row cannot shrink below about 408px and two columns need 824px of a column that has 646px at 1024x768 — the second column was cut off, with no scrollbar to admit it, on the one screen whose job is correcting the profile. One panel pays for those controls once, and the chart holds twenty layers in the same column it holds four (`modus="vollbild"` floors every layer at 32px), so it is the one representation that structurally cannot lose one.
 
-**Nothing on this screen is dragged**, although the DIN 4023 component supports it. Two reasons:
+**Tap and drag share every target.** A tap selects, a drag moves what it grabbed — boundaries by their handles, obstructions by their side rails. They have to share, because there is nowhere else to put the tap: a boundary handle is centred on its boundary and 64px tall for gloves, so it claims 32px either side, and any layer under ~64px tall is drag target from edge to edge. In `vollbild` that is guaranteed for exactly the thin layers most in need of correction.
 
-- A press that travels just past the tap threshold moves a boundary silently, and 4,0 m becoming 4,3 m with nothing to notice it is a worse failure here than any amount of extra tapping. Every edit is a labelled button instead.
-- There would be nothing to tap. A boundary handle is centred on its boundary and 64px tall for gloves, so it claims 32px either side: any layer under ~64px tall — in `vollbild`, guaranteed for the thin ones most in need of correction — is drag target from edge to edge.
+What makes sharing safe is that **a press takes hold of nothing until it has travelled the tap threshold** (`istZug` in the din4023 package). Inside it nothing moves, so a tap never shows an edit it is about to take back, and a boundary cannot be nudged by a press that was meant as a tap — the silent change that matters most on the screen that decides the committed profile. Once a drag has taken hold the release is a drag, whatever the finger did on the way back.
+
+The panel is still the way to make a small, exact change: 10 cm steps where a drag would be a guess, and 1 m steps for a boundary that turned out metres from where it was planned.
 
 Selection is held by layer **id**, not index, because every edit reshuffles indices: an insert shifts everything below it, a delete closes a gap, and two adjacent layers of one ground type merge into the shallower one. An index kept across an edit would leave the panel editing a different layer than the one that is ringed.
 
