@@ -511,6 +511,43 @@ describe('einfuegeTiefeBei', () => {
     expect(einfuegeTiefeBei(profil, 12, 4.7, SOIL)).toBe(4.7);
   });
 
+  describe('the layer the chart says the finger was in', () => {
+    // The chart reports `index` from the raw depth under the finger but
+    // `tiefe` snapped onto the grid, so within half a step of a boundary the
+    // two name neighbouring layers. Which layer a new one splits is the whole
+    // content of the gesture, so the index wins.
+    it('splits the layer above when the tap was above the boundary', () => {
+      // Tapped at 2.97 m — visibly in the sand (index 0) — which snaps to 3.0,
+      // the silt's own boundary. Re-deriving read that as the silt and put the
+      // new layer at 3.1, below the boundary the operator aimed above.
+      expect(einfuegeTiefeBei(profil, 12, 3, SOIL, 0)).toBe(2.9);
+    });
+
+    it('splits the layer below when the tap was below the boundary', () => {
+      expect(einfuegeTiefeBei(profil, 12, 3, SOIL, 1)).toBe(3.1);
+    });
+
+    it('falls back to deriving the layer when no index is given', () => {
+      expect(einfuegeTiefeBei(profil, 12, 3, SOIL)).toBe(3.1);
+    });
+
+    it('ignores an index that is not a layer', () => {
+      for (const bad of [-1, 3, 99, 1.5, NaN]) {
+        expect(einfuegeTiefeBei(profil, 12, 4.7, SOIL, bad), `index ${bad}`)
+          .toBe(4.7);
+      }
+    });
+
+    it('still refuses a layer with no room, whichever one the chart named', () => {
+      const duenn = [
+        { tiefe: 0, nr: SAND },
+        { tiefe: 3, nr: BETON },
+        { tiefe: 3.1, nr: SCHLUFF },
+      ];
+      expect(einfuegeTiefeBei(duenn, 12, 3.1, SOIL, 1)).toBeNull();
+    });
+  });
+
   it('snaps a tap between grid steps', () => {
     expect(einfuegeTiefeBei(profil, 12, 4.73, SOIL)).toBe(4.7);
     expect(einfuegeTiefeBei(profil, 12, 4.76, SOIL)).toBe(4.8);

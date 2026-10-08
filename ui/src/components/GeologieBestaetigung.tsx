@@ -290,8 +290,12 @@ export function GeologieBestaetigung({
     setLoeschBereit(false);
     setMeldung(null);
     if (einfuegen) {
+      // `index` as well as `tiefe`: the chart derives the two from different
+      // depths — raw for the index, snapped for the depth — so within half a
+      // grid step of a boundary only the index says which layer the finger
+      // was actually in.
       const stelle = einfuegeTiefeBei(
-        schichten, endTiefe, tiefe, platzBedarf(einfuegen),
+        schichten, endTiefe, tiefe, platzBedarf(einfuegen), index,
       );
       if (stelle == null) {
         // Said out loud rather than ignored: unlike a depth this screen picked

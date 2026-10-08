@@ -363,6 +363,19 @@ function abGitter(tiefe: number): number {
 }
 
 /**
+ * Which layer a depth falls in — the fallback for a caller with no index from
+ * the chart, and the same rule the chart itself uses.
+ */
+function schichtIndexBei(schichten: readonly Schicht[], tiefe: number): number {
+  let index = 0;
+  for (let i = 0; i < schichten.length; i++) {
+    if (schichten[i].tiefe > tiefe) break;
+    index = i;
+  }
+  return index;
+}
+
+/**
  * Where an insert tapped at `tiefe` actually goes, or null if it cannot go
  * there.
  *
@@ -395,15 +408,28 @@ export function einfuegeTiefeBei(
   endTiefe: number,
   tiefe: number,
   bedarf = 2 * RASTER,
+  gezeigterIndex?: number,
 ): number | null {
   if (!Number.isFinite(tiefe) || schichten.length === 0) return null;
 
-  // The layer the finger was in — the same rule the chart reports its index by.
-  let index = 0;
-  for (let i = 0; i < schichten.length; i++) {
-    if (schichten[i].tiefe > tiefe) break;
-    index = i;
-  }
+  /*
+    The layer the finger was visibly in, as the *chart* decided it.
+
+    This used to be re-derived here from `tiefe`, and that is wrong on both
+    sides of every boundary. The chart reports `index` from the raw depth
+    under the finger but `tiefe` snapped onto the grid, and its own comment
+    says so: within half a grid step the two name neighbouring layers.
+    Re-deriving therefore read a tap just above a boundary as landing in the
+    layer *below* it and clamped the insert into that layer instead — so the
+    new layer appeared below the boundary the operator had aimed above, at a
+    depth they had not pointed at. Which layer a new one splits is the whole
+    content of the gesture, so the chart's answer wins.
+  */
+  const index = gezeigterIndex != null
+    && Number.isInteger(gezeigterIndex)
+    && gezeigterIndex >= 0 && gezeigterIndex < schichten.length
+    ? gezeigterIndex
+    : schichtIndexBei(schichten, tiefe);
 
   const von = schichten[index].tiefe;
   const bis = index + 1 < schichten.length ? schichten[index + 1].tiefe : endTiefe;
