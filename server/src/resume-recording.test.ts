@@ -252,6 +252,60 @@ describe('a recording interrupted by a restart', () => {
     db.endSession(sessionId);
   });
 
+  /**
+   * The volume is a delta against *this* element's starting total, so a value
+   * left in the snapshot after the element finishes is not stale, it is wrong —
+   * and it is uncorrectable, because the synthetic topic is only emitted while
+   * a session is attached. The next screen to load would read the finished
+   * pillar's litres against the next pillar.
+   */
+  it('forgets the per-element volume when the element ends', () => {
+    const { ingestion } = ingestionMod;
+    const sessionId = db.createSession('A-19', SENSOR_MAP_JSON);
+    ingestion.startRecording(sessionId, SENSOR_MAP);
+    publish(VOLUME_TOPIC, '100');
+    publish(VOLUME_TOPIC, '1170');
+
+    const topics = () => new Map(ingestion.latestReadings().map((r) => [r.topic, r.payload]));
+    expect(topics().get('Q_Suspension')).toBe('1070');
+
+    recordingMod.endRecording();
+    expect(topics().has('Q_Suspension')).toBe(false);
+    // The rig's own sensors stay: a depth is the machine's state, element or
+    // no element, and the next reading moves it on.
+    publish(DEPTH_TOPIC, '0.4');
+    expect(topics().get(DEPTH_TOPIC)).toBe('0.4');
+  });
+
+  /**
+   * `kiosk/status` and `logs` are written into the session by the kiosk itself
+   * and never emitted. ElementDetail renders one tile per reading it holds, so
+   * seeding them puts a `status` tile and a raw JSON log line on the Messwerte
+   * screen after every resume.
+   */
+  it('does not offer the rows the kiosk writes for itself', () => {
+    const { ingestion } = ingestionMod;
+    const sessionId = db.createSession('A-20', SENSOR_MAP_JSON);
+    ingestion.startRecording(sessionId, SENSOR_MAP);
+    publish(DEPTH_TOPIC, '2.5');
+    db.insertSessionReading(sessionId, 'kiosk/status', 's-status', 'int', 0, null, {});
+    db.insertSessionReading(
+      sessionId, 'logs', 's-logs', 'string', null,
+      '{"l":"warn","m":"updater","msg":"nope"}', {},
+    );
+
+    ingestion.stopRecording();
+    expect(recordingMod.resumeRecording()).toEqual({ sessionId });
+
+    const topics = ingestion.latestReadings().map((r) => r.topic);
+    expect(topics).toContain(DEPTH_TOPIC);
+    expect(topics).not.toContain('kiosk/status');
+    expect(topics).not.toContain('logs');
+
+    ingestion.stopRecording();
+    db.endSession(sessionId);
+  });
+
   it('does not let the snapshot overwrite a newer live reading', () => {
     const { ingestion } = ingestionMod;
     const sessionId = db.createSession('A-18', SENSOR_MAP_JSON);
