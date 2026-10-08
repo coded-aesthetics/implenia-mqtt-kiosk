@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import { imageDataURI, type GeologieEintrag } from '@coded-aesthetics/din4023';
 import {
   GRUPPEN, HINDERNISSE, WAEHLBAR, farbeVon, kurzLabel, nameTeile,
 } from '../utils/geologie';
 import { sucheEintraege } from '../utils/geologie-suche';
+import { useGestenSperre } from '../hooks/useGestenSperre';
 
 /**
  * The full DIN 4023 vocabulary, reached via "Andere…" from a quick picker.
@@ -99,6 +100,9 @@ export function GeologiePicker({
 }: Props) {
   const [gruppe, setGruppe] = useState<string>(GRUPPEN[0].id);
   const [suche, setSuche] = useState('');
+  // Opened by a tap on "Andere…" — which on a touchscreen sends a
+  // compatibility click after this screen has already covered that spot.
+  const { sperrProps, darfHandeln } = useGestenSperre();
 
   const sucht = suche.trim().length > 0;
   const kandidaten = art === 'hindernis' ? HINDERNISSE : WAEHLBAR;
@@ -113,7 +117,7 @@ export function GeologiePicker({
   // Six obstructions fit a single grid, and there is nothing to tab between.
   if (art === 'hindernis') {
     return (
-      <div style={styles.overlay}>
+      <div style={styles.overlay} {...sperrProps}>
         <Kopf titel="Hindernis wählen" untertitel={untertitel} onAbbrechen={onAbbrechen} />
         <div style={styles.gitterHindernis}>
           {HINDERNISSE.map((e) => (
@@ -121,7 +125,7 @@ export function GeologiePicker({
               key={e.nr}
               eintrag={e}
               gross
-              onClick={() => onWaehlen(e.nr, e.name)}
+              onClick={(ev) => darfHandeln(ev) && onWaehlen(e.nr, e.name)}
             />
           ))}
         </div>
@@ -145,7 +149,7 @@ export function GeologiePicker({
   const zeilen = Math.max(1, Math.ceil(gezeigt.length / SPALTEN));
 
   return (
-    <div style={styles.overlay}>
+    <div style={styles.overlay} {...sperrProps}>
       <Kopf titel="Bodenart wählen" untertitel={untertitel} onAbbrechen={onAbbrechen} />
 
       <div style={styles.steuerung}>
@@ -209,7 +213,7 @@ export function GeologiePicker({
               eintrag={e}
               vorgabe={vorgabe.has(e.nr)}
               aktuell={e.nr === aktiveNr}
-              onClick={() => onWaehlen(e.nr, e.name)}
+              onClick={(ev) => darfHandeln(ev) && onWaehlen(e.nr, e.name)}
             />
           ))}
         </div>
@@ -249,7 +253,7 @@ function Kachel({
   gross?: boolean;
   vorgabe?: boolean;
   aktuell?: boolean;
-  onClick: () => void;
+  onClick: (e: ReactMouseEvent) => void;
 }) {
   const hatch = imageDataURI(eintrag);
   const roh = eintrag.tabelle === 'Hindernis'

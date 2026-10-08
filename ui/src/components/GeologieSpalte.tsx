@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import { findByNr, imageDataURI } from '@coded-aesthetics/din4023';
 import { farbeVon, kurzLabel, nameVon } from '../utils/geologie';
+import { useGestenSperre } from '../hooks/useGestenSperre';
 import type { PickerArt } from '../hooks/useGeologieErfassung';
 
 /**
@@ -41,25 +42,39 @@ interface Props {
 }
 
 export function GeologieSpalte({ art, nrs, aktiveNr, vorgabeNr, onAndere, onWaehlen }: Props) {
+  // This column appears in the space the operator just tapped to set a depth,
+  // so the tail of that gesture must not choose a ground type. See
+  // `useGestenSperre` — it was picking one by tap height.
+  const { sperrProps, darfHandeln } = useGestenSperre();
+
   return (
-    <div style={styles.spalte}>
+    <div style={styles.spalte} {...sperrProps}>
       <div style={art === 'hindernis' ? styles.kopfHindernis : styles.kopf}>
         {art === 'hindernis' ? 'Hindernis' : 'Bodenart'}
       </div>
 
-      {nrs.map((nr) => (
+      {nrs.map((nr) => {
+        /*
+          Every obstruction shares the Kurzform `Hi`, so `kurzLabel` falls back
+          to the name without its `Hindernis ` prefix — which for `Findling`
+          and `Hohlräume` is the whole name, and the tile read it twice.
+          `SchichtPanel` already guards this.
+        */
+        const kurz = kurzLabel(nr);
+        const name = nameVon(nr);
+        return (
         <button
           key={nr}
           style={{
             ...styles.kachel,
             ...(nr === aktiveNr ? styles.kachelAktuell : {}),
           }}
-          onClick={() => onWaehlen(nr, nameVon(nr))}
+          onClick={(e) => darfHandeln(e) && onWaehlen(nr, nameVon(nr))}
         >
           <Symbol nr={nr} />
           <span style={styles.text}>
-            <span style={styles.kurz}>{kurzLabel(nr)}</span>
-            <span style={styles.name}>{nameVon(nr)}</span>
+            <span style={styles.kurz}>{kurz}</span>
+            {name !== kurz && <span style={styles.name}>{name}</span>}
             {/*
               Both markers, each said in a word, because the highlight alone
               cannot distinguish them — and when they sit on different tiles
@@ -79,7 +94,8 @@ export function GeologieSpalte({ art, nrs, aktiveNr, vorgabeNr, onAndere, onWaeh
             )}
           </span>
         </button>
-      ))}
+        );
+      })}
 
       {nrs.length === 0 && (
         <div style={styles.leer}>
@@ -88,7 +104,12 @@ export function GeologieSpalte({ art, nrs, aktiveNr, vorgabeNr, onAndere, onWaeh
       )}
 
       {onAndere && (
-        <button style={styles.andere} onClick={onAndere}>Andere…</button>
+        <button
+          style={styles.andere}
+          onClick={(e) => darfHandeln(e) && onAndere()}
+        >
+          Andere…
+        </button>
       )}
     </div>
   );
