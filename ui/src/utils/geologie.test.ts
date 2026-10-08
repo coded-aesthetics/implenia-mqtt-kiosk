@@ -3,7 +3,7 @@ import { grundBei } from '@coded-aesthetics/din4023/profile';
 import {
   vomServer, naechsteGrenze, kurzLabel, farbeVon, nameVon, istHindernis,
   zumCommit, vorgabeArten, liveProfil, einfuegeTiefe, MAX_SPALTEN_KACHELN,
-  spaltenKandidaten, BODENARTEN, HINDERNISSE,
+  spaltenKandidaten, bisZurBohrung, BODENARTEN, HINDERNISSE,
 } from './geologie';
 
 const SAND = 5;
@@ -310,6 +310,95 @@ describe('the ground an obstruction returns to', () => {
 
   it('answers nothing above the first layer, which is what opens the picker', () => {
     expect(grundBei([{ tiefe: 2, nr: SAND }], 1)).toBeNull();
+  });
+});
+
+describe('bisZurBohrung', () => {
+  /*
+   * The field case this exists for: the probe drilling ended at 36 m and the
+   * hole went to 44. Everything the chart draws is clipped to `endTiefe`,
+   * including the depth indicator — so the column stopped saying where the
+   * drill was for the last eight metres, which is what it is there for.
+   */
+  const plan = {
+    schichten: [
+      { tiefe: 0, nr: SAND },
+      { tiefe: 12, nr: SCHLUFF },
+      { tiefe: 30, nr: TON },
+    ],
+    endTiefe: 36,
+  };
+
+  it('extends the bottom past a drill deeper than the plan', () => {
+    expect(bisZurBohrung(plan, 43.7)!.endTiefe).toBe(44);
+  });
+
+  it('keeps the bottom strictly below the drill, so the marker has room', () => {
+    for (const tiefe of [36, 40, 43.7, 44]) {
+      expect(bisZurBohrung(plan, tiefe)!.endTiefe, `at ${tiefe} m`)
+        .toBeGreaterThan(tiefe);
+    }
+  });
+
+  it('extends the last layer with it, rather than adding one', () => {
+    // A profile is gapless: the last layer runs to endTiefe, so the deepest
+    // ground the probe found is what gets carried down to the drill.
+    const erweitert = bisZurBohrung(plan, 43.7)!;
+    expect(umriss(erweitert.schichten)).toEqual(umriss(plan.schichten));
+    expect(erweitert.schichten[erweitert.schichten.length - 1].nr).toBe(TON);
+  });
+
+  it('moves in whole metres, so the chart re-scales once per metre drilled', () => {
+    // vollbild re-lays out every layer when endTiefe changes; following the
+    // reading exactly would do that several times a second.
+    expect(bisZurBohrung(plan, 40.1)!.endTiefe).toBe(41);
+    expect(bisZurBohrung(plan, 40.9)!.endTiefe).toBe(41);
+  });
+
+  it('leaves a plan deeper than the drill alone', () => {
+    expect(bisZurBohrung(plan, 20)).toBe(plan);
+    expect(bisZurBohrung(plan, 35.9)).toBe(plan);
+  });
+
+  it('leaves the profile alone without a usable depth', () => {
+    expect(bisZurBohrung(plan, null)).toBe(plan);
+    expect(bisZurBohrung(plan, undefined)).toBe(plan);
+    expect(bisZurBohrung(plan, NaN)).toBe(plan);
+    // 0 is what a screen shows before the first depth reading arrives.
+    expect(bisZurBohrung(plan, 0)).toBe(plan);
+    expect(bisZurBohrung(plan, -1)).toBe(plan);
+  });
+
+  it('passes a missing profile through, so a screen can chain it', () => {
+    expect(bisZurBohrung(null, 40)).toBeNull();
+    expect(bisZurBohrung(undefined, 40)).toBeNull();
+  });
+
+  it('is idempotent, because two screens may both apply it', () => {
+    const einmal = bisZurBohrung(plan, 43.7)!;
+    expect(bisZurBohrung(einmal, 43.7)!.endTiefe).toBe(einmal.endTiefe);
+  });
+
+  it('lets the live profile clip the observed layer below the plan', () => {
+    // Without the extension liveProfil has no room left for a boundary and
+    // hands the profile back untouched — the bug, one layer deeper: the ground
+    // the drill is in ran to 36 m while the drill stood at 43,7.
+    const vorgabe = plan.schichten;
+    const beobachtet = {
+      schichten: [
+        { tiefe: 0, nr: SAND, vorlaeufig: true },
+        { tiefe: 30, nr: TON, vorlaeufig: true },
+        { tiefe: 35, nr: FINDLING },
+      ],
+      endTiefe: 36,
+    };
+    expect(liveProfil(beobachtet, 35, vorgabe, 43.7)).toBe(beobachtet);
+    const p = liveProfil(bisZurBohrung(beobachtet, 43.7), 35, vorgabe, 43.7)!;
+    expect(p.endTiefe).toBe(44);
+    // The boulder ends at the drill, and the plan's deepest ground resumes.
+    expect(p.schichten[p.schichten.length - 1]).toMatchObject({
+      tiefe: 43.7, nr: TON, vorlaeufig: true,
+    });
   });
 });
 

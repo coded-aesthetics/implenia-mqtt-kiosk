@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Schicht } from '@coded-aesthetics/din4023/profile';
 import { grundBei } from '@coded-aesthetics/din4023/profile';
 import {
-  HINDERNISSE, istHindernis, liveProfil, naechsteGrenze, nameVon,
+  HINDERNISSE, bisZurBohrung, istHindernis, liveProfil, naechsteGrenze, nameVon,
   spaltenKandidaten, vomServer, vorgabeArten, type Profil, type ServerSchicht,
 } from '../utils/geologie';
 import { formatNumber } from '../utils/format';
@@ -275,9 +275,19 @@ export function useGeologieErfassung({
    * What the drilling chart draws: everything observed, with the layer the
    * drill is currently in stopping at the current depth and the plan resuming
    * below it. See liveProfil — it is deliberately not the committed shape.
+   *
+   * Extended to the drill *before* liveProfil, not after: the server's profile
+   * is only re-read when something is recorded, so its bottom is wherever the
+   * hole was at the last entry. Past that depth liveProfil has no room left to
+   * put a boundary and hands back the profile untouched — which is how a hole
+   * drilled deeper than its plan lost both the depth indicator and the layer
+   * the drill is in. See bisZurBohrung.
    */
   const profil = useMemo(
-    () => liveProfil(vomServer(kontext.profil), kontext.letzteTiefe, vorgabeSchichten, tiefe ?? null),
+    () => liveProfil(
+      bisZurBohrung(vomServer(kontext.profil), tiefe ?? null),
+      kontext.letzteTiefe, vorgabeSchichten, tiefe ?? null,
+    ),
     [kontext, vorgabeSchichten, tiefe],
   );
 

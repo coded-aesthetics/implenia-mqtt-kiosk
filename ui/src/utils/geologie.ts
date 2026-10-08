@@ -208,6 +208,41 @@ export function einfuegeTiefe(
 }
 
 /**
+ * The profile's bottom, extended to wherever the drill actually is.
+ *
+ * The Vorgabe geology comes from a probe drilling, and that probe does not
+ * always go as deep as the hole: one element's plan ends at 36 m while the hole
+ * is drilled to 44. Everything the chart draws is clipped to `endTiefe`,
+ * including the depth indicator — `tiefenIndikator` is hidden outside the
+ * profile range — so for the last eight metres the column stopped saying where
+ * the drill was, which is the one thing it is on the screen for.
+ *
+ * Extending the bottom extends the last layer with it: a profile is gapless and
+ * the last layer runs to `endTiefe`, so the deepest ground the probe found is
+ * carried down to the drill. That is the honest claim — it is the best evidence
+ * anyone has about the ground down there, and a profile that simply stops says
+ * nothing at all.
+ *
+ * Display only, and in whole metres. The committed profile already does this on
+ * the server (`geology-profile.ts` ends it at the deepest reading), so nothing
+ * here changes what gets uploaded. Whole metres because `modus="vollbild"`
+ * re-lays out every layer when `endTiefe` changes: following the depth reading
+ * exactly would re-scale the chart several times a second on a Celeron, and
+ * would pin the indicator to the very bottom edge, where its label has no room.
+ */
+export function bisZurBohrung<P extends { schichten: Schicht[]; endTiefe: number }>(
+  profil: P | null | undefined,
+  tiefe: number | null | undefined,
+): P | null {
+  if (!profil) return null;
+  if (tiefe == null || !Number.isFinite(tiefe) || tiefe <= 0) return profil;
+  if (tiefe < profil.endTiefe) return profil;
+  // Strictly deeper than the drill, always: floor + 1 keeps the indicator off
+  // the bottom edge and re-scales the chart once per metre drilled.
+  return { ...profil, endTiefe: Math.floor(tiefe) + 1 };
+}
+
+/**
  * The profile as it stands right now, for the live drilling chart.
  *
  * The committed profile says the last ground recorded runs to the next planned

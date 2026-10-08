@@ -11,6 +11,7 @@ import {
   buildSchichten, buildSensorLookup, byPriority, collectVorgabeEntries,
   extractCoordinates, getPriority, isSpecialSensor, parseRawPayload,
 } from '../utils/vorgaben';
+import { bisZurBohrung } from '../utils/geologie';
 
 export type ViewTab = 'messwerte' | 'vorgabe' | 'kommentare';
 
@@ -98,6 +99,15 @@ export function ElementDetail({ elementName, readings, vorgaben, activeTab, setA
     return Number.isFinite(n) ? n : null;
   })();
 
+  /**
+   * The planned profile, with its bottom pulled down to the drill.
+   *
+   * The probe drilling the Vorgabe comes from often stops short of the hole, and
+   * below `endTiefe` the chart draws no depth indicator at all. See
+   * bisZurBohrung.
+   */
+  const gezeigtesProfil = bisZurBohrung(geologyProfile, currentDepth);
+
   // Hero vorgaben for the pinned reminder bar in messwerte view
   const heroVorgaben = vorgabeTiles.hero;
 
@@ -111,12 +121,12 @@ export function ElementDetail({ elementName, readings, vorgaben, activeTab, setA
     <div style={styles.container}>
       <div style={styles.mainLayout}>
         {/* Geology profile on the left — shared between both views */}
-        {geologyProfile && (
+        {gezeigtesProfil && (
           <div style={styles.geologyColumn}>
             <div ref={geoRef} style={styles.geologyContainer}>
               <BohrprofilLog
-                schichten={geologyProfile.schichten}
-                endTiefe={geologyProfile.endTiefe}
+                schichten={gezeigtesProfil.schichten}
+                endTiefe={gezeigtesProfil.endTiefe}
                 breite={150}
                 hoehe={geoHeight > 0 ? geoHeight - 8 : 400}
                 modus="vollbild"
