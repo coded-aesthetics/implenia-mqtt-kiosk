@@ -13,6 +13,7 @@ import { useClampState } from '../hooks/useClampState';
 import { buildSchichten, collectVorgabeEntries } from '../utils/vorgaben';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import { GeologieSpalte } from './GeologieSpalte';
+import { bisZurBohrung } from '../utils/geologie';
 import type { GeologieErfassung } from '../hooks/useGeologieErfassung';
 
 export interface GaugeSlot {
@@ -89,8 +90,12 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
    * hole, instead of the only feedback being a message that fades after six
    * seconds. Before a recording starts there is nothing observed, so the plan
    * is the whole story.
+   *
+   * Either way its bottom is pulled down to the drill: the probe drilling the
+   * Vorgabe comes from often stops short of the hole, and below `endTiefe` the
+   * chart draws neither the depth indicator nor a layer. See bisZurBohrung.
    */
-  const gezeigtesProfil = geologie?.profil ?? geologyProfile;
+  const gezeigtesProfil = bisZurBohrung(geologie?.profil ?? geologyProfile, depth);
 
   return (
     <div style={styles.container}>
