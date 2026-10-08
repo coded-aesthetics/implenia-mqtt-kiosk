@@ -7,6 +7,8 @@ interface Props {
   hasApiKey: boolean;
   onImport: (file: File) => Promise<{ ok: boolean; error?: string }>;
   onClearImport: () => Promise<void>;
+  /** The element a recording is running for, or null. */
+  recordingElement?: string | null;
 }
 
 interface CompletedElement {
@@ -102,7 +104,9 @@ function resumeAndOpen(elementName: string, refetch: () => void): void {
   navigate(`element/${encodeURIComponent(elementName)}`);
 }
 
-export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: Props) {
+export function ShiftAssignment({
+  shift, hasApiKey, onImport, onClearImport, recordingElement,
+}: Props) {
   const isImported = shift.source === 'import';
   const [search, setSearch] = useState('');
   const completedElements = useCompletedElements();
@@ -206,9 +210,22 @@ export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: P
   const MAX_UNFINISHED = 6;
   const MAX_STARTED = 3;
 
+  /**
+   * The element being recorded comes first.
+   *
+   * Not cosmetic: six tiles fit and the grid is clipped with no scrollbar, so
+   * on a site with a long shift the pillar the rig is in the middle of can be
+   * off the screen entirely — which is how a restart could leave a worker
+   * looking at a list with no sign of where their own recording went.
+   *
+   * Only when nothing is typed. Forcing it into search results would show a
+   * tile that does not match what was typed, and the recording bar names the
+   * element anyway.
+   */
   const unfinishedMatches = isSearching
     ? data.measuring_devices.filter((d) => d.name.toLowerCase().includes(lower))
-    : data.measuring_devices;
+    : [...data.measuring_devices].sort((a, b) =>
+      Number(b.name === recordingElement) - Number(a.name === recordingElement));
   const startedMatches = isSearching
     ? allStarted.filter((e) => e.elementName.toLowerCase().includes(lower))
     : allStarted;
@@ -243,9 +260,17 @@ export function ShiftAssignment({ shift, hasApiKey, onImport, onClearImport }: P
                 <button
                   key={device.id}
                   onClick={() => navigate(`element/${encodeURIComponent(device.name)}`)}
-                  style={styles.tile}
+                  style={device.name === recordingElement
+                    ? { ...styles.tile, ...styles.recordingTile }
+                    : styles.tile}
                 >
                   <div style={styles.tileName}>{device.name}</div>
+                  {device.name === recordingElement && (
+                    <div style={styles.recordingBadge}>
+                      <span style={styles.recordingDot} />
+                      Aufzeichnung läuft
+                    </div>
+                  )}
                 </button>
               ))}
             </div>
@@ -437,6 +462,27 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '1.8rem',
     fontWeight: 700,
     wordBreak: 'break-word' as const,
+  },
+  // The element the rig is working on right now. Solid danger-red border and a
+  // live dot, so it reads as "this one is running" rather than "this one is
+  // selected" — the only tile on the screen that is not merely a choice.
+  recordingTile: {
+    border: '2px solid var(--color-danger)',
+  },
+  recordingBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.4rem',
+    fontSize: '1rem',
+    fontWeight: 600,
+    color: 'var(--color-danger)',
+  },
+  recordingDot: {
+    width: '12px',
+    height: '12px',
+    borderRadius: '50%',
+    backgroundColor: 'var(--color-danger)',
+    flexShrink: 0,
   },
   // Dashed border reads as "half finished" — the element has data but is being
   // picked up again.

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useHashRouter, navigate } from './hooks/useHashRouter';
 import { useConfig, useShiftAssignment, useActiveVerfahren, useElementVorgaben } from './hooks/useImplenia';
@@ -79,6 +79,41 @@ export function App() {
   useEffect(() => {
     if (needsSetupRedirect(gate)) navigate('setup');
   }, [gate.onSetupRoute, gate.settled, gate.hasError, gate.verfahren]);
+
+  /**
+   * Land on the element a recording is running for.
+   *
+   * A restart mid-element re-attaches the session server-side
+   * (`resumeRecording`) but the browser comes back on the element list, with a
+   * bar saying a recording is running and — until now — nothing saying which.
+   * The worker is at the rig, not at the screen, so the kiosk has to put itself
+   * back where it was rather than wait to be asked.
+   *
+   * The jump is once per session, and `gesprungen` is marked before the route
+   * is even looked at: a worker who started this recording themselves and then
+   * walked back to the list must not be dragged forward again. It is the boot
+   * case this exists for, where the hash is still empty.
+   *
+   * The phase needs no handling — `element/<name>` renders the drilling or the
+   * Austausch/Einbauen/Auffüllen screen from `operatingMode`, which arrives in
+   * the same message as `active` and is itself restored from the session.
+   */
+  const gesprungen = useRef<number | null>(null);
+  useEffect(() => {
+    const { active, sessionId, elementName } = recordingState;
+    if (!active || sessionId === null || !elementName) return;
+    // Not marked while the gate is still deciding: the WebSocket state
+    // regularly lands before /api/verfahren answers, and marking here would
+    // consume the one jump before it could happen.
+    if (screen !== 'app') return;
+    if (gesprungen.current === sessionId) return;
+    gesprungen.current = sessionId;
+    if (route.page !== 'home') return;
+    navigate(`element/${encodeURIComponent(elementName)}`);
+  }, [
+    recordingState.active, recordingState.sessionId, recordingState.elementName,
+    screen, route.page,
+  ]);
 
   /**
    * Switch what the rig is doing.
@@ -304,7 +339,15 @@ export function App() {
       break;
     }
     default:
-      content = <ShiftAssignment shift={shift} hasApiKey={config.hasApiKey} onImport={importShift} onClearImport={clearImport} />;
+      content = (
+        <ShiftAssignment
+          shift={shift}
+          hasApiKey={config.hasApiKey}
+          onImport={importShift}
+          onClearImport={clearImport}
+          recordingElement={recordingState.active ? recordingState.elementName : null}
+        />
+      );
       if (shift.data) {
         pageTitle = 'Elemente';
       }
