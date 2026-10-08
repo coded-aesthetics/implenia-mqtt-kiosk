@@ -381,9 +381,16 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
       {status === 'recording' && (
         <div style={styles.recordingRowFest}>
           {statusIcon}
-          <span style={styles.elapsed}>
-            <ElapsedTime startedAt={recordingState.startedAt} />
-          </span>
+          {/*
+            Which pillar, on every screen — where the elapsed time used to be.
+            The bar is the only thing on screen during a recording that does
+            not depend on the route, and the header names the element on the
+            element screen alone. So on the element list, in the settings or on
+            the geology sign-off this was the one place that could say what the
+            blinking dot refers to, and it said nothing. The duplicate on the
+            element screen is the price, and a cheap one.
+          */}
+          <span style={styles.elementNameLaufend}>{effectiveElementName}</span>
           {geologieButtons}
           {geologie?.rueckmeldung && (
             <span style={styles.geoRueckmeldung}>✓ {geologie.rueckmeldung}</span>
@@ -530,20 +537,6 @@ function Hatch({ nr }: { nr: number }) {
   );
 }
 
-function ElapsedTime({ startedAt }: { startedAt: number | null }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  if (!startedAt) return null;
-  const secs = Math.floor((now - startedAt) / 1000);
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return <>{m}:{String(s).padStart(2, '0')}</>;
-}
-
 const styles: Record<string, React.CSSProperties> = {
   bar: {
     display: 'flex',
@@ -604,11 +597,30 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: 'var(--color-accent)',
     color: '#fff',
   },
-  elapsed: {
+  elementNameLaufend: {
     fontSize: '1.4rem',
     fontWeight: 700,
     color: 'var(--text-primary)',
+    // Monospaced, as the timer was: these are identifiers like "P-01", and the
+    // digits are what is being read off them.
     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+    whiteSpace: 'nowrap' as const,
+    flexShrink: 0,
+    /*
+     * Measured at 1024x768: with both geology buttons at their 150px floor and
+     * Beenden at 180, the name has 428px to work with — about 31 characters,
+     * which covers every element name the pilot sites use ("Pfahl 2.1 Achse
+     * C/14 P-0147" is 27 and renders in full).
+     *
+     * Capped below that anyway, because the failure past it is the bad kind:
+     * the row is `nowrap`, so an unbounded name pushes Beenden off a screen
+     * with no scrollbar — the same way a 71-character DIN name once did (see
+     * geoLabel). Losing the tail of an unusually long name beats losing the
+     * stop button, and the header still shows it in full on the element screen.
+     */
+    maxWidth: '420px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   count: {
     fontSize: '1rem',
