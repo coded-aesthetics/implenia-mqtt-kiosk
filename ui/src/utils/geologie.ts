@@ -132,8 +132,8 @@ export const MAX_SPALTEN_KACHELN = 5;
  * The soil types this element's Vorgabe actually names, shallowest first.
  *
  * What the quick picker offers. The operator is nearly always confirming a
- * layer the Schichtauftrag already predicted, so offering 33 DIN types to
- * choose from is 33 ways to mis-tap; these are the three to five that can
+ * layer the Schichtauftrag already predicted, so offering 58 DIN types to
+ * choose from is 58 ways to mis-tap; these are the three to five that can
  * plausibly occur in this hole.
  *
  * Distinct types rather than layers: a S/U/S/T profile is three choices, not

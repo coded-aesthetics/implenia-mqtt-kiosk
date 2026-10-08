@@ -8,7 +8,7 @@ import type { PickerArt } from '../hooks/useGeologieErfassung';
  *
  * The operator is nearly always confirming a layer the Schichtauftrag already
  * predicted, so this offers the three to five soils that can plausibly occur in
- * *this* hole rather than the 33 DIN types — which would be 33 ways to mis-tap.
+ * *this* hole rather than the 58 DIN types — which would be 58 ways to mis-tap.
  * Anything unplanned is one more tap away behind "Andere".
  *
  * It takes the column rather than opening a screen. The depth hero directly
@@ -195,12 +195,25 @@ const styles: Record<string, CSSProperties> = {
     lineHeight: 1.1,
   },
   /**
-   * Wrapped, not clipped. It was `nowrap` with an ellipsis, which in a 170px
-   * column turns `Verwitterungslehm, Hanglehm` into `Verwitterungsle…` — and
-   * the sign-off screen hosts this same column at 370px, where there is room
-   * for the whole name and no reason to cut it.
+   * Two lines, then an ellipsis.
+   *
+   * It was `nowrap` with an ellipsis, which in a 170px column turns
+   * `Verwitterungslehm, Hanglehm` into `Verwitterungsle…`; the sign-off
+   * screen hosts this same column at 370px, where the whole name fits on one
+   * line and there was no reason to cut it.
+   *
+   * But the tile cannot grow for its content — `flex: 1` with
+   * `overflow: hidden` — so plain wrapping only moved the problem: at 170px
+   * with five tiles sharing ~515px, a three-line name plus `kurz` and two
+   * marker lines overflows ~81px and gets sliced through the middle of a
+   * glyph, which is worse than an ellipsis because nothing says it was cut.
+   * The clamp wraps where there is room and degrades to an ellipsis where
+   * there is not.
    */
   name: {
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical' as CSSProperties['WebkitBoxOrient'],
+    WebkitLineClamp: 2,
     fontSize: 'var(--font-sm)',
     fontWeight: 600,
     color: 'var(--text-muted)',

@@ -62,6 +62,17 @@ export interface GeologieErfassung {
   /** The ground types the quick picker offers, in column order. */
   kandidaten: number[];
   /**
+   * The soils this element's Schichtauftrag actually names — all of them, and
+   * only them.
+   *
+   * Deliberately *not* `kandidaten`, which is the column's tile list: that one
+   * appends a recorded ground the plan never named and truncates to
+   * `MAX_SPALTEN_KACHELN`. Badging the full picker from it got the answer
+   * wrong in both directions — unplanned ground came out marked "Vorgabe",
+   * and the sixth planned soil came out unmarked.
+   */
+  geplanteArten: number[];
+  /**
    * The ground the drill is in: what the operator last recorded, or — until
    * they have recorded anything — what the Vorgabe plans at this depth.
    *
@@ -369,6 +380,7 @@ export function useGeologieErfassung({
     vorschlag,
     auswahl,
     kandidaten,
+    geplanteArten: alleArten,
     aktiveArt,
     vorgabeArt,
     vollbild,
