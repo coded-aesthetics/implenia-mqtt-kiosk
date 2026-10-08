@@ -4,12 +4,12 @@ import type { CSSProperties } from 'react';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import {
   RASTER, entferneSchicht, fuegeHindernisEin, fuegeSchichtEin, runde, setzeGrenze,
-  type Schicht,
+  type Auswahl, type Schicht,
 } from '@coded-aesthetics/din4023/profile';
 import { formatNumber } from '../utils/format';
 import {
-  einfuegeTiefe, farbeVon, istHindernis, kurzLabel, nameVon, vomServer,
-  zumCommit, type Profil,
+  einfuegeTiefeBei, farbeVon, istHindernis, kurzLabel, mitIds, nameVon, neueId,
+  vomServer, zumCommit, type Profil,
 } from '../utils/geologie';
 import { GeologiePicker, type PickerArt } from './GeologiePicker';
 
@@ -34,16 +34,55 @@ import { GeologiePicker, type PickerArt } from './GeologiePicker';
  * A PM2 restart on this screen leaves the session open, `resumeRecording`
  * re-attaches it, and the operator taps Beenden again — no dead end, nothing
  * lost.
+ *
+ * ── The chart is the index ───────────────────────────────────
+ *
+ * The operator taps a layer in the profile and edits it in the panel beside it.
+ * There was a row of controls per layer here before, which does not survive a
+ * real profile: four controls is 192px of buttons, so a row cannot shrink below
+ * about 408px and two columns of them need 824px of a column that has 646px at
+ * 1024x768. The second column was cut off — on the one screen whose job is
+ * correcting the profile, with no scrollbar to admit it. A scrollbar was the
+ * stopgap; neither it nor pagination is an answer, because a layer the operator
+ * never scrolled to is a layer they cannot fix.
+ *
+ * One panel pays for those controls once. The chart holds twenty layers in the
+ * same column it holds four — `modus="vollbild"` floors every layer at 32px —
+ * so it is the one representation that structurally cannot lose one.
+ *
+ * ── Why nothing here is dragged ──────────────────────────────
+ *
+ * `editierbar` is deliberately absent, and the chart is a pointing surface
+ * only. Two reasons, in order of weight:
+ *
+ * - **A drag changes a committed depth silently.** A press that travels just
+ *   past the tap threshold moves a boundary, and 4,0 m becoming 4,3 m with
+ *   nothing to notice it is a worse failure on this screen than any amount of
+ *   extra tapping. Every edit here is a labelled button instead.
+ * - **There is no body to tap.** A boundary handle is centred on its boundary
+ *   and 64px tall for gloves, so it claims 32px either side: any layer under
+ *   ~64px tall — which in `vollbild` is guaranteed for the thin ones most in
+ *   need of correction — is drag target from edge to edge. "Tap the body, drag
+ *   the handle" has nothing to tap.
+ *
+ * Coarse positioning, which is what drag was good for, comes from the tap
+ * instead: a new layer is born at the depth the operator pointed at, so the
+ * steppers only ever correct. A planned boundary that turned out five metres
+ * deeper is five taps of the coarse stepper, not fifty of the fine one.
  */
 
 /**
  * Thickness an obstruction added on this screen starts at, in metres.
  *
- * Deliberately a starting point rather than a question: the operator drags it
- * to where it was. Two grid steps, so both its edges are grabbable in
- * `vollbild` without first having to make it thicker.
+ * Deliberately a starting point rather than a question: the operator taps where
+ * it was and adjusts its edges from the panel. Two grid steps, so it reads as a
+ * seam rather than a layer from the moment it appears.
  */
 const NEUES_HINDERNIS_DICKE = 0.2;
+
+/** Coarse and fine steps the boundary steppers move by, in metres. */
+const SCHRITT_FEIN = RASTER;
+const SCHRITT_GROB = 1;
 
 /**
  * How much room an insert of each kind needs.
@@ -54,6 +93,10 @@ const NEUES_HINDERNIS_DICKE = 0.2;
  */
 function platzBedarf(kind: PickerArt): number {
   return kind === 'hindernis' ? NEUES_HINDERNIS_DICKE + 2 * RASTER : 2 * RASTER;
+}
+
+function artName(kind: PickerArt): string {
+  return kind === 'hindernis' ? 'Hindernis' : 'Schicht';
 }
 
 interface GeologyContext {
@@ -94,14 +137,30 @@ export function GeologieBestaetigung({
   const [hinweis, setHinweis] = useState<string | null>(null);
   const [ziel, setZiel] = useState<PickerZiel | null>(null);
   /**
-   * The row whose delete is armed, if any.
+   * The selected layer, held by id rather than index.
    *
-   * CLAUDE.md's tap-to-confirm: the first tap turns the whole row into the
-   * confirm target rather than growing a small yes/no pair, and a tap anywhere
-   * else disarms it. Held here rather than per-row so that arming one row
-   * disarms another.
+   * Every edit reshuffles indices — an insert shifts everything below it, a
+   * delete closes a gap, and two adjacent layers of one ground type merge into
+   * the shallower one — so an index kept across an edit points at a different
+   * layer than the operator selected, and the panel beside it would edit that
+   * one. See `mitIds`.
    */
-  const [loeschIndex, setLoeschIndex] = useState<number | null>(null);
+  const [auswahlId, setAuswahlId] = useState<string | null>(null);
+  /** The kind of insert waiting for a depth, if the operator armed one. */
+  const [einfuegen, setEinfuegen] = useState<PickerArt | null>(null);
+  /**
+   * Whether the selected layer's delete is armed.
+   *
+   * CLAUDE.md's tap-to-confirm: the first tap turns the whole button into the
+   * confirm target rather than growing a small yes/no pair, and a tap on
+   * anything else disarms it. One flag rather than per-layer, because selecting
+   * another layer has to disarm it too — on a screen where a 32px layer can be
+   * mis-tapped, a delete that stayed armed across a selection change would be
+   * one stray tap from removing the wrong layer.
+   */
+  const [loeschBereit, setLoeschBereit] = useState(false);
+  /** Why the last tap did not insert anything. Cleared by the next one. */
+  const [meldung, setMeldung] = useState<string | null>(null);
   const [sendet, setSendet] = useState(false);
 
   const [chartRef, chartHoehe] = useMeasuredHeight();
@@ -115,6 +174,11 @@ export function GeologieBestaetigung({
       setFehler('Keine Aufzeichnung gefunden.');
       return;
     }
+    // The recording state arrives over the websocket, so the first render can
+    // legitimately have no session yet. Clearing on the way in is what keeps
+    // that first render's "Keine Aufzeichnung gefunden." from staying on screen
+    // under a profile that loaded perfectly well a moment later.
+    setFehler(null);
     let abgebrochen = false;
     fetch(`/api/recording/${sessionId}/geology-context`)
       .then(async (r) => {
@@ -123,7 +187,8 @@ export function GeologieBestaetigung({
       })
       .then((ctx) => {
         if (abgebrochen) return;
-        setProfil(vomServer(ctx.profil));
+        const geladen = vomServer(ctx.profil);
+        setProfil(geladen && { ...geladen, schichten: mitIds(geladen.schichten) });
         if (ctx.hinweis) setHinweis(ctx.hinweis);
         setLaden(false);
       })
@@ -141,79 +206,120 @@ export function GeologieBestaetigung({
   const schichten = profil?.schichten ?? [];
   const endTiefe = profil?.endTiefe ?? 1;
 
+  /**
+   * Every edit lands here, and every edit tops the ids up.
+   *
+   * The package preserves an id through its operations, but a layer born from a
+   * split carries none — it is new profile, not a continuation — which is
+   * exactly what inserting an obstruction into a layer produces.
+   */
   const aendern = useCallback((naechste: Schicht[]) => {
-    setProfil((p) => (p ? { ...p, schichten: naechste } : p));
+    setProfil((p) => (p ? { ...p, schichten: mitIds(naechste) } : p));
   }, []);
+
+  const auswahlIndex = auswahlId == null
+    ? -1
+    : schichten.findIndex((s) => s.id === auswahlId);
+  // An edit can merge the selected layer away. Deriving the index every render
+  // rather than storing it is what turns that into "nothing selected" instead
+  // of a panel editing whatever moved into its place.
+  const gewaehlt = auswahlIndex >= 0 ? schichten[auswahlIndex] : null;
 
   /**
-   * A boundary the operator dragged is one they looked at, so it stops being an
-   * assumption.
+   * A tap on the profile: a depth when an insert is armed, a layer otherwise.
    *
-   * The drag reports the whole list, not which layer moved, so the moved ones
-   * are the layers sitting at a depth no layer held before. The flag describes
-   * exactly one boundary — a layer's own start — so clearing it on those and
-   * nothing else is what "they confirmed this boundary, not the ones below it"
-   * means.
+   * One gesture read two ways, rather than two gestures. The armed state is
+   * visible on both the chart and the panel, and tapping the insert button
+   * again cancels it, so there is always a way out of it.
    */
-  const onSchichtenChange = useCallback((naechste: Schicht[]) => {
-    setProfil((p) => {
-      if (!p) return p;
-      const vorher = new Set(p.schichten.map((s) => s.tiefe));
-      return {
-        ...p,
-        schichten: naechste.map((s) =>
-          vorher.has(s.tiefe) ? s : { ...s, vorlaeufig: false }),
-      };
-    });
-  }, []);
+  const onAuswahl = useCallback(({ index, tiefe }: Auswahl) => {
+    setLoeschBereit(false);
+    setMeldung(null);
+    if (einfuegen) {
+      const stelle = einfuegeTiefeBei(
+        schichten, endTiefe, tiefe, platzBedarf(einfuegen),
+      );
+      if (stelle == null) {
+        // Said out loud rather than ignored: unlike a depth this screen picked
+        // for itself, a tapped one can land where there is no room, and an
+        // insert that quietly did nothing is indistinguishable from a tap the
+        // screen never received.
+        setMeldung(
+          `Diese Schicht ist zu dünn für ${einfuegen === 'hindernis' ? 'ein Hindernis' : 'eine weitere Schicht'}. `
+          + 'Bitte eine dickere Schicht antippen.',
+        );
+        return;
+      }
+      setEinfuegen(null);
+      setZiel({ art: 'neu', kind: einfuegen, tiefe: stelle });
+      return;
+    }
+    setAuswahlId(schichten[index]?.id ?? null);
+  }, [einfuegen, schichten, endTiefe]);
 
-  function verschiebeGrenze(index: number, schritte: number) {
-    if (index === 0) return;
-    const neueTiefe = runde(schichten[index].tiefe + schritte * RASTER);
-    // Clear the flag on the way in rather than on the result: indexing the
+  function verschiebeGrenze(index: number, meter: number) {
+    if (index < 1) return;
+    setLoeschBereit(false);
+    // A boundary the operator moved is one they looked at, so it stops being an
+    // assumption. Cleared on the way in rather than on the result: indexing the
     // input is correct whatever reshaping setzeGrenze does on the way out.
     const bestaetigt = schichten.map((s, i) =>
       (i === index ? { ...s, vorlaeufig: false } : s));
-    aendern(setzeGrenze(bestaetigt, endTiefe, index, neueTiefe));
+    aendern(setzeGrenze(
+      bestaetigt, endTiefe, index, runde(schichten[index].tiefe + meter),
+    ));
   }
 
   function waehleTyp(nr: number) {
     if (!ziel) return;
     if (ziel.art === 'typ') {
-      // A boundary already at this depth is re-typed, not duplicated.
-      aendern(fuegeSchichtEin(
-        schichten, endTiefe, schichten[ziel.index].tiefe, nr, { vorlaeufig: false },
-      ));
-    } else if (ziel.kind === 'hindernis') {
-      // An obstruction is a claim about one stretch of hole, not "from here
-      // down": inserting it bounded leaves the ground resuming underneath,
-      // which is both what was seen and what the uploaded series carries.
-      aendern(fuegeHindernisEin(
-        schichten, endTiefe, ziel.tiefe, nr, NEUES_HINDERNIS_DICKE, { vorlaeufig: false },
-      ));
+      const s = schichten[ziel.index];
+      if (s) {
+        // A boundary already at this depth is re-typed, not duplicated. Keeping
+        // the id keeps the operator's selection on the layer they just changed.
+        aendern(fuegeSchichtEin(
+          schichten, endTiefe, s.tiefe, nr, { vorlaeufig: false, id: s.id },
+        ));
+      }
     } else {
-      aendern(fuegeSchichtEin(schichten, endTiefe, ziel.tiefe, nr, { vorlaeufig: false }));
+      // Minted before the edit, because the insert has to select what it
+      // inserted — the panel is where its depth gets corrected, and an insert
+      // that left nothing selected would make the operator find it again.
+      const id = neueId();
+      aendern(ziel.kind === 'hindernis'
+        // An obstruction is a claim about one stretch of hole, not "from here
+        // down": inserting it bounded leaves the ground resuming underneath,
+        // which is both what was seen and what the uploaded series carries.
+        ? fuegeHindernisEin(
+          schichten, endTiefe, ziel.tiefe, nr, NEUES_HINDERNIS_DICKE,
+          { vorlaeufig: false, id },
+        )
+        : fuegeSchichtEin(
+          schichten, endTiefe, ziel.tiefe, nr, { vorlaeufig: false, id },
+        ));
+      setAuswahlId(id);
     }
     setZiel(null);
   }
 
   function entferne(index: number) {
     aendern(entferneSchicht(schichten, endTiefe, index));
-    setLoeschIndex(null);
+    setAuswahlId(null);
+    setLoeschBereit(false);
   }
 
   /**
-   * Add a layer, or an obstruction, in the middle of the thickest layer.
+   * Arm an insert, or cancel the one that is armed.
    *
-   * The depth is chosen rather than asked for — see einfuegeTiefe. The picker
-   * opens straight away, because an operator asking for a layer already knows
-   * what it is; the steppers move it afterwards.
+   * The depth comes from the next tap on the profile, which is the whole point:
+   * the operator decides where the layer starts, and a layer born where they
+   * pointed needs the steppers only for the last few centimetres. Tapping the
+   * same button again is the way out, so the armed state is never a trap.
    */
   function fuegeEin(kind: PickerArt) {
-    const tiefe = einfuegeTiefe(schichten, endTiefe, platzBedarf(kind));
-    if (tiefe == null) return;
-    setLoeschIndex(null);
-    setZiel({ art: 'neu', kind, tiefe });
+    setLoeschBereit(false);
+    setMeldung(null);
+    setEinfuegen((aktuell) => (aktuell === kind ? null : kind));
   }
 
   async function beenden() {
@@ -237,7 +343,7 @@ export function GeologieBestaetigung({
       : istHindernis(schichten[ziel.index]?.nr ?? 0) ? 'hindernis' : 'schicht';
     const untertitel = ziel.art === 'typ'
       ? `Schicht ab ${formatNumber(schichten[ziel.index].tiefe)} m`
-      : `Neue Schicht ab ${formatNumber(ziel.tiefe)} m`;
+      : `Neue ${artName(ziel.kind)} ab ${formatNumber(ziel.tiefe)} m`;
     return (
       <GeologiePicker
         art={kind}
@@ -290,59 +396,66 @@ export function GeologieBestaetigung({
 
       {!laden && profil && (
         <div style={styles.layout}>
-          <div ref={chartRef} style={styles.chartSpalte}>
+          <div
+            ref={chartRef}
+            style={{
+              ...styles.chartSpalte,
+              ...(einfuegen ? styles.chartSpalteScharf : {}),
+            }}
+          >
             <BohrprofilLog
               schichten={schichten}
               endTiefe={endTiefe}
-              breite={300}
+              breite={340}
               hoehe={chartHoehe > 0 ? chartHoehe : 400}
               modus="vollbild"
-              editierbar
-              beruehrungsmodus
-              onSchichtenChange={onSchichtenChange}
+              // Nothing is ringed while an insert waits for a depth: the next
+              // tap is about a height, not about a layer, and a ring would say
+              // the opposite.
+              ausgewaehlt={einfuegen ? null : auswahlIndex >= 0 ? auswahlIndex : null}
+              onAuswahl={onAuswahl}
               styleOverrides={chartStyles}
             />
           </div>
 
-          <div style={styles.listeSpalte}>
-            <div
-              style={{
-                ...styles.liste,
-                gridTemplateColumns: `repeat(${schichten.length > 7 ? 2 : 1}, 1fr)`,
-                gridTemplateRows: `repeat(${Math.ceil(schichten.length / (schichten.length > 7 ? 2 : 1))}, minmax(var(--tap-min), 1fr))`,
-              }}
-            >
-              {schichten.map((s, i) => (
-                <SchichtZeile
-                  key={`${s.id ?? ''}-${i}-${s.tiefe}`}
-                  schicht={s}
-                  istErste={i === 0}
-                  // The last layer standing cannot go: a profile with no layers
-                  // is not a profile.
-                  loeschbar={schichten.length > 1}
-                  loeschBereit={loeschIndex === i}
-                  onTyp={() => { setLoeschIndex(null); setZiel({ art: 'typ', index: i }); }}
-                  onMinus={() => { setLoeschIndex(null); verschiebeGrenze(i, -1); }}
-                  onPlus={() => { setLoeschIndex(null); verschiebeGrenze(i, +1); }}
-                  onLoeschen={() => setLoeschIndex(i)}
-                  onLoeschenBestaetigen={() => entferne(i)}
-                />
-              ))}
-            </div>
+          <div style={styles.panel}>
+            {einfuegen ? (
+              <EinfuegenPanel kind={einfuegen} meldung={meldung} />
+            ) : gewaehlt ? (
+              <SchichtPanel
+                schicht={gewaehlt}
+                istErste={auswahlIndex === 0}
+                // The last layer standing cannot go: a profile with no layers
+                // is not a profile.
+                loeschbar={schichten.length > 1}
+                loeschBereit={loeschBereit}
+                onTyp={() => { setLoeschBereit(false); setZiel({ art: 'typ', index: auswahlIndex }); }}
+                onSchritt={(meter) => verschiebeGrenze(auswahlIndex, meter)}
+                onLoeschen={() => setLoeschBereit(true)}
+                onLoeschenBestaetigen={() => entferne(auswahlIndex)}
+              />
+            ) : (
+              <LeerPanel />
+            )}
+
             <div style={styles.hinzuReihe}>
               <button
-                style={styles.hinzu}
+                style={{
+                  ...styles.hinzu,
+                  ...(einfuegen === 'schicht' ? styles.hinzuScharf : {}),
+                }}
                 onClick={() => fuegeEin('schicht')}
-                disabled={einfuegeTiefe(schichten, endTiefe, platzBedarf('schicht')) == null}
               >
-                + Schicht
+                {einfuegen === 'schicht' ? 'Abbrechen' : '+ Schicht'}
               </button>
               <button
-                style={styles.hinzuHindernis}
+                style={{
+                  ...styles.hinzuHindernis,
+                  ...(einfuegen === 'hindernis' ? styles.hinzuScharf : {}),
+                }}
                 onClick={() => fuegeEin('hindernis')}
-                disabled={einfuegeTiefe(schichten, endTiefe, platzBedarf('hindernis')) == null}
               >
-                + Hindernis
+                {einfuegen === 'hindernis' ? 'Abbrechen' : '+ Hindernis'}
               </button>
             </div>
           </div>
@@ -352,70 +465,152 @@ export function GeologieBestaetigung({
   );
 }
 
-function SchichtZeile({
+/**
+ * What the panel says before anything is selected.
+ *
+ * Not onboarding — this is the state the screen returns to after a delete, and
+ * after an edit merges the selected layer away, so it has to keep explaining
+ * itself rather than teach once and disappear. It is also the only thing on the
+ * screen that says the chart is tappable at all.
+ */
+function LeerPanel() {
+  return (
+    <div style={styles.leerPanel}>
+      <span style={styles.leerTitel}>
+        <span style={styles.leerPfeil} aria-hidden>← </span>
+        Schicht im Profil antippen
+      </span>
+      <span style={styles.leerText}>
+        Bodenart, Tiefe und Entfernen erscheinen dann hier. Gestrichelte Grenzen
+        kommen aus der Vorgabe und sind noch nicht bestätigt.
+      </span>
+    </div>
+  );
+}
+
+/** What the panel says while an insert is waiting for its depth. */
+function EinfuegenPanel({ kind, meldung }: { kind: PickerArt; meldung: string | null }) {
+  return (
+    <div style={styles.einfuegenPanel}>
+      <span style={styles.einfuegenTitel}>
+        Tiefe für {kind === 'hindernis' ? 'das Hindernis' : 'die neue Schicht'} antippen
+      </span>
+      <span style={styles.einfuegenText}>
+        Im Bohrprofil links die Stelle antippen, an der
+        {kind === 'hindernis' ? ' das Hindernis beginnt' : ' die Schicht beginnt'}.
+        Danach die Bodenart wählen — die Tiefe lässt sich hier noch genau einstellen.
+      </span>
+      {meldung && <span style={styles.einfuegenFehler}>{meldung}</span>}
+      {/*
+        No cancel button here on purpose. The insert button below armed this
+        and now reads "Abbrechen", so the way out is the control the operator
+        just used — a second one in the panel is two identically labelled
+        buttons for one action.
+      */}
+    </div>
+  );
+}
+
+/** Everything that can be done to the one selected layer. */
+function SchichtPanel({
   schicht, istErste, loeschbar, loeschBereit,
-  onTyp, onMinus, onPlus, onLoeschen, onLoeschenBestaetigen,
+  onTyp, onSchritt, onLoeschen, onLoeschenBestaetigen,
 }: {
   schicht: Schicht;
   istErste: boolean;
   loeschbar: boolean;
   loeschBereit: boolean;
   onTyp: () => void;
-  onMinus: () => void;
-  onPlus: () => void;
+  onSchritt: (meter: number) => void;
   onLoeschen: () => void;
   onLoeschenBestaetigen: () => void;
 }) {
   const hindernis = istHindernis(schicht.nr);
-
-  // Armed: the whole row becomes the confirm target, rather than growing a
-  // small yes/no pair a gloved hand cannot hit. Tapping any other control
-  // disarms it.
-  if (loeschBereit) {
-    return (
-      <button style={styles.zeileLoeschen} onClick={onLoeschenBestaetigen}>
-        {nameVon(schicht.nr)} ab {formatNumber(schicht.tiefe)} m — wirklich entfernen?
-      </button>
-    );
-  }
+  const kurz = kurzLabel(schicht.nr);
 
   return (
-    <div style={styles.zeile}>
-      <button style={styles.typ} onClick={onTyp}>
+    <div style={styles.schichtPanel}>
+      <div style={styles.kennung}>
         <span
           style={{
             ...styles.swatch,
             backgroundColor: farbeVon(schicht.nr),
-            ...(hindernis ? { border: '2px solid var(--color-warning)' } : {}),
+            ...(hindernis ? { border: '3px solid var(--color-warning)' } : {}),
           }}
         />
-        <span style={styles.typText}>
-          <span style={styles.typKurz}>
-            {kurzLabel(schicht.nr)}
-            <span style={styles.typName}> {nameVon(schicht.nr)}</span>
-          </span>
-          <span style={styles.typTiefe}>
-            {istErste ? 'ab 0,00 m' : `ab ${formatNumber(schicht.tiefe)} m`}
+        <span style={styles.kennungText}>
+          <span style={styles.kennungName}>{nameVon(schicht.nr)}</span>
+          <span style={styles.kennungMeta}>
+            {/*
+              Every obstruction shares the Kurzform `Hi`, so `kurzLabel` falls
+              back to the name without its prefix — which for `Findling` is the
+              whole name, and "Findling · Findling" says nothing twice.
+            */}
+            {kurz !== nameVon(schicht.nr) && `${kurz} · `}
+            {istErste ? 'ab Oberkante' : `ab ${formatNumber(schicht.tiefe)} m`}
             {schicht.vorlaeufig && <span style={styles.vorlaeufig}> Vorgabe</span>}
           </span>
         </span>
+      </div>
+
+      <button style={styles.typ} onClick={onTyp}>
+        Bodenart ändern
       </button>
 
-      {!istErste && (
-        <>
-          <button style={styles.schritt} onClick={onMinus} aria-label="Grenze nach oben">−</button>
-          <button style={styles.schritt} onClick={onPlus} aria-label="Grenze nach unten">+</button>
-        </>
+      {istErste ? (
+        <div style={styles.obenHinweis}>
+          Oberste Schicht — sie beginnt an der Oberkante des Profils und hat
+          keine Grenze zum Verschieben.
+        </div>
+      ) : (
+        <div style={styles.tiefeBlock}>
+          <span style={styles.tiefeLabel}>Schichtgrenze</span>
+          <div style={styles.tiefeReihe}>
+            <button
+              style={styles.schritt}
+              onClick={() => onSchritt(-SCHRITT_GROB)}
+              aria-label="Grenze einen Meter nach oben"
+            >
+              −1 m
+            </button>
+            <button
+              style={styles.schritt}
+              onClick={() => onSchritt(-SCHRITT_FEIN)}
+              aria-label="Grenze zehn Zentimeter nach oben"
+            >
+              −10 cm
+            </button>
+            <span style={styles.tiefeWert}>{formatNumber(schicht.tiefe)} m</span>
+            <button
+              style={styles.schritt}
+              onClick={() => onSchritt(SCHRITT_FEIN)}
+              aria-label="Grenze zehn Zentimeter nach unten"
+            >
+              +10 cm
+            </button>
+            <button
+              style={styles.schritt}
+              onClick={() => onSchritt(SCHRITT_GROB)}
+              aria-label="Grenze einen Meter nach unten"
+            >
+              +1 m
+            </button>
+          </div>
+        </div>
       )}
 
       {loeschbar && (
-        <button
-          style={styles.loeschen}
-          onClick={onLoeschen}
-          aria-label={`${nameVon(schicht.nr)} entfernen`}
-        >
-          ✕
-        </button>
+        loeschBereit
+          ? (
+            <button style={styles.loeschenScharf} onClick={onLoeschenBestaetigen}>
+              Wirklich entfernen?
+            </button>
+          )
+          : (
+            <button style={styles.loeschen} onClick={onLoeschen}>
+              Schicht entfernen
+            </button>
+          )
       )}
     </div>
   );
@@ -425,6 +620,17 @@ const chartStyles = {
   depthTick: { color: 'var(--text-primary)', fontSize: 14, fontWeight: 600 } as CSSProperties,
   depthLine: { borderTopColor: 'var(--text-primary)' } as CSSProperties,
   label: { fontSize: 15, fontWeight: 700 } as CSSProperties,
+  /**
+   * The ring has to win against every hatch pattern DIN 4023 defines, several
+   * of which are dense black on white. A white ring inside a dark one reads on
+   * all of them, which a single accent-coloured line does not.
+   */
+  schichtAusgewaehlt: {
+    outline: '4px solid var(--color-accent)',
+    outlineOffset: -4,
+    boxShadow: 'inset 0 0 0 7px rgba(255,255,255,0.9)',
+    zIndex: 11,
+  } as CSSProperties,
 };
 
 const styles: Record<string, CSSProperties> = {
@@ -522,13 +728,26 @@ const styles: Record<string, CSSProperties> = {
     gap: 'var(--space-md)',
   },
   chartSpalte: {
-    width: 330,
+    width: 370,
     flexShrink: 0,
     minHeight: 0,
     paddingTop: 'var(--space-sm)',
     paddingBottom: 'var(--space-md)',
+    borderRadius: 'var(--radius-md)',
+    border: '3px solid transparent',
+    boxSizing: 'border-box',
   },
-  listeSpalte: {
+  /**
+   * While an insert waits for a depth, the chart is the control. Marked on the
+   * chart as well as in the panel, because that is where the next tap has to
+   * go — an armed state only the panel knew about would read as a panel that
+   * stopped responding.
+   */
+  chartSpalteScharf: {
+    border: '3px solid var(--color-accent)',
+    backgroundColor: 'var(--surface-2)',
+  },
+  panel: {
     flex: 1,
     minWidth: 0,
     minHeight: 0,
@@ -536,110 +755,215 @@ const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     gap: 'var(--space-sm)',
   },
-  /**
-   * The one place in the app that scrolls, and deliberately.
-   *
-   * Two columns of 64px targets hold about fourteen rows in this column's
-   * height. A profile can exceed that — four planned layers plus six recorded
-   * obstructions is sixteen boundaries — and before this the surplus rows were
-   * simply **below the fold: invisible, untappable, and with no scrollbar to
-   * admit it**, on the one screen whose job is correcting the profile. Rows the
-   * operator cannot reach are rows they cannot fix.
-   *
-   * Scrolling a dense editing list is the lesser evil against hiding data, and
-   * it is contained to this column — the page itself never scrolls, the chart
-   * and both exits stay put. The screen still wants a better answer than a
-   * scrollbar for twenty layers; this stops it losing them in the meantime.
-   */
-  liste: {
+
+  // ── Zero state ───────────────────────────────────────────
+  leerPanel: {
     flex: 1,
     minHeight: 0,
-    display: 'grid',
-    gridAutoFlow: 'column',
-    gap: 'var(--space-sm)',
-    overflowY: 'auto',
-    overscrollBehavior: 'contain',
-  },
-  zeile: {
     display: 'flex',
-    alignItems: 'center',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
     gap: 'var(--space-sm)',
-    minHeight: 'var(--tap-min)',
-    padding: 'var(--space-xs)',
+    padding: 'var(--space-lg)',
     borderRadius: 'var(--radius-md)',
+    border: '2px dashed var(--border)',
     backgroundColor: 'var(--surface-2)',
-    border: '1px solid var(--border)',
   },
-  typ: {
+  leerPfeil: {
+    color: 'var(--color-accent)',
+    fontWeight: 800,
+  },
+  leerTitel: {
+    fontSize: 'var(--font-md)',
+    fontWeight: 800,
+    color: 'var(--text-primary)',
+    lineHeight: 1.2,
+  },
+  leerText: {
+    fontSize: 'var(--font-base)',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    lineHeight: 1.4,
+    maxWidth: '36ch',
+  },
+
+  // ── Insert armed ─────────────────────────────────────────
+  einfuegenPanel: {
     flex: 1,
-    minWidth: 0,
-    // 64, not 56: this is the row's main target and the rule is 64px for gloves.
-    minHeight: 'var(--tap-min)',
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    gap: 'var(--space-md)',
+    padding: 'var(--space-lg)',
+    borderRadius: 'var(--radius-md)',
+    border: '3px solid var(--color-accent)',
+    backgroundColor: 'var(--surface-2)',
+  },
+  einfuegenTitel: {
+    fontSize: 'var(--font-md)',
+    fontWeight: 800,
+    color: 'var(--text-primary)',
+    lineHeight: 1.2,
+  },
+  einfuegenText: {
+    fontSize: 'var(--font-base)',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    lineHeight: 1.4,
+    maxWidth: '40ch',
+  },
+  einfuegenFehler: {
+    fontSize: 'var(--font-base)',
+    fontWeight: 700,
+    color: 'var(--color-warning-text)',
+    lineHeight: 1.4,
+    maxWidth: '40ch',
+  },
+
+  // ── Selected layer ───────────────────────────────────────
+  schichtPanel: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'var(--space-sm)',
+    padding: 'var(--space-md)',
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border)',
+    backgroundColor: 'var(--surface-2)',
+  },
+  kennung: {
     display: 'flex',
     alignItems: 'center',
-    gap: 'var(--space-sm)',
-    padding: '0 var(--space-sm)',
-    border: 'none',
-    borderRadius: 'var(--radius-sm)',
-    backgroundColor: 'transparent',
-    fontFamily: 'inherit',
-    textAlign: 'left',
-    cursor: 'pointer',
+    gap: 'var(--space-md)',
+    flexShrink: 0,
   },
   swatch: {
-    width: 28,
-    height: 28,
+    width: 56,
+    height: 56,
     flexShrink: 0,
     borderRadius: 'var(--radius-sm)',
     border: '1px solid var(--border)',
   },
-  typText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
-  typKurz: {
-    fontSize: 'var(--font-base)',
+  kennungText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
+  kennungName: {
+    fontSize: 'var(--font-md)',
     fontWeight: 800,
     color: 'var(--text-primary)',
-    lineHeight: 1.1,
+    lineHeight: 1.15,
   },
-  typName: {
-    fontSize: 'var(--font-sm)',
+  kennungMeta: {
+    fontSize: 'var(--font-base)',
+    fontWeight: 700,
     color: 'var(--text-muted)',
-    fontWeight: 600,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    fontVariantNumeric: 'tabular-nums',
   },
-  /** Armed for deletion: the whole row, in danger red, is the confirm target. */
-  zeileLoeschen: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    textAlign: 'center',
+  vorlaeufig: {
+    fontSize: 'var(--font-sm)',
+    fontWeight: 800,
+    color: 'var(--color-warning-text)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  typ: {
+    flexShrink: 0,
     minHeight: 'var(--tap-min)',
-    padding: '0 var(--space-sm)',
-    border: 'none',
+    padding: '0 var(--space-md)',
+    border: '2px solid var(--border)',
     borderRadius: 'var(--radius-md)',
-    backgroundColor: 'var(--color-danger)',
-    color: '#fff',
+    backgroundColor: 'var(--surface-3)',
+    color: 'var(--text-primary)',
     fontSize: 'var(--font-base)',
     fontWeight: 700,
     fontFamily: 'inherit',
     cursor: 'pointer',
-    lineHeight: 1.2,
   },
-  loeschen: {
-    width: 'var(--tap-min)',
+  tiefeBlock: {
+    flexShrink: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'var(--space-xs)',
+  },
+  tiefeLabel: {
+    fontSize: 'var(--font-sm)',
+    fontWeight: 700,
+    color: 'var(--text-muted)',
+  },
+  tiefeReihe: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'var(--space-xs)',
+  },
+  /**
+   * Coarse and fine, rather than one step size. Without drag, a planned
+   * boundary that turned out five metres deeper would be fifty taps of a 10 cm
+   * stepper; with a 1 m step it is five and then a correction.
+   */
+  schritt: {
+    minWidth: 'var(--tap-min)',
     height: 'var(--tap-min)',
     flexShrink: 0,
+    padding: '0 var(--space-xs)',
     border: '2px solid var(--border)',
     borderRadius: 'var(--radius-md)',
     backgroundColor: 'var(--surface-3)',
-    color: 'var(--color-danger)',
-    fontSize: 'var(--font-md)',
+    color: 'var(--text-primary)',
+    fontSize: 'var(--font-base)',
     fontWeight: 800,
     fontFamily: 'inherit',
     lineHeight: 1,
     cursor: 'pointer',
   },
+  tiefeWert: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 'var(--font-md)',
+    fontWeight: 800,
+    color: 'var(--text-primary)',
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
+  },
+  obenHinweis: {
+    flexShrink: 0,
+    fontSize: 'var(--font-base)',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    lineHeight: 1.4,
+    maxWidth: '40ch',
+  },
+  /** Default danger style: surface background, danger text. */
+  loeschen: {
+    marginTop: 'auto',
+    flexShrink: 0,
+    minHeight: 'var(--tap-min)',
+    border: '2px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--surface-3)',
+    color: 'var(--color-danger)',
+    fontSize: 'var(--font-base)',
+    fontWeight: 800,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+  },
+  /** Armed: the whole button, in danger red, is the confirm target. */
+  loeschenScharf: {
+    marginTop: 'auto',
+    flexShrink: 0,
+    minHeight: 'var(--tap-min)',
+    border: 'none',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--color-danger)',
+    color: '#fff',
+    fontSize: 'var(--font-base)',
+    fontWeight: 800,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+  },
+
+  // ── Insert buttons ───────────────────────────────────────
   hinzuReihe: {
     display: 'flex',
     gap: 'var(--space-sm)',
@@ -669,57 +993,10 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: 'inherit',
     cursor: 'pointer',
   },
-  typTiefe: {
-    fontSize: 'var(--font-sm)',
-    fontWeight: 700,
-    color: 'var(--text-muted)',
-    fontVariantNumeric: 'tabular-nums',
-    whiteSpace: 'nowrap',
-  },
-  tiefeGruppe: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 'var(--space-xs)',
-    flexShrink: 0,
-  },
-  schritt: {
-    width: 'var(--tap-min)',
-    height: 'var(--tap-min)',
-    flexShrink: 0,
-    border: '2px solid var(--border)',
-    borderRadius: 'var(--radius-md)',
+  /** Armed, and therefore the way back out. */
+  hinzuScharf: {
+    border: '3px solid var(--color-accent)',
     backgroundColor: 'var(--surface-3)',
     color: 'var(--text-primary)',
-    fontSize: 'var(--font-md)',
-    fontWeight: 800,
-    fontFamily: 'inherit',
-    lineHeight: 1,
-    cursor: 'pointer',
-  },
-  tiefeWert: {
-    minWidth: 104,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    fontSize: 'var(--font-base)',
-    fontWeight: 700,
-    color: 'var(--text-primary)',
-    fontVariantNumeric: 'tabular-nums',
-  },
-  tiefeFest: {
-    minWidth: 104,
-    textAlign: 'center',
-    paddingRight: 'calc(var(--tap-min) + var(--space-xs))',
-    fontSize: 'var(--font-base)',
-    fontWeight: 700,
-    color: 'var(--text-muted)',
-    fontVariantNumeric: 'tabular-nums',
-  },
-  vorlaeufig: {
-    fontSize: 'var(--font-sm)',
-    fontWeight: 700,
-    color: 'var(--color-warning-text)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
   },
 };

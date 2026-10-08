@@ -171,43 +171,6 @@ export function vomServer(
 }
 
 /**
- * Where a new layer goes when the operator asks for one.
- *
- * The middle of the thickest layer. A correction screen cannot ask "at what
- * depth?" before it knows what is being inserted — that is two questions where
- * the operator has one thought — so it picks a spot with room and lets them
- * step it from there.
- *
- * Thickest rather than last: it is the layer most likely to be hiding a
- * boundary nobody recorded, and it is the one place guaranteed to have room for
- * a split. Null when nothing can be split, which is what greys out the control
- * rather than producing a layer of no thickness.
- */
-export function einfuegeTiefe(
-  schichten: readonly Schicht[],
-  endTiefe: number,
-  /**
-   * How much room the insert needs, in metres.
-   *
-   * A soil layer only has to leave a step either side. An obstruction is
-   * bounded, so it needs its own thickness *plus* a step above and below — and
-   * with the soil figure it was possible to enable the button for an insert
-   * that swallowed the layer whole.
-   */
-  mindestDicke = 2 * RASTER,
-): number | null {
-  let beste: { tiefe: number; dicke: number } | null = null;
-  for (let i = 0; i < schichten.length; i++) {
-    const von = schichten[i].tiefe;
-    const bis = i + 1 < schichten.length ? schichten[i + 1].tiefe : endTiefe;
-    const dicke = bis - von;
-    if (!beste || dicke > beste.dicke) beste = { tiefe: runde(von + dicke / 2), dicke };
-  }
-  if (!beste || beste.dicke < mindestDicke) return null;
-  return beste.tiefe;
-}
-
-/**
  * The profile's bottom, extended to wherever the drill actually is.
  *
  * The Vorgabe geology comes from a probe drilling, and that probe does not
@@ -334,4 +297,107 @@ export function zumCommit(
     name: s.beschreibung?.trim() || nameVon(s.nr),
     quelle: s.vorlaeufig ? 'vorgabe' : 'ist',
   }));
+}
+
+/**
+ * Snap a depth onto the grid, inwards.
+ *
+ * `runde` goes to the nearest step, which is wrong for a bound: rounding a
+ * limit outwards puts it back outside the range it was computed to describe.
+ */
+function aufGitter(tiefe: number): number {
+  return runde(Math.ceil((tiefe - 1e-9) / RASTER) * RASTER);
+}
+
+function abGitter(tiefe: number): number {
+  return runde(Math.floor((tiefe + 1e-9) / RASTER) * RASTER);
+}
+
+/**
+ * Where an insert tapped at `tiefe` actually goes, or null if it cannot go
+ * there.
+ *
+ * The tapped depth is a pointed finger, not a measurement, so it has to be
+ * brought inside the layer it landed in before it can be used — and for two
+ * reasons that both fail quietly:
+ *
+ * - **A depth that already carries a boundary re-types that layer** rather
+ *   than starting a new one (`fuegeSchichtEin`). A tap a few pixels from a
+ *   boundary would therefore change the ground above it instead of splitting
+ *   it, which is the opposite of what the operator asked for and looks like
+ *   nothing happened.
+ * - **An obstruction needs room for both its edges.** Inserted against the
+ *   bottom of its layer it swallows the boundary below and takes the next
+ *   layer's ground with it.
+ *
+ * So the result is kept `RASTER` below the layer's top and `bedarf - RASTER`
+ * above its bottom, and both bounds are snapped inwards onto the grid — so the
+ * answer is always on the grid and always inside the layer, and
+ * `fuegeSchichtEin`'s own rounding has nothing left to do.
+ *
+ * Null when the tapped layer is too thin to take the insert at all. That is a
+ * refusal the caller has to say out loud: unlike the old "middle of the
+ * thickest layer", a tapped depth can land somewhere with no room, and an
+ * insert that silently did nothing would be indistinguishable from a mis-read
+ * tap.
+ */
+export function einfuegeTiefeBei(
+  schichten: readonly Schicht[],
+  endTiefe: number,
+  tiefe: number,
+  bedarf = 2 * RASTER,
+): number | null {
+  if (!Number.isFinite(tiefe) || schichten.length === 0) return null;
+
+  // The layer the finger was in — the same rule the chart reports its index by.
+  let index = 0;
+  for (let i = 0; i < schichten.length; i++) {
+    if (schichten[i].tiefe > tiefe) break;
+    index = i;
+  }
+
+  const von = schichten[index].tiefe;
+  const bis = index + 1 < schichten.length ? schichten[index + 1].tiefe : endTiefe;
+
+  const min = aufGitter(von + RASTER);
+  const max = abGitter(bis - (bedarf - RASTER));
+  if (max < min) return null;
+
+  return Math.min(max, Math.max(min, runde(tiefe)));
+}
+
+/**
+ * Give every layer an id, so a selection can survive an edit.
+ *
+ * The screen holds its selection as an id rather than an index because every
+ * edit reshuffles indices: an insert shifts everything below it, a delete
+ * closes a gap, and `normalisiere` merges two adjacent layers of one ground
+ * type into the shallower one. An index kept across any of those points at a
+ * different layer than the operator selected — and the controls beside it
+ * would then edit that one.
+ *
+ * Ids have to be topped up after every edit rather than assigned once: the
+ * package preserves them through its operations, but a layer born from a split
+ * gets none (it is new profile, not a continuation), which is exactly what
+ * inserting an obstruction into a layer produces.
+ */
+export function mitIds(schichten: readonly Schicht[]): Schicht[] {
+  return schichten.map((s) => (s.id != null ? s : { ...s, id: neueId() }));
+}
+
+/**
+ * An id for a layer about to be created.
+ *
+ * Needed because an insert has to be able to *select* what it inserted, which
+ * means knowing the id before the edit rather than topping it up afterwards.
+ */
+export function neueId(): string {
+  return `s${naechsteId++}`;
+}
+
+let naechsteId = 1;
+
+/** Reset the id counter. Tests only — ids are opaque and never persisted. */
+export function _resetIds(): void {
+  naechsteId = 1;
 }
