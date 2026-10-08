@@ -28,6 +28,29 @@ import {
 
 const log = createLogger('ingestion');
 
+/** The operating mode, recorded as a `Status` reading. See recordStatusReading. */
+const STATUS_TOPIC = 'kiosk/status';
+
+/**
+ * Log entries routed into the session by `attachLogSensor` in recording.ts.
+ *
+ * A copy of that module's `LOG_SENSOR_NAME`, not an import: this module is part
+ * of an import cycle with it (`ingestion → mqtt → websocket → recording →
+ * ingestion`), so reading its const here at module-body time throws on boot.
+ * `log-topic.test.ts` pins them together.
+ */
+export const LOG_TOPIC = 'logs';
+
+/**
+ * Topics the kiosk writes into a session itself and never emits.
+ *
+ * They belong in the upload and are no part of what a screen shows — and
+ * `ElementDetail` renders one tile per reading it holds, so seeding them would
+ * put a `status` tile and a raw JSON log line on the Messwerte screen after
+ * every resume.
+ */
+const SELF_WRITTEN_TOPICS = new Set<string>([STATUS_TOPIC, LOG_TOPIC]);
+
 export interface SensorMapEntry {
   sensorId: string;
   sensorType: string;
@@ -73,6 +96,13 @@ interface ActiveSession {
   rohrwechsel: RohrwechselConfig;
   operatingMode: OperatingMode;
   volumeTracker: VolumeTracker;
+  /**
+   * The synthetic topics the volume tracker emits under.
+   *
+   * Kept so they can be dropped when the session ends: they are deltas against
+   * *this* element's starting total and mean nothing once it is finished.
+   */
+  volumeTopics: string[];
 }
 
 /** What a reading looks like after Rohrverlängerung handling. */
@@ -369,7 +399,7 @@ export class DataIngestion extends EventEmitter {
     };
     const statusValue = STATUS_MAP[session.operatingMode];
     insertSessionReading(
-      session.id, 'kiosk/status', mapping.sensorId, mapping.sensorType,
+      session.id, STATUS_TOPIC, mapping.sensorId, mapping.sensorType,
       statusValue, null,
     );
   }
@@ -430,6 +460,7 @@ export class DataIngestion extends EventEmitter {
         mappings,
         baselinesFromSession(sessionId, sensorMap, mappings),
       ),
+      volumeTopics: mappings.map((m) => m.syntheticTopic),
     };
     this.pendingMode = null;
     this.seedLastReadings(sessionId, sensorMap, mappings);
@@ -437,6 +468,16 @@ export class DataIngestion extends EventEmitter {
   }
 
   stopRecording(): void {
+    // The per-element volumes go with the session. They are only ever emitted
+    // from inside the recording branch of onReading, so one left behind can
+    // never be corrected: the next screen to load would be handed the finished
+    // element's litres for a pillar that has had none, and nothing would
+    // overwrite it. The rig's own sensors stay — a depth or a pressure is the
+    // machine's current state, element or no element, and the next reading
+    // moves it on.
+    if (this.activeSession) {
+      for (const topic of this.activeSession.volumeTopics) this.lastReadings.delete(topic);
+    }
     this.activeSession = null;
   }
 
@@ -492,6 +533,7 @@ export class DataIngestion extends EventEmitter {
     mappings: CumulativeVolumeMapping[],
   ): void {
     for (const row of getLatestSessionReadings(sessionId)) {
+      if (SELF_WRITTEN_TOPICS.has(row.topic)) continue;
       const payload = row.valueNumeric !== null ? String(row.valueNumeric) : row.valueText;
       if (payload === null) continue;
       const known = this.lastReadings.get(row.topic);
@@ -501,8 +543,10 @@ export class DataIngestion extends EventEmitter {
       });
     }
 
+    // Set outright. The session's own readings are what the delta is computed
+    // from, so at the moment it is seeded nothing can be more current — and a
+    // previous element's value, if one were still here, would be plain wrong.
     for (const { topic, volume } of volumeSnapshot(sessionId, sensorMap, mappings)) {
-      if (this.lastReadings.has(topic)) continue;
       this.lastReadings.set(topic, {
         topic, payload: String(roundValue(volume)), receivedAt: Date.now(),
       });

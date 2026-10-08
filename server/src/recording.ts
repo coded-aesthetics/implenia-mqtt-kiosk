@@ -30,7 +30,17 @@ import {
 
 const log = createLogger('recording');
 
-const LOG_SENSOR_NAME = 'logs';
+/**
+ * The platform's sensor name, and the topic the entries are recorded under.
+ *
+ * ingestion.ts has to know this one too — it must not offer these rows to a
+ * screen — and holds its own copy as `LOG_TOPIC`. Deliberately a second copy
+ * rather than an import: `ingestion → mqtt → websocket → recording → ingestion`
+ * is a cycle, so a const read here at module-body time lands in the temporal
+ * dead zone and takes the process down at boot. `log-topic.test.ts` pins the
+ * two together instead.
+ */
+export const LOG_SENSOR_NAME = 'logs';
 let unsubscribeLog: (() => void) | null = null;
 
 export async function ensureLogSensor(): Promise<void> {
