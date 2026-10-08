@@ -412,7 +412,13 @@ export function App() {
           // Badged, not re-offered: the quick column already had these, and
           // the operator who escalated anyway is usually looking for ground
           // the plan does not name. Marking them is what tells the two apart.
-          vorgabeNrs={geologie.kandidaten}
+          //
+          // `geplanteArten`, never `kandidaten`. The latter is the column's
+          // tile list, which appends a recorded ground the plan never named
+          // and caps at five — so badging from it told the operator the plan
+          // predicted ground it never mentioned, and left a sixth planned
+          // soil unmarked.
+          vorgabeNrs={geologie.geplanteArten}
           aktiveNr={geologie.aktiveArt}
           onWaehlen={(nr, name) => geologie.erfasse(nr, name)}
           onAbbrechen={geologie.schliesse}

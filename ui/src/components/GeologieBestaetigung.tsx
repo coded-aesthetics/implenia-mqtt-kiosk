@@ -217,6 +217,27 @@ export function GeologieBestaetigung({
         const geladen = vomServer(ctx.profil);
         setProfil(geladen && { ...geladen, schichten: mitIds(geladen.schichten) });
         setVorgabeSchichten(ctx.vorgabe?.schichten ?? []);
+        /*
+          Everything pointing into the old profile goes with it.
+
+          A reload replaces the layers and mints fresh ids, so a selection held
+          by id stops resolving and a `ziel` held by *index* starts resolving
+          to a different layer than the operator tapped — which would leave an
+          open picker quietly retyping the wrong one. `vollbild` is the worse
+          half: it would survive with no `wahl` under it and latch, so the next
+          "Bodenart ändern" opened the 58-entry catalogue directly, skipping
+          the quick column for the rest of the session.
+
+          This only fires when `sessionId` changes — a websocket reconnect that
+          drops it and brings it back — so it is not clearing state out from
+          under an operator mid-edit on the ordinary path.
+        */
+        setZiel(null);
+        setVollbild(false);
+        setEinfuegen(null);
+        setAuswahlId(null);
+        setLoeschBereit(false);
+        setMeldung(null);
         if (ctx.hinweis) setHinweis(ctx.hinweis);
         setLaden(false);
       })
@@ -540,7 +561,13 @@ export function GeologieBestaetigung({
               <WahlPanel
                 kind={wahl.kind}
                 untertitel={wahl.untertitel}
-                geplant={wahl.kandidaten.length > 0 && wahl.kind === 'schicht'}
+                // `geplanteArten`, not `kandidaten.length`: for a retype
+                // `spaltenKandidaten` injects the layer's own type when the
+                // plan does not name it, so the tile list is never empty and
+                // the "no Vorgabe" wording was unreachable — the panel claimed
+                // the column held the plan's soils while showing one tile that
+                // changes nothing.
+                geplant={geplanteArten.length > 0 && wahl.kind === 'schicht'}
                 onAbbrechen={brichWahlAb}
               />
             ) : einfuegen ? (
