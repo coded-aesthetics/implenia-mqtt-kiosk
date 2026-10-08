@@ -434,13 +434,25 @@ POST /api/recording/stop                    → { geology?: [{ tiefe, nr, name?,
 
 Two oversized buttons in the **recording bar**, and the choices appear where the profile column is — not on a screen of their own. **Schicht** offers only the soils this element's Schichtauftrag actually names (typically three to five, distinct types ordered shallowest-first); **Hindernis** offers the six obstruction kinds. The depth hero, gauges and recording bar all stay put, so nothing about the screen changes for the second it takes to pick.
 
-Offering the plan's soils rather than the full vocabulary is the point: the operator is nearly always confirming a layer that was predicted, and 33 DIN types would be 33 ways to mis-tap. Unplanned ground is one more tap away behind **Andere…**, which opens the full grid — hatch symbol, Kurzform and name per tile, 15 soils, 18 rock types. Tapping the bar button again closes the list, so it needs no cancel tile.
+Offering the plan's soils rather than the full vocabulary is the point: the operator is nearly always confirming a layer that was predicted, and 58 DIN types would be 58 ways to mis-tap. Unplanned ground is one more tap away behind **Andere…**, which opens the full catalogue (below). Tapping the bar button again closes the list, so it needs no cancel tile.
 
 Two tiles can carry a marker, and they are different claims. **Aktuell** is the ground the drill is in — what the operator last recorded, or, until they have recorded anything, what the plan says is here; it is also the one that is highlighted. **Vorgabe** is what the Schichtauftrag plans at this depth. They sit on one tile in the ordinary case and read as two lines; when they come apart, that *is* the information — the operator is in ground the plan did not predict.
 
 Marking the plan alone was wrong in exactly that case, and invisibly so: an operator who had recorded Mittelkies at 4,2 m came back after a restart to a picker highlighting Schluff, because that is what the Schichtauftrag expects there. Mittelkies was not even in the list. A recorded ground the plan never named is therefore appended to the tiles, so the active one always has somewhere to be marked (`spaltenKandidaten`). An obstruction is not: the drill being inside one is what the bar's **Hindernis Ende** says, and a Bodenart tile for it would record the code that is already current — no layer change at all.
 
 The column holds five tiles plus Andere. That is measured, not derived from the 64px tap minimum: a tile carrying both markers needs 76px of text, and six tiles push every one of them back to the floor, where the second marker line is clipped mid-glyph and Andere slides behind the recording bar. (It stood at seven, which never fit — Andere was already half-hidden at that count.) A Vorgabe naming more distinct soils keeps the shallowest five and leaves the rest to Andere; an appended active ground takes one of those five places.
+
+### The full catalogue, behind "Andere…"
+
+One tab per DIN 4023 table — **Boden** 15, **Sonstige** 14, **Fels** 18, **Gemischt** 11 — four columns, 58 entries. Obstructions are excluded because they have their own picker, where the same tap would record the code that is already current and therefore no layer change at all.
+
+It was a flat grid of 33 tiles in eight columns, which is 115px per tile and about 60px for the name: the labels read `Vulk…`, `Blätt…`, `(z. B. Basa…`, naming neither the type nor the example. A tab per table is what makes the whole name fit — no tab runs past five rows — and the bracketed examples go on their own line, one size down, because `Vulkanite (z. B. Basalt)` drawn as one string either wraps to four lines or gets cut mid-word.
+
+Eight columns were also what kept 25 real ground types off the screen. The 14 non-petrographic ones were the costly omission — `Auffüllung`, `Mutterboden`, `Geschiebemergel`, `Löß`, `Hangschutt`, `Klei` are the most common *top* layers on a German site — and the gap was asymmetric: `vorgabeArten` already offers nr 34–47 in the quick column when a Schichtauftrag names one, but the full picker could not reproduce it, so **Andere…** was a one-way door away from a planned ground type.
+
+A **search field** sits beside the tabs. `geologie-suche.ts` carries two normal forms per entry, because one does not work: stripping the diacritic from `Löß` gives `loss`, spelling it out gives `loess`, and neither needle occurs in the other — so `Löß`, `Loess` and `Loss` all find the same tile. An exact Kurzform ranks first, so `T` means `Ton` rather than the eleven names with a `t` in them, and a numeric query matches the `GeoDIN` code a protocol shows.
+
+> **The field is dead on the kiosk.** `chromium --kiosk` has no on-screen keyboard and the app has none of its own (issue #49). It is additive, and only survivable because **the tabs reach every entry without typing** — that property has to hold until a keyboard lands.
 
 An obstruction needs no thickness: tapping `Hindernis → Beton` starts a concrete layer at the current depth. While the drill is *inside* one, that button becomes **Hindernis Ende** and ending the obstruction is a **single tap with no pick at all** — the obstruction interrupted a layer the plan predicted, and `grundBei` says which, so the ground to resume is knowable. Where there is no plan to resume (nothing above the first planned layer, or no Vorgabe at all) it opens the soil picker instead. Either way the result is two ordinary layer changes, which is exactly what the uploaded series carries.
 
@@ -474,13 +486,15 @@ The screen shows the profile the server is about to commit: the layers confirmed
 
 **The chart is the index.** The operator taps a layer in the profile and edits it in the panel beside it:
 
-- **Bodenart ändern** → change the ground type
+- **Bodenart ändern** → the profile column becomes the quick picker, exactly as it does while drilling: this element's planned soils, the layer's current type marked `Aktuell`, the plan's answer at that depth marked `Vorgabe`, and `Andere…` for the rest. The panel keeps saying which layer and at what depth, which is why this replaced a full-screen picker — covering the screen threw away the one piece of context the operator needs, where in the hole the layer they just tapped sits
 - **−1 m / −10 cm / +10 cm / +1 m** → move its upper boundary (the first layer starts at the top of the hole, so it has none). Coarse and fine, because without a drag a boundary that turned out five metres deeper would otherwise be fifty taps
 - **Schicht entfernen** → remove it. Tap-to-confirm: the button turns solid red and reads `Wirklich entfernen?`, and a tap on anything else — including selecting another layer — disarms it. The last remaining layer cannot be removed
 
 Before anything is selected the panel says so, and it says so again after a delete: this is an empty state, not a dismissible hint, because it is the only thing on screen that says the chart can be tapped at all.
 
-**+ Schicht** and **+ Hindernis** arm an insert and the *next tap on the profile* sets its depth — which is the point, since a layer born where the operator pointed needs the steppers only for the last few centimetres. The button relabels to `Abbrechen` while armed, so the control that armed it is also the way out. The tapped depth is kept inside the layer it landed in (`einfuegeTiefeBei`): a depth that already carries a boundary would re-type that layer instead of splitting it, and an obstruction needs room for both its edges. A tap into a layer too thin to take the insert says so rather than doing nothing.
+**+ Schicht** and **+ Hindernis** arm an insert and the *next tap on the profile* sets its depth — which is the point, since a layer born where the operator pointed needs the steppers only for the last few centimetres. The column then becomes the ground-type picker straight away, so the whole insert is arm, point, pick. The button relabels to `Abbrechen` while armed, so the control that armed it is also the way out. The tapped depth is kept inside the layer it landed in (`einfuegeTiefeBei`): a depth that already carries a boundary would re-type that layer instead of splitting it, and an obstruction needs room for both its edges. A tap into a layer too thin to take the insert says so rather than doing nothing.
+
+**Which layer the tap was in comes from the chart, never re-derived.** `BohrprofilLog` reports `index` from the raw depth under the finger but `tiefe` snapped onto the 10 cm grid, and within half a step of a boundary the two name neighbouring layers. `einfuegeTiefeBei` used to re-derive the index from the snapped depth, so a tap just above a boundary was read as landing below it: the insert clamped into the layer underneath and the new layer appeared at a depth nobody pointed at. Which layer a new one splits is the whole content of the gesture — any future caller taking a depth from that chart has the same trap.
 
 There was a row of controls per layer here before, in two columns. It does not survive a real profile: four controls is 192px of buttons, so a row cannot shrink below about 408px and two columns need 824px of a column that has 646px at 1024x768 — the second column was cut off, with no scrollbar to admit it, on the one screen whose job is correcting the profile. One panel pays for those controls once, and the chart holds twenty layers in the same column it holds four (`modus="vollbild"` floors every layer at 32px), so it is the one representation that structurally cannot lose one.
 
@@ -648,7 +662,8 @@ ui/src/
     RecordingBar.tsx   — Session recording controls, geology entry, Rohrwechsel indicator
     PhaseStepper.tsx   — Bohren → Austausch → Einbauen → Auffüllen, in the header
     GeologieBestaetigung.tsx — Geology sign-off before a stop (tap a layer in the DIN 4023 profile, edit it beside)
-    GeologiePicker.tsx — Full-screen DIN 4023 tile grid, behind "Andere"
+    GeologiePicker.tsx — Full DIN 4023 catalogue behind "Andere": 4 tabs, 58
+                         entries, search
     GeologieSpalte.tsx — Quick picker in the profile column: the plan's soils,
                          marked Aktuell (where the drill is) and Vorgabe
     RohrwechselSettings.tsx — Klemmbacke topic, Rohrlänge, thresholds
