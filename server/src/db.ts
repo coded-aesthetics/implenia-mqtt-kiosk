@@ -331,6 +331,28 @@ const getFirstSessionValueStmt = db.prepare(`
   ORDER BY received_at ASC, id ASC
   LIMIT 1
 `);
+const getLastSessionValueStmt = db.prepare(`
+  SELECT value_numeric
+  FROM session_readings
+  WHERE session_id = ? AND sensor_id = ? AND value_numeric IS NOT NULL
+  ORDER BY received_at DESC, id DESC
+  LIMIT 1
+`);
+// The most recent reading of every topic in a session.
+//
+// The bare columns belong to the row holding MAX(received_at) — SQLite's
+// documented behaviour for a bare column alongside MAX, and the reason this is
+// one query rather than one per topic.
+//
+// Not filtered to unclipped: the last reading is the last reading. A restart
+// during a Rohrwechsel should show the frozen hole depth, which is exactly the
+// value that was recorded and clipped.
+const getLatestPerTopicStmt = db.prepare(`
+  SELECT topic, value_numeric, value_text, MAX(received_at) AS received_at
+  FROM session_readings
+  WHERE session_id = ?
+  GROUP BY topic
+`);
 const deletePendingForSensorStmt = db.prepare(`
   DELETE FROM session_readings
   WHERE session_id = ? AND sensor_id = ? AND upload_status = 'pending'
@@ -733,6 +755,33 @@ export function getSessionSensorSeries(sessionId: number, sensorId: string): Ser
   return rows.map((r) => ({ receivedAt: r.received_at, value: r.value_numeric }));
 }
 
+export interface LatestReading {
+  topic: string;
+  valueNumeric: number | null;
+  valueText: string | null;
+  receivedAt: number;
+}
+
+/**
+ * The last value recorded for each topic in a session.
+ *
+ * What a screen that has just loaded starts from. These are the *corrected*
+ * values — calibrated, and carrying the Schlittenweg offset — because that is
+ * what `insertSessionReading` stores and therefore what the browser last
+ * displayed; `value_raw` keeps the original separately.
+ */
+export function getLatestSessionReadings(sessionId: number): LatestReading[] {
+  const rows = getLatestPerTopicStmt.all(sessionId) as {
+    topic: string; value_numeric: number | null; value_text: string | null; received_at: number;
+  }[];
+  return rows.map((r) => ({
+    topic: r.topic,
+    valueNumeric: r.value_numeric,
+    valueText: r.value_text,
+    receivedAt: r.received_at,
+  }));
+}
+
 /**
  * The first value recorded for one sensor in a session, or null if it recorded
  * none.
@@ -745,6 +794,12 @@ export function getFirstSessionValue(sessionId: number, sensorId: string): numbe
   return row ? row.value_numeric : null;
 }
 
+/** The last value recorded for one sensor in a session, or null if none. */
+export function getLastSessionValue(sessionId: number, sensorId: string): number | null {
+  const row = getLastSessionValueStmt.get(sessionId, sensorId) as
+    { value_numeric: number } | undefined;
+  return row ? row.value_numeric : null;
+}
 
 /**
  * Drop a session's not-yet-uploaded readings for one sensor, and say how many

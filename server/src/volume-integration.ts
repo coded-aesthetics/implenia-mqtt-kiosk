@@ -1,5 +1,5 @@
 import { getActiveVerfahren, loadSensorCsv } from './sensor-meta.js';
-import { getFirstSessionValue } from './db.js';
+import { getFirstSessionValue, getLastSessionValue } from './db.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('volume-integration');
@@ -99,6 +99,36 @@ export function baselinesFromSession(
     );
   }
   return baselines;
+}
+
+/**
+ * The per-element volumes as they stood when the session was last written to.
+ *
+ * The delta is never recorded — it is computed for the display and emitted —
+ * so a browser that has just loaded has no way to know it until the rig
+ * publishes the next cumulative total. On a rig between elements, or one whose
+ * data has stopped, that is indefinite, and the screen shows 0 l for a pillar
+ * that has had 1100.
+ *
+ * Both ends of the same series: the baseline is its first value, the current
+ * reading its last, and their difference is exactly what `observe` would have
+ * returned for that last reading.
+ */
+export function volumeSnapshot(
+  sessionId: number,
+  sensorMap: Map<string, { sensorId: string }>,
+  mappings: CumulativeVolumeMapping[],
+): { topic: string; volume: number }[] {
+  const snapshot: { topic: string; volume: number }[] = [];
+  for (const mapping of mappings) {
+    const sensorId = sensorMap.get(mapping.cumulativeKey)?.sensorId;
+    if (!sensorId) continue;
+    const first = getFirstSessionValue(sessionId, sensorId);
+    const last = getLastSessionValue(sessionId, sensorId);
+    if (first === null || last === null) continue;
+    snapshot.push({ topic: mapping.syntheticTopic, volume: last - first });
+  }
+  return snapshot;
 }
 
 /**

@@ -128,6 +128,31 @@ export function useWebSocket() {
             });
             break;
 
+          /*
+           * The server's last-known value per topic, sent once on connect.
+           *
+           * Without it every tile reads 0 until the rig publishes again: the
+           * map starts empty on each page load, so a reload — or a PM2 restart
+           * mid-element — blanks the depth and the slurry volume of a pillar
+           * that is half drilled. A live reading that arrived first wins, by
+           * timestamp, so this can never put an older value back on screen.
+           */
+          case 'snapshot':
+            setState((prev) => {
+              const next = new Map(prev.readings);
+              for (const r of msg.readings as SensorReading[]) {
+                const known = next.get(r.topic);
+                if (known && known.receivedAt >= r.receivedAt) continue;
+                next.set(r.topic, {
+                  topic: r.topic,
+                  payload: r.payload,
+                  receivedAt: r.receivedAt,
+                });
+              }
+              return { ...prev, readings: next };
+            });
+            break;
+
           case 'device-frame':
             setState((prev) => {
               const next = new Map(prev.deviceFrames);
