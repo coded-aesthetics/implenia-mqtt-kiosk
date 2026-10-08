@@ -543,7 +543,28 @@ export function GeologieBestaetigung({
               breite={340}
               hoehe={chartHoehe > 0 ? chartHoehe : 400}
               modus="vollbild"
-              editierbar
+              /*
+                Not while an insert is armed. For that moment the chart is a
+                depth input, not an editor — the operator was told to point at
+                a depth, so a press on it means one thing.
+
+                Without this a press that slid a little — a gloved finger on a
+                touchscreen — took hold of whatever it started on instead. It
+                never placed the layer, because a press that travelled is not
+                a tap, so the insert stayed armed and the panel went on saying
+                "Tiefe antippen"; meanwhile the drag it *did* become moved an
+                obstruction and marked a Vorgabe boundary as confirmed.
+                Nothing on screen said so. That is a silent edit to the
+                committed profile, arriving while the operator believes their
+                tap missed.
+
+                Taps still work: the package attaches `onPointerUp` for
+                `onAuswahl` whether or not it is editable, and documents the
+                combination as the safer one on a touchscreen. So a deliberate
+                tap places the layer and a slip now does nothing at all,
+                leaving the insert visibly armed for a second try.
+              */
+              editierbar={!einfuegen}
               beruehrungsmodus
               onSchichtenChange={onSchichtenChange}
               // Nothing is ringed while an insert waits for a depth: the next
