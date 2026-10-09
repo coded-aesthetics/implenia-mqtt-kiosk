@@ -366,3 +366,134 @@ describe('the stop is never refused over its geology', () => {
     spy.mockRestore();
   });
 });
+
+/**
+ * The sign-off at the step out of `bohren` — where the profile is normally
+ * confirmed, an hour or a day before the recording ends.
+ */
+describe('PUT /api/recording/mode and the drilling window', () => {
+  it('stamps the end of drilling when the operator leaves bohren', async () => {
+    const id = activeDrilledSession();
+    expect(db.getSessionById(id)!.drilling_ended_at).toBeNull();
+
+    const res = await app.inject({
+      method: 'PUT', url: '/api/recording/mode', payload: { mode: 'austausch' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(db.getSessionById(id)!.drilling_ended_at).toBeGreaterThan(0);
+  });
+
+  it('keeps the first stamp when stepping on through the later phases', async () => {
+    const id = activeDrilledSession();
+    await app.inject({
+      method: 'PUT', url: '/api/recording/mode', payload: { mode: 'austausch' },
+    });
+    const erst = db.getSessionById(id)!.drilling_ended_at;
+
+    await app.inject({
+      method: 'PUT', url: '/api/recording/mode', payload: { mode: 'einbauen' },
+    });
+    // Austausch → Einbauen does not end drilling a second time; re-stamping
+    // would widen the window over the retraction that has already happened.
+    expect(db.getSessionById(id)!.drilling_ended_at).toBe(erst);
+  });
+
+  it('clears the window and the sign-off when drilling resumes', async () => {
+    const id = activeDrilledSession();
+    await app.inject({
+      method: 'PUT', url: '/api/recording/mode', payload: { mode: 'austausch' },
+    });
+    await app.inject({ method: 'POST', url: '/api/recording/geology/commit', payload: {} });
+    expect(db.getSessionById(id)!.geology_confirmed_at).toBeGreaterThan(0);
+
+    await app.inject({
+      method: 'PUT', url: '/api/recording/mode', payload: { mode: 'bohren' },
+    });
+    // The hole is about to get deeper: the profile is no longer settled, and
+    // the operator has to be asked again.
+    const session = db.getSessionById(id)!;
+    expect(session.drilling_ended_at).toBeNull();
+    expect(session.geology_confirmed_at).toBeNull();
+  });
+});
+
+describe('POST /api/recording/geology/commit', () => {
+  it('commits the reviewed profile and leaves the recording running', async () => {
+    const id = activeDrilledSession();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/recording/geology/commit',
+      payload: {
+        geology: [
+          { tiefe: 0, nr: SAND, name: 'Sand', quelle: 'ist' },
+          { tiefe: 3, nr: TON, name: 'Ton', quelle: 'vorgabe' },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(geoDin(id)).toEqual([SAND, TON]);
+    // Still recording: Austausch, Einbauen and Auffüllen are still to come.
+    expect(db.getSessionById(id)!.status).toBe('recording');
+    expect(db.getSessionById(id)!.geology_confirmed_at).toBeGreaterThan(0);
+  });
+
+  it('is not refused over a malformed profile', async () => {
+    const id = activeDrilledSession();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/recording/geology/commit',
+      payload: { geology: 'nonsense' },
+    });
+
+    // Costs the profile and nothing else — the operator still reaches
+    // Austausch, and the measurements still upload.
+    expect(res.statusCode).toBe(200);
+    expect(res.json().hinweis).toMatch(/Geologieprofil/);
+    expect(db.getSessionById(id)!.geology_confirmed_at).toBeGreaterThan(0);
+  });
+
+  it('refuses when nothing is being recorded', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/recording/geology/commit', payload: {},
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/keine Aufzeichnung/i);
+  });
+
+  it('leaves a signed-off profile untouched when the recording stops', async () => {
+    const id = activeDrilledSession();
+    db.setElementVorgaben('P-01', {
+      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': TON },
+      float_sensors: { 'Tiefe Geologie 1': 2, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
+    });
+
+    // The operator reviewed and deleted the planned Ton boundary.
+    await app.inject({
+      method: 'POST',
+      url: '/api/recording/geology/commit',
+      payload: { geology: [{ tiefe: 0, nr: SAND, name: 'Sand', quelle: 'ist' }] },
+    });
+    expect(geoDin(id)).toEqual([SAND]);
+
+    const res = await app.inject({ method: 'POST', url: '/api/recording/stop' });
+    expect(res.statusCode).toBe(200);
+    // Rebuilding here would re-derive the back-fill and bring the boundary
+    // they deleted straight back.
+    expect(geoDin(id)).toEqual([SAND]);
+  });
+
+  it('still back-fills at the stop when the sign-off never happened', async () => {
+    const id = activeDrilledSession();
+    db.setElementVorgaben('P-01', {
+      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': TON },
+      float_sensors: { 'Tiefe Geologie 1': 2, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
+    });
+
+    const res = await app.inject({ method: 'POST', url: '/api/recording/stop' });
+    expect(res.statusCode).toBe(200);
+    expect(geoDin(id)).toEqual([SAND, TON]);
+  });
+});
