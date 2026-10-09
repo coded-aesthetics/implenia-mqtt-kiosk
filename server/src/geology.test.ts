@@ -343,6 +343,24 @@ describe('recordLiveLayer', () => {
     expect(geology.recordLiveLayer(session, 1.5)).toHaveProperty('fehler');
   });
 
+  it('refuses once drilling has ended, instead of writing a layer no profile shows', () => {
+    // The browser gates the buttons and the voice commands on its own view of
+    // the mode, so a second tab still offers them. Accepting the entry here
+    // would date it on a retraction reading, outside the window every geology
+    // read is bounded by — written, answered with a depth, and in no profile.
+    const { id } = drilledSession(0, 3);
+    db.setDrillingEndedAt(id, T0 + 6000);
+
+    const result = geology.recordLiveLayer(db.getSessionById(id)!, SAND, 'Sand');
+    expect(result).toHaveProperty('fehler');
+    expect((result as { fehler: string }).fehler).toContain('Bohren');
+    expect(geoDinRows(id)).toEqual([]);
+    // Still recordable once the operator steps back into Bohren.
+    db.setDrillingEndedAt(id, null);
+    expect(geology.recordLiveLayer(db.getSessionById(id)!, SAND, 'Sand'))
+      .toEqual({ tiefe: 3, receivedAt: T0 + 6000 });
+  });
+
   it('never lands on a Rohrwechsel reading', () => {
     const id = db.createSession('E-live-rohr', SENSOR_MAP);
     db.insertSessionReading(id, 'rig/depth', DEPTH_ID, 'float', 3, null, { receivedAt: T0 });
