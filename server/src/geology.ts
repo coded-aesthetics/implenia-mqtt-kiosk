@@ -513,6 +513,17 @@ export function commitGeology(
  *
  * Returns the depth it used so the screen can confirm what was recorded
  * ("Sand ab 3,40 m") rather than just that something was.
+ *
+ * **Refused once drilling has ended**, rather than dated at the newest reading
+ * the way it is during drilling. Both the buttons and the voice commands are
+ * gated on `operatingMode === 'bohren'`, but those gates are the browser's view
+ * of the mode: a second tab, or one whose WebSocket reconnected a moment late,
+ * still offers them. Without this the entry would land on a retraction reading
+ * outside the drilling window, where `getGeologyContext` cannot see it — it
+ * would be written, answered with a depth, shown as recorded, and then be
+ * absent from every profile. Clamping it onto the last drilling reading instead
+ * would be no better: it would silently assert the operator saw that ground at
+ * the bottom of the hole.
  */
 export function recordLiveLayer(
   session: Session,
@@ -521,6 +532,14 @@ export function recordLiveLayer(
 ): { tiefe: number; receivedAt: number } | { fehler: string } {
   if (!Number.isInteger(nr) || nr <= 0) {
     return { fehler: 'Ungültige Bodenart.' };
+  }
+
+  if (drillingWindowEnd(session) != null) {
+    return {
+      fehler: 'Das Bohren ist für diese Aufzeichnung abgeschlossen — die Geologie '
+        + 'kann nur während des Bohrens erfasst werden. Für eine Korrektur im '
+        + 'Kopf zurück auf „Bohren" wechseln.',
+    };
   }
 
   const sensors = resolveSensors(session);

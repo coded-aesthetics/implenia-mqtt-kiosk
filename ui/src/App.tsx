@@ -173,7 +173,11 @@ export function App() {
     // from Austausch to Einbauen has nothing new to confirm.
     if (vorher !== 'bohren' || !recordingState.active || sessionId === null) return;
     if (await shouldConfirmGeology(sessionId)) {
-      const name = recordingState.elementName;
+      // Same fallback as every other navigation here: the step is tapped from
+      // the drilling screen, whose route already names the element, so a
+      // recording state that has not caught up yet still lands on the element's
+      // own profile rather than a nameless one.
+      const name = recordingState.elementName ?? route.params.name;
       navigate(name ? `geologie/${encodeURIComponent(name)}` : 'geologie');
     }
   }, [
@@ -326,10 +330,32 @@ export function App() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ geology: layers }),
               });
+              const data = await res.json().catch(() => ({}));
               if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
                 return data.error
                   || `Das Geologieprofil konnte nicht gespeichert werden (Fehler ${res.status}). Bitte erneut versuchen.`;
+              }
+              /*
+               * A 200 that wrote no boundary means the profile is lost — a
+               * malformed body, no depth readings, sensors that would not
+               * resolve. The route answers 200 on purpose, because the
+               * measurements are fine and nothing may stand between the
+               * operator and the next phase; but it marks the session confirmed
+               * either way, so the stop will not ask again. Swallowing the
+               * message here would make that loss completely silent.
+               *
+               * Shown rather than navigated past, which keeps the button
+               * available for a retry. The way on without one is the phase
+               * stepper in the header, the same way back as from any step.
+               *
+               * A commit that *did* write is never held up, even with a hinweis
+               * attached: that one reports layers the server discarded as
+               * incomplete, which retrying cannot change, so trapping the
+               * operator over it would buy nothing.
+               */
+              const geschrieben = Number(data.geology?.geschrieben ?? 0);
+              if (geschrieben === 0 && typeof data.hinweis === 'string' && data.hinweis) {
+                return data.hinweis;
               }
               zurueck();
               return null;

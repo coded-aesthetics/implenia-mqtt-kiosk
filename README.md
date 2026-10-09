@@ -478,6 +478,8 @@ Measured on the drilling screen: header 85px (64px logo plus the 68px phase step
 
 Voice covers the same thing hands-free, which is the strongest case for it in this app — hands are on the rig and the vocabulary is closed. Say `schluff`, `schicht schluff` or `hindernis beton`. The 15 soils and 6 obstructions are reachable by voice; the rock types are names a small offline model mishears often enough that a wrong layer would get recorded, so those stay touch-only.
 
+Both the buttons and the voice commands are gated on `operatingMode === 'bohren'`, but that is the *browser's* view of the mode and a second tab does not share it — so the server refuses a live entry outright once drilling has ended, and says so. It has to: the newest depth reading is a retraction reading by then, outside the window every geology read is bounded by, so the entry would be written, answered with a depth, shown as recorded — and then appear in no profile at all. The way back is the phase stepper, into `Bohren`.
+
 ### The sign-off at the step out of Bohren
 
 **The review happens when drilling ends, not when the recording does.** Stepping the phase stepper from `Bohren` to `Austausch` opens the sign-off, on a session that actually drilled (depth moved ≥ 0.5 m) and a machine whose Verfahren defines the sensors.

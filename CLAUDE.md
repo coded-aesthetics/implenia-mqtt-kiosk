@@ -268,7 +268,14 @@ What follows from this, and must not be broken:
   (`POST /api/recording/geology`) carries only a ground-type number; the server
   dates the reading at its latest depth reading. A client-measured depth would
   have to be matched back to a reading, and a client one sample out of step
-  produces nothing.
+  produces nothing. The same route **refuses outright once drilling has ended**
+  (`drilling_ended_at` set): the newest reading is then a retraction reading,
+  outside the window every geology read is bounded by, so the entry would be
+  written, answered with a depth, shown as recorded — and absent from every
+  profile. The buttons and the voice commands are gated on the *browser's* view
+  of the mode, which a second tab does not share, so the server cannot rely on
+  them. Clamping onto the last drilling reading instead would silently assert
+  the operator saw that ground at the bottom of the hole.
 - **The depth sensor is resolved by role, never by name.** It is `Bohrtiefe` for
   Injektionsbohren and Ankerbohren but `Tiefe` for DSV
   (`findSensorNameByRole('depth')`). Note that web's reader hardcodes
