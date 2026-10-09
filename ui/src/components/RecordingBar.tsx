@@ -180,8 +180,25 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
       const confirm = await shouldConfirmGeology(sessionId);
       setLoading(false);
       if (confirm) {
+        /*
+         * `?beenden=1` is what tells the sign-off screen that it has to stop
+         * the recording, not merely commit and carry on.
+         *
+         * In the route rather than read off the operating mode, for two
+         * reasons. A session can reach here past `bohren` — the sign-off at the
+         * phase step was skipped because its context fetch failed, or the
+         * operator left that screen without committing — and a mode-derived
+         * screen would then answer "Beenden" with a button that commits and
+         * returns, leaving the recording running. And `operatingMode` is null
+         * until the first `recording-state` message, so after a reload on this
+         * screen a mode-derived variant would briefly offer the *other*
+         * consequence under the same button. The URL survives the reload; the
+         * WebSocket state does not.
+         */
         const name = recordingState.elementName;
-        navigate(name ? `geologie/${encodeURIComponent(name)}` : 'geologie');
+        navigate(name
+          ? `geologie/${encodeURIComponent(name)}?beenden=1`
+          : 'geologie?beenden=1');
         return;
       }
     }

@@ -33,13 +33,18 @@ import { GeologieSpalte } from './GeologieSpalte';
  * another hour, or until the next day. The profile is final at that step —
  * nothing after it adds a drilling depth — so there is nothing to be gained by
  * waiting and a shift's worth of forgetting to lose. One button here:
- * *Weiter zu Austausch*, which commits and goes on. The way back from a
+ * *Weiter zum Austausch*, which commits and goes on. The way back from a
  * mis-tapped phase step is the phase stepper in the header.
  *
- * **The stop, as a backstop**, for a session that never left `bohren` — drilled
- * and stopped, or aborted. There the button is *Beenden*: it commits, stops the
- * recording, and the auto-upload proceeds exactly as it always has, with
- * *Zurück zur Aufzeichnung* for a mis-tap.
+ * **The stop, as a backstop** — drilled and stopped, or aborted, or a session
+ * whose phase-step sign-off was skipped. There the button is *Beenden*: it
+ * commits, stops the recording, and the auto-upload proceeds exactly as it
+ * always has, with *Zurück zur Aufzeichnung* for a mis-tap.
+ *
+ * **Which one is decided by the caller, never by the operating mode** — see the
+ * `geologie` case in App.tsx. The two consequences sit on the same button
+ * position, and the mode is null until the first `recording-state` message, so
+ * deriving it meant a reload here briefly offered the other one.
  *
  * Either way the review is shown once. `geology_confirmed_at` on the session is
  * what remembers, so a step back into `bohren` — resumed drilling, a deeper
@@ -159,12 +164,20 @@ interface Props {
   /**
    * Leave without committing; the recording continues.
    *
-   * Omitted at the phase step, where the review is not optional — the way back
-   * from a mis-tap is the phase stepper in the header, which is the same way
-   * back as from any other phase step. A second exit here would quietly turn
-   * the review into something that can be skipped.
+   * `nurNachFehler` holds it back until a commit has actually failed, which is
+   * what the phase step passes. The review there is not optional — the way
+   * back from a mis-tap is the phase stepper in the header, the same way back
+   * as from any other phase step, and a second exit standing open would
+   * quietly turn the review into something that can be skipped.
+   *
+   * But it may not be *absent*, either. The phase stepper is itself a request
+   * (`PUT /api/recording/mode`, which does nothing on a non-200), so with the
+   * local server unreachable the commit fails, the stepper fails, and the only
+   * remaining way off the screen is the unlabelled logo. That is the dead end
+   * CLAUDE.md forbids. Appearing on the first failure satisfies both: nothing
+   * to skip past before trying, and always a way out afterwards.
    */
-  onZurueck?: () => void;
+  zurueck?: { aktion: () => void; nurNachFehler?: boolean };
 }
 
 /** Which layer the picker is editing, or a kind of layer being appended. */
@@ -175,7 +188,7 @@ type PickerZiel =
 const STANDARD_AKTION = { label: 'Beenden', laufend: 'Wird beendet…' };
 
 export function GeologieBestaetigung({
-  sessionId, elementName, onBeenden, aktion = STANDARD_AKTION, onZurueck,
+  sessionId, elementName, onBeenden, aktion = STANDARD_AKTION, zurueck,
 }: Props) {
   const [profil, setProfil] = useState<Profil | null>(null);
   /** The planned layers, for the quick picker and its "Vorgabe" marker. */
@@ -520,8 +533,8 @@ export function GeologieBestaetigung({
             a screen whose other control is dead — "error states must be
             recoverable", and a screen with two dead buttons is a dead end.
           */}
-          {onZurueck && (
-            <button style={styles.zurueck} onClick={onZurueck}>
+          {zurueck && (!zurueck.nurNachFehler || fehler) && (
+            <button style={styles.zurueck} onClick={zurueck.aktion}>
               Zurück zur Aufzeichnung
             </button>
           )}

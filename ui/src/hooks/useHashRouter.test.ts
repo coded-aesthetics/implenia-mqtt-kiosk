@@ -104,4 +104,20 @@ describe('parseRoute: the geology sign-off', () => {
   it('does not swallow a similarly named path', () => {
     expect(parseRoute('#/geologien').page).toBe('home');
   });
+
+  it('carries the Beenden flag alongside the element name', () => {
+    // `?beenden=1` is what decides whether the screen's one button commits and
+    // carries on or commits and stops. It lives in the URL because the
+    // operating mode it used to be derived from is null until the first
+    // WebSocket message: a reload here once offered the opposite consequence
+    // under the same button.
+    const route = parseRoute(`#/geologie/${encodeURIComponent('A/12')}?beenden=1`);
+    expect(route).toMatchObject({
+      page: 'geologie',
+      params: { name: 'A/12' },
+      query: { beenden: '1' },
+    });
+    // And is absent on the phase-step path, which commits and carries on.
+    expect(parseRoute('#/geologie/P-01').query.beenden).toBeUndefined();
+  });
 });

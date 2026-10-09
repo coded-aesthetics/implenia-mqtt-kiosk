@@ -297,30 +297,49 @@ export function App() {
     /**
      * The geology sign-off.
      *
-     * Two entry points, told apart by the operating mode, because the mode is
-     * switched before the screen opens:
+     * Two entry points, told apart by **`?beenden=1` in the route**:
      *
-     * — **Past `bohren`** — the normal path. Drilling has just ended and the
-     *   recording continues, so the commit is its own request and the operator
-     *   carries on to the next phase. No second exit: the way back from a
-     *   mis-tapped phase step is the phase stepper in the header.
-     * — **Still in `bohren`** — the backstop at Beenden, for a session that
-     *   never left drilling. There the commit and the stop are one request: the
-     *   server writes the geology readings and only then ends the session,
-     *   because ending it is what releases the auto-upload. See the stop route.
+     * — **The phase step out of `bohren`** — the normal path, with no flag.
+     *   Drilling has just ended and the recording continues, so the commit is
+     *   its own request and the operator carries on to the next phase.
+     * — **Beenden** — the backstop, with the flag. There the commit and the
+     *   stop are one request: the server writes the geology readings and only
+     *   then ends the session, because ending it is what releases the
+     *   auto-upload. See the stop route.
+     *
+     * The flag rather than the operating mode, which is what this once read.
+     * The mode answers "which phase is the rig in", not "what did the operator
+     * ask for", and the two come apart in both directions. A Beenden on a
+     * session already past `bohren` — the sign-off there was skipped because
+     * its context fetch failed, or left without committing — would have been
+     * answered by a button that commits and returns, leaving the recording
+     * running and the operator tapping Beenden twice. And `operatingMode` is
+     * null until the first `recording-state` message arrives, so a reload on
+     * this screen briefly offered *the opposite consequence* under the same
+     * button: one tap in that window ended a recording mid-Austausch, with
+     * Einbauen and Auffüllen never recorded and the upload released early.
+     * The URL survives a reload and a PM2 restart; the WebSocket state does
+     * not.
      */
     case 'geologie': {
       const name = recordingState.elementName ?? route.params.name;
       const zurueck = (): void => navigate(name ? `bohren/${encodeURIComponent(name)}` : '');
       const mode = recordingState.operatingMode;
-      const nachBohren = isVerpressenMode(mode);
+      const nachBohren = route.query.beenden !== '1';
 
       content = nachBohren ? (
         <GeologieBestaetigung
           sessionId={recordingState.sessionId}
           elementName={name}
           aktion={{
-            label: `Weiter zum ${MODE_LABELS[mode as OperatingMode]}`,
+            // Naming the phase needs the mode, which is null until the first
+            // `recording-state` message. A bare "Weiter" until then rather
+            // than "Weiter zum undefined" — safe to fill in under the finger,
+            // because both spellings of this button do the same thing. The
+            // variant itself must never be decided this way; see above.
+            label: isVerpressenMode(mode)
+              ? `Weiter zum ${MODE_LABELS[mode as OperatingMode]}`
+              : 'Weiter',
             laufend: 'Wird gespeichert…',
           }}
           onBeenden={async (layers) => {
@@ -363,6 +382,14 @@ export function App() {
               return `Das Geologieprofil konnte nicht gespeichert werden: ${(err as Error).message}`;
             }
           }}
+          /*
+           * Held back until a commit has failed. The review is not optional, so
+           * nothing stands open to skip past; but the phase stepper — the way
+           * back from a mis-tap — is itself a request, so a local server that
+           * cannot be reached would otherwise leave both controls dead and the
+           * screen a dead end.
+           */
+          zurueck={{ aktion: zurueck, nurNachFehler: true }}
         />
       ) : (
         <GeologieBestaetigung
@@ -385,7 +412,7 @@ export function App() {
               return `Die Aufzeichnung konnte nicht beendet werden: ${(err as Error).message}`;
             }
           }}
-          onZurueck={zurueck}
+          zurueck={{ aktion: zurueck }}
         />
       );
       pageTitle = 'Geologie';
