@@ -406,6 +406,27 @@ Three things make it correct rather than merely kinder, and none may be broken:
   deleted would quietly come back. An operator who resumes drilling is asked
   again, about the deeper hole.
 
+**Known deviation: a rejected boundary is not remembered across a re-ask.**
+Nothing records that the operator *deleted* a planned boundary — `observedOnly`
+can recover what was written, never what was refused. So on a resumed element
+the step back into `bohren` clears the sign-off, the next step out rebuilds the
+context, and `mergeProfile` re-adds every Vorgabe boundary: one the operator
+explicitly deleted at the first sign-off reappears (dashed) at the second and is
+committed unless they delete it again. Within a single sign-off the deletion
+holds, which is the common case; fixing it across one properly means persisting
+rejections, not special-casing the rebuild.
+
+**One button, two consequences — never selected by the operating mode.** Which
+button the sign-off screen shows comes from `?beenden=1` in the route, set by
+the recording bar's stop. It was derived from `operatingMode`, and that is
+wrong twice over: a Beenden on a session already past `bohren` (its phase-step
+sign-off skipped because the context fetch failed) got a button that committed
+and returned while the recording kept running, and `operatingMode` is null until
+the first `recording-state` message, so a reload on this screen briefly offered
+*the other* consequence under the same button — one tap ended a recording
+mid-Austausch. A URL survives a reload and a PM2 restart; WebSocket state does
+not. Anything that decides what a button *does* belongs in the former.
+
 **A re-commit must keep its provenance.** The commit was always repeatable and
 is now routinely repeated, which made a latent bug reachable: reading the
 committed `GeoDIN` series back marks every boundary as observed, the kiosk's own
