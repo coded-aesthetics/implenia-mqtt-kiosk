@@ -42,6 +42,7 @@ import {
   getElementVorgaben,
   getSessionDepthSamples,
   getSessionSensorSeries,
+  getSessionSensorTextSeries,
   insertSessionReading,
   type Session,
 } from './db.js';
@@ -179,9 +180,40 @@ function isError(r: GeologySensors | { fehler: string }): r is { fehler: string 
   return 'fehler' in r;
 }
 
+/**
+ * The end of the window every geology read is restricted to, or null while the
+ * rig is still drilling.
+ *
+ * The operating mode never lands on a reading — `session_readings.phase` is
+ * only `bohren` or `rohrwechsel` — so a depth recorded while the rig retracts
+ * through Austausch, Einbauen and Auffüllen is stored as drilling data and
+ * `getSessionDepthSamples` hands it straight to the aligner. Three things go
+ * wrong when it does, all of them quiet:
+ *
+ * 1. `alignBoundaries` sets its tolerance to the largest step between
+ *    consecutive readings, and retraction can only widen it. That tolerance is
+ *    the *only* guard against `aboveHole` — the fabricated 10 cm layers a
+ *    resumed element would otherwise produce.
+ * 2. A boundary whose descent reading was already consumed finds the same
+ *    depth again on the way up, hours later, and is dated there. web reads the
+ *    series in date order, so that layer lands out of sequence.
+ * 3. `drilledDepth` is `max - min`, and once the pipes are back out `min`
+ *    falls toward zero — making the "did this session drill?" gate more
+ *    permissive than it means to be.
+ *
+ * `drilling_ended_at` is stamped by the step out of `bohren`, which is also
+ * when the sign-off is shown, so the profile is built from drilling alone
+ * however long the operator spends reviewing it.
+ */
+function drillingWindowEnd(session: Session): number | null {
+  return session.drilling_ended_at;
+}
+
 /** Depth samples in the shape depth-timestamp.ts wants. */
-function depthSamples(sessionId: number, sensorId: string): DepthSample[] {
-  return getSessionDepthSamples(sessionId, sensorId)
+function depthSamples(
+  sessionId: number, sensorId: string, bis?: number | null,
+): DepthSample[] {
+  return getSessionDepthSamples(sessionId, sensorId, bis)
     .map((p) => ({ receivedAt: p.receivedAt, depth: p.value }));
 }
 
@@ -205,8 +237,20 @@ export interface GeologyContext {
    * readings are what will actually be uploaded. If a live write ever lands off
    * a depth reading's millisecond, the layer is missing here too — on the
    * kiosk, in front of the operator, instead of weeks later in a protocol.
+   *
+   * **Boundaries a previous commit back-filled are excluded** — see
+   * `observedOnly`. Without that a second pass reads the kiosk's own Vorgabe
+   * back-fill as observation, and the merge below has nothing left to mark.
    */
   beobachtet: { tiefe: number; nr: number }[];
+  /**
+   * Whether the operator has already signed this profile off.
+   *
+   * Set by the step out of `bohren`, cleared by a step back into it. The stop
+   * uses it to not ask a second time, and to leave the committed profile
+   * alone.
+   */
+  bestaetigt: boolean;
   /**
    * The profile that will be committed: the observed layers with the
    * unconfirmed stretches back-filled from the Vorgabe, each layer saying
@@ -231,7 +275,7 @@ export interface GeologyContext {
 export function getGeologyContext(session: Session): GeologyContext {
   const leer: GeologyContext = {
     verfuegbar: false, gebohrt: false, gebohrteTiefe: 0, maxTiefe: 0,
-    vorgabe: null, beobachtet: [], profil: null,
+    vorgabe: null, beobachtet: [], bestaetigt: false, profil: null,
   };
 
   const sensors = resolveSensors(session);
@@ -242,11 +286,12 @@ export function getGeologyContext(session: Session): GeologyContext {
     return nrName ? { ...leer, hinweis: sensors.fehler } : leer;
   }
 
-  const samples = depthSamples(session.id, sensors.depthId);
+  const bis = drillingWindowEnd(session);
+  const samples = depthSamples(session.id, sensors.depthId, bis);
   const gebohrteTiefe = drilledDepth(samples);
   const maxTiefe = samples.reduce((max, s) => (s.depth > max ? s.depth : max), 0);
 
-  const codes = getSessionSensorSeries(session.id, sensors.nrId)
+  const codes = getSessionSensorSeries(session.id, sensors.nrId, bis)
     .map((p) => ({ receivedAt: p.receivedAt, nr: Math.round(p.value) }));
 
   let vorgabe: VorgabeProfile | null = null;
@@ -259,7 +304,7 @@ export function getGeologyContext(session: Session): GeologyContext {
     );
   }
 
-  const beobachtet = observedLayers(samples, codes);
+  const beobachtet = observedOnly(session, sensors, observedLayers(samples, codes));
   return {
     verfuegbar: true,
     gebohrt: gebohrteTiefe >= MIN_DRILL_SPAN_M,
@@ -267,8 +312,50 @@ export function getGeologyContext(session: Session): GeologyContext {
     maxTiefe,
     vorgabe,
     beobachtet,
+    bestaetigt: session.geology_confirmed_at != null,
     profil: mergeProfile(vorgabe, beobachtet, maxTiefe),
   };
+}
+
+/**
+ * Drop the boundaries a previous commit back-filled from the Schichtauftrag,
+ * keeping the operator's own observations.
+ *
+ * Needed because the commit is repeatable and now routinely repeated: the
+ * sign-off happens at the step out of `bohren`, and a step back to drill deeper
+ * brings the operator through it again. On the second pass the `GeoDIN` series
+ * already contains the whole committed profile, back-fill included, so reading
+ * it back wholesale marks every planned boundary as observed — the profile
+ * keeps its shape but loses the ` (Vorgabe)` suffix that says which parts
+ * nobody actually saw.
+ *
+ * The suffix in the `Geologie` text is the only place that provenance survives
+ * a commit, which is exactly what it is there for. Where the text sensor is
+ * absent there is nothing to go on and everything reads as observed — the old
+ * behaviour, and no worse than it was.
+ *
+ * Filtering *after* change detection rather than before is deliberate. The
+ * detection is over the series as web will read it, and removing readings from
+ * underneath it changes its answer: an observation repeated either side of a
+ * back-filled boundary of a different type would collapse into one and lose a
+ * real layer.
+ */
+function observedOnly(
+  session: Session,
+  sensors: GeologySensors,
+  layers: readonly { receivedAt: number; tiefe: number; nr: number }[],
+): { tiefe: number; nr: number }[] {
+  if (!sensors.textId) return layers.map(({ tiefe, nr }) => ({ tiefe, nr }));
+
+  const vorgabeAt = new Set<number>();
+  for (const t of getSessionSensorTextSeries(session.id, sensors.textId)) {
+    if (t.text.endsWith(VORGABE_SUFFIX)) vorgabeAt.add(t.receivedAt);
+  }
+  if (vorgabeAt.size === 0) return layers.map(({ tiefe, nr }) => ({ tiefe, nr }));
+
+  return layers
+    .filter((l) => !vorgabeAt.has(l.receivedAt))
+    .map(({ tiefe, nr }) => ({ tiefe, nr }));
 }
 
 /**
@@ -344,7 +431,7 @@ export function commitGeology(
     .slice()
     .sort((a, b) => a.tiefe - b.tiefe);
 
-  const samples = depthSamples(session.id, sensors.depthId);
+  const samples = depthSamples(session.id, sensors.depthId, drillingWindowEnd(session));
   if (samples.length === 0) {
     const hinweis = 'Für diese Aufzeichnung sind keine Tiefenmesswerte vorhanden. '
       + 'Die Geologie kann keiner Tiefe zugeordnet werden.';
@@ -426,6 +513,17 @@ export function commitGeology(
  *
  * Returns the depth it used so the screen can confirm what was recorded
  * ("Sand ab 3,40 m") rather than just that something was.
+ *
+ * **Refused once drilling has ended**, rather than dated at the newest reading
+ * the way it is during drilling. Both the buttons and the voice commands are
+ * gated on `operatingMode === 'bohren'`, but those gates are the browser's view
+ * of the mode: a second tab, or one whose WebSocket reconnected a moment late,
+ * still offers them. Without this the entry would land on a retraction reading
+ * outside the drilling window, where `getGeologyContext` cannot see it — it
+ * would be written, answered with a depth, shown as recorded, and then be
+ * absent from every profile. Clamping it onto the last drilling reading instead
+ * would be no better: it would silently assert the operator saw that ground at
+ * the bottom of the hole.
  */
 export function recordLiveLayer(
   session: Session,
@@ -434,6 +532,14 @@ export function recordLiveLayer(
 ): { tiefe: number; receivedAt: number } | { fehler: string } {
   if (!Number.isInteger(nr) || nr <= 0) {
     return { fehler: 'Ungültige Bodenart.' };
+  }
+
+  if (drillingWindowEnd(session) != null) {
+    return {
+      fehler: 'Das Bohren ist für diese Aufzeichnung abgeschlossen — die Geologie '
+        + 'kann nur während des Bohrens erfasst werden. Für eine Korrektur im '
+        + 'Kopf zurück auf „Bohren" wechseln.',
+    };
   }
 
   const sensors = resolveSensors(session);

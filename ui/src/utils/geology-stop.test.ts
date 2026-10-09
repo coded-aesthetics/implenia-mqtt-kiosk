@@ -28,6 +28,19 @@ describe('needsGeologyConfirmation', () => {
     expect(needsGeologyConfirmation({ verfuegbar: true, gebohrt: false })).toBe(false);
   });
 
+  it('skips a profile the operator has already signed off', () => {
+    // The normal case now: the sign-off happens at the step out of `bohren`,
+    // so by the time Beenden is tapped the profile is already committed.
+    // Asking again would re-run a commit that re-derives the back-fill and
+    // undoes the operator's edits.
+    expect(needsGeologyConfirmation({ verfuegbar: true, gebohrt: true, bestaetigt: true }))
+      .toBe(false);
+    // Cleared by a step back into `bohren` — a deeper hole has to be asked
+    // about again.
+    expect(needsGeologyConfirmation({ verfuegbar: true, gebohrt: true, bestaetigt: null }))
+      .toBe(true);
+  });
+
   it('skips anything it cannot read', () => {
     expect(needsGeologyConfirmation(null)).toBe(false);
     expect(needsGeologyConfirmation({})).toBe(false);

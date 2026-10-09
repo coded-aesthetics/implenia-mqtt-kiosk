@@ -25,16 +25,33 @@ import { GeologieSpalte } from './GeologieSpalte';
  * filling the stretches they did not, drawn dashed so the difference is
  * visible.
  *
- * Not a gate and not a dialog. Two exits, both of which leave the operator
- * somewhere useful:
+ * ── Two entry points ────────────────────────────────────────
  *
- * — **Beenden** commits the profile, stops the recording, and the auto-upload
- *   proceeds exactly as it always has.
- * — **Zurück zur Aufzeichnung** commits nothing and keeps recording, for a
- *   mis-tap.
+ * **Normally the step out of `bohren`**, the moment the rig stops drilling and
+ * moves to Austausch. That is where the memory of the hole is: the recording
+ * runs on through Austausch, Einbauen and Auffüllen and may not be stopped for
+ * another hour, or until the next day. The profile is final at that step —
+ * nothing after it adds a drilling depth — so there is nothing to be gained by
+ * waiting and a shift's worth of forgetting to lose. One button here:
+ * *Weiter zum Austausch*, which commits and goes on. The way back from a
+ * mis-tapped phase step is the phase stepper in the header.
+ *
+ * **The stop, as a backstop** — drilled and stopped, or aborted, or a session
+ * whose phase-step sign-off was skipped. There the button is *Beenden*: it
+ * commits, stops the recording, and the auto-upload proceeds exactly as it
+ * always has, with *Zurück zur Aufzeichnung* for a mis-tap.
+ *
+ * **Which one is decided by the caller, never by the operating mode** — see the
+ * `geologie` case in App.tsx. The two consequences sit on the same button
+ * position, and the mode is null until the first `recording-state` message, so
+ * deriving it meant a reload here briefly offered the other one.
+ *
+ * Either way the review is shown once. `geology_confirmed_at` on the session is
+ * what remembers, so a step back into `bohren` — resumed drilling, a deeper
+ * hole — clears it and asks again.
  *
  * A PM2 restart on this screen leaves the session open, `resumeRecording`
- * re-attaches it, and the operator taps Beenden again — no dead end, nothing
+ * re-attaches it, and the operator taps the button again — no dead end, nothing
  * lost.
  *
  * ── The chart is the index ───────────────────────────────────
@@ -133,10 +150,34 @@ interface GeologyContext {
 interface Props {
   sessionId: number | null;
   elementName?: string;
-  /** Commit and stop. Resolves to an error message, or null on success. */
+  /** Commit the profile. Resolves to an error message, or null on success. */
   onBeenden: (layers: ReturnType<typeof zumCommit>) => Promise<string | null>;
-  /** Leave without committing; the recording continues. */
-  onZurueck: () => void;
+  /**
+   * What the commit button says, at rest and in flight.
+   *
+   * Two callers with the same screen and different consequences: the step out
+   * of `bohren` commits and carries on to the next phase, the stop commits and
+   * ends the recording. The button has to say which, because on this screen it
+   * is the only thing that does.
+   */
+  aktion?: { label: string; laufend: string };
+  /**
+   * Leave without committing; the recording continues.
+   *
+   * `nurNachFehler` holds it back until a commit has actually failed, which is
+   * what the phase step passes. The review there is not optional — the way
+   * back from a mis-tap is the phase stepper in the header, the same way back
+   * as from any other phase step, and a second exit standing open would
+   * quietly turn the review into something that can be skipped.
+   *
+   * But it may not be *absent*, either. The phase stepper is itself a request
+   * (`PUT /api/recording/mode`, which does nothing on a non-200), so with the
+   * local server unreachable the commit fails, the stepper fails, and the only
+   * remaining way off the screen is the unlabelled logo. That is the dead end
+   * CLAUDE.md forbids. Appearing on the first failure satisfies both: nothing
+   * to skip past before trying, and always a way out afterwards.
+   */
+  zurueck?: { aktion: () => void; nurNachFehler?: boolean };
 }
 
 /** Which layer the picker is editing, or a kind of layer being appended. */
@@ -144,8 +185,10 @@ type PickerZiel =
   | { art: 'typ'; index: number }
   | { art: 'neu'; kind: PickerArt; tiefe: number };
 
+const STANDARD_AKTION = { label: 'Beenden', laufend: 'Wird beendet…' };
+
 export function GeologieBestaetigung({
-  sessionId, elementName, onBeenden, onZurueck,
+  sessionId, elementName, onBeenden, aktion = STANDARD_AKTION, zurueck,
 }: Props) {
   const [profil, setProfil] = useState<Profil | null>(null);
   /** The planned layers, for the quick picker and its "Vorgabe" marker. */
@@ -490,11 +533,13 @@ export function GeologieBestaetigung({
             a screen whose other control is dead — "error states must be
             recoverable", and a screen with two dead buttons is a dead end.
           */}
-          <button style={styles.zurueck} onClick={onZurueck}>
-            Zurück zur Aufzeichnung
-          </button>
+          {zurueck && (!zurueck.nurNachFehler || fehler) && (
+            <button style={styles.zurueck} onClick={zurueck.aktion}>
+              Zurück zur Aufzeichnung
+            </button>
+          )}
           <button style={styles.beenden} onClick={beenden} disabled={sendet}>
-            {sendet ? 'Wird beendet…' : 'Beenden'}
+            {sendet ? aktion.laufend : aktion.label}
           </button>
         </div>
       </div>
@@ -506,8 +551,8 @@ export function GeologieBestaetigung({
 
       {!laden && !profil && (
         <div style={styles.leer}>
-          Für dieses Element liegt kein Geologieprofil vor. Mit „Beenden" wird die
-          Aufzeichnung ohne Geologie abgeschlossen.
+          Für dieses Element liegt kein Geologieprofil vor. Mit „{aktion.label}"
+          wird ohne Geologie weitergearbeitet.
         </div>
       )}
 

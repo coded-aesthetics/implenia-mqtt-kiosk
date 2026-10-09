@@ -268,7 +268,14 @@ What follows from this, and must not be broken:
   (`POST /api/recording/geology`) carries only a ground-type number; the server
   dates the reading at its latest depth reading. A client-measured depth would
   have to be matched back to a reading, and a client one sample out of step
-  produces nothing.
+  produces nothing. The same route **refuses outright once drilling has ended**
+  (`drilling_ended_at` set): the newest reading is then a retraction reading,
+  outside the window every geology read is bounded by, so the entry would be
+  written, answered with a depth, shown as recorded — and absent from every
+  profile. The buttons and the voice commands are gated on the *browser's* view
+  of the mode, which a second tab does not share, so the server cannot rely on
+  them. Clamping onto the last drilling reading instead would silently assert
+  the operator saw that ground at the bottom of the hole.
 - **The depth sensor is resolved by role, never by name.** It is `Bohrtiefe` for
   Injektionsbohren and Ankerbohren but `Tiefe` for DSV
   (`findSensorNameByRole('depth')`). Note that web's reader hardcodes
@@ -323,15 +330,15 @@ an ordinary thin layer, and entering and leaving it are two ordinary code
 changes. web's existing reader renders it correctly with no change at all, and
 the profile survives the round trip through the series without loss.
 
-### The profile committed at stop is complete
+### Every committed profile is complete
 
 A profile is flat and gapless — each layer runs to the next, the last to the
 bottom — so **partial geology is not representable**: a single code asserts the
 ground continues to the bottom of the hole. There is no way to record "sand
 from 2 m, and no claim below that".
 
-Every stop that followed real drilling therefore commits a **complete profile**,
-with the stretches the operator never confirmed back-filled from the
+Every commit that followed real drilling therefore writes a **complete
+profile**, with the stretches the operator never confirmed back-filled from the
 Schichtauftrag (`Geologie n` / `Tiefe Geologie n`, parsed by
 `vorgabe-geology.ts`). That is the only option that neither discards what the
 operator saw nor invents a boundary they rejected. Back-filled boundaries are
@@ -340,15 +347,16 @@ marked in the **`Geologie` text with a ` (Vorgabe)` suffix** —
 survives the trip: the backend stores numbers and strings, `GeoDIN` has no room
 for it, and `Geologie` has no other writer.
 
-**The back-fill is server-side, on every stop path.** `geology-profile.ts`
-builds the profile, and `POST /api/recording/stop` commits it whether or not the
-request carried one. The touchscreen's sign-off screen is therefore a *review
-step, not a gate*: a stop by voice, from a second browser tab, or straight from
-the recording bar produces the same profile as a reviewed one. The screen edits
-what the server built rather than deriving its own, so there is one
-implementation and one answer — which is also why the voice stop deliberately
-does **not** route through the sign-off (a hands-free operator would have no
-spoken way off that screen).
+**The back-fill is server-side, on every commit path.** `geology-profile.ts`
+builds the profile; `POST /api/recording/geology/commit` and
+`POST /api/recording/stop` both commit it whether or not the request carried
+one. The touchscreen's sign-off screen is therefore a *review step, not a gate*:
+a stop by voice, from a second browser tab, or straight from the recording bar
+produces the same profile as a reviewed one. The screen edits what the server
+built rather than deriving its own, so there is one implementation and one
+answer — which is also why the voice stop deliberately does **not** route
+through the sign-off (a hands-free operator would have no spoken way off that
+screen).
 
 Two rules inside the merge are easy to get wrong:
 
@@ -370,16 +378,81 @@ recording was stopped, and stops a client labelling a layer as something it is
 not. Nothing in implenia-web reads this series; `GeoDIN` is what layers come
 from.
 
+### The sign-off happens when drilling ends, not when the recording does
+
+The review is shown at the **step out of `bohren`** — the phase stepper moving
+to Austausch — and only as a backstop at Beenden, for a session that never left
+drilling. The operator's memory is the reason: a recording runs on through
+Austausch, Einbauen and Auffüllen, so the stop may be an hour later or the next
+day. Nothing is lost by asking earlier, because the profile is already final at
+that step — nothing after it adds a drilling depth.
+
+Three things make it correct rather than merely kinder, and none may be broken:
+
+- **`drilling_ended_at` bounds every geology read.** The operating mode never
+  reaches a reading — `session_readings.phase` is only `bohren` or
+  `rohrwechsel` — so a depth recorded while the rig retracts is stored as
+  drilling data. Without the bound, retraction widens `alignBoundaries`'
+  tolerance (the only guard against the fabricated `zuFlach` layers), lets a
+  boundary be dated on the way back up, and inflates `drilledDepth`, which is
+  `max − min`. `drillingWindowEnd` in geology.ts owns it.
+- **The mode is switched before the screen opens.** The rig may start
+  retracting the moment the operator taps, and a server that still thinks
+  `bohren` reads the Klemmbacke as a pipe change and records the retraction as
+  drilling data. The review may wait; the clipping behaviour may not.
+- **`geology_confirmed_at` keeps it to once, and a step back into `bohren`
+  clears both marks.** A profile already signed off is not rebuilt at the stop:
+  rebuilding re-derives the back-fill, so a planned boundary the operator
+  deleted would quietly come back. An operator who resumes drilling is asked
+  again, about the deeper hole.
+
+**Known deviation: a rejected boundary is not remembered across a re-ask.**
+Nothing records that the operator *deleted* a planned boundary — `observedOnly`
+can recover what was written, never what was refused. So on a resumed element
+the step back into `bohren` clears the sign-off, the next step out rebuilds the
+context, and `mergeProfile` re-adds every Vorgabe boundary: one the operator
+explicitly deleted at the first sign-off reappears (dashed) at the second and is
+committed unless they delete it again. Within a single sign-off the deletion
+holds, which is the common case; fixing it across one properly means persisting
+rejections, not special-casing the rebuild.
+
+**One button, two consequences — never selected by the operating mode.** Which
+button the sign-off screen shows comes from `?beenden=1` in the route, set by
+the recording bar's stop. It was derived from `operatingMode`, and that is
+wrong twice over: a Beenden on a session already past `bohren` (its phase-step
+sign-off skipped because the context fetch failed) got a button that committed
+and returned while the recording kept running, and `operatingMode` is null until
+the first `recording-state` message, so a reload on this screen briefly offered
+*the other* consequence under the same button — one tap ended a recording
+mid-Austausch. A URL survives a reload and a PM2 restart; WebSocket state does
+not. Anything that decides what a button *does* belongs in the former.
+
+**A re-commit must keep its provenance.** The commit was always repeatable and
+is now routinely repeated, which made a latent bug reachable: reading the
+committed `GeoDIN` series back marks every boundary as observed, the kiosk's own
+back-fill included, so the profile keeps its shape and silently loses the
+` (Vorgabe)` suffix. `observedOnly` in geology.ts joins the two series on
+`received_at` and drops the back-filled rows — **after** web's change detection,
+never before. Before it, an observation repeated either side of a back-filled
+boundary of another type becomes two consecutive identical codes, the second
+reads as "no change", and a real layer disappears.
+
+The sign-off screen has **one** forward button at the phase step
+(`Weiter zum Austausch`) and no second exit: the way back from a mis-tapped
+phase step is the phase stepper, which stays in the header on that screen for
+exactly that. A second exit there would quietly make the review skippable.
+
 ### Per project
 
 - **implenia-mqtt-kiosk** — `depth-timestamp.ts` owns the inversion (pure,
   unit-tested); `geology-profile.ts` owns the merge; `geology.ts` owns the
   write, the provenance and the idempotent re-commit; `vorgabe-geology.ts`
   parses the planned profile.
-  `POST /api/recording/stop` takes an optional `geology` body and commits it
-  **before** ending the session, because ending it is what releases the
-  auto-upload. A re-commit removes the previous commit's `pending` readings
-  only, so nothing already on the platform is touched. The stop is never
+  `POST /api/recording/geology/commit` is the normal write, at the step out of
+  `bohren`; `POST /api/recording/stop` takes the same optional `geology` body
+  and commits **before** ending the session, because ending it is what releases
+  the auto-upload. A re-commit removes the previous commit's `pending` readings
+  only, so nothing already on the platform is touched. Neither route is ever
   refused over its geology: a malformed profile costs the geology and nothing
   else.
 - **implenia-web** — `herstellungLayersFromRows`

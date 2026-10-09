@@ -211,23 +211,29 @@ export function drilledDepth(samples: readonly DepthSample[]): number {
  *
  * `codes` and `samples` are matched on exact `receivedAt`, which is the same
  * join web performs.
+ *
+ * Each layer carries the `receivedAt` it was detected at. Change detection is
+ * what makes that worth returning: a caller cannot re-derive which reading a
+ * layer came from by looking at depths, because a dropped reading changes the
+ * detection. Geology uses it to look the layer's `Geologie` text up and tell
+ * an observation from a boundary a previous commit back-filled.
  */
 export function observedLayers(
   samples: readonly DepthSample[],
   codes: readonly { receivedAt: number; nr: number }[],
-): { tiefe: number; nr: number }[] {
+): { receivedAt: number; tiefe: number; nr: number }[] {
   const depthAt = new Map<number, number>();
   for (const s of samples) {
     if (Number.isFinite(s.depth)) depthAt.set(s.receivedAt, s.depth);
   }
 
-  const layers: { tiefe: number; nr: number }[] = [];
+  const layers: { receivedAt: number; tiefe: number; nr: number }[] = [];
   let lastNr: number | null = null;
   for (const c of [...codes].sort((a, b) => a.receivedAt - b.receivedAt)) {
     const depth = depthAt.get(c.receivedAt);
     if (depth === undefined || !Number.isFinite(c.nr)) continue;
     if (c.nr !== lastNr) {
-      layers.push({ tiefe: depth, nr: c.nr });
+      layers.push({ receivedAt: c.receivedAt, tiefe: depth, nr: c.nr });
       lastNr = c.nr;
     }
   }

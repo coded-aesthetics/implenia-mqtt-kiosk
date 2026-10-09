@@ -20,7 +20,8 @@ import { GeologieBestaetigung } from './components/GeologieBestaetigung';
 import { VerpressenScreen, INJEKTIONSBOHREN_VERPRESSEN } from './components/VerpressenScreen';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
-import { isVerpressenMode } from './utils/operating-mode';
+import { isVerpressenMode, MODE_LABELS } from './utils/operating-mode';
+import { shouldConfirmGeology } from './utils/geology-stop';
 import { GeologiePicker } from './components/GeologiePicker';
 import { useGeologieErfassung } from './hooks/useGeologieErfassung';
 import { buildSchichten, collectVorgabeEntries } from './utils/vorgaben';
@@ -124,18 +125,65 @@ export function App() {
    * authoritative, so a failed request simply leaves the segment where it was —
    * visibly a no-op the operator can repeat. The only failure the endpoint has
    * is "no session", and the switch is not shown without one.
+   *
+   * ── The step out of Bohren shows the geology sign-off ──────
+   *
+   * Drilling is over at that step and the profile is final, while the recording
+   * runs on through Austausch, Einbauen and Auffüllen — possibly into the next
+   * day. Confirming the ground here is confirming it while the hole is still
+   * fresh in mind, which is the whole reason the review moved off the stop.
+   *
+   * **The mode is switched first, then the screen opens.** The rig may start
+   * retracting the moment the operator taps, and a server that still thinks
+   * `bohren` reads the Klemmbacke as a pipe change and records the retraction
+   * as drilling data — which would corrupt the very depth series the geology
+   * aligns against. The review may wait; the clipping behaviour may not.
+   *
+   * The request is also what stamps `drilling_ended_at`, so the profile is
+   * built from drilling alone however long the operator spends reviewing it.
+   *
+   * Stepping *back* into `bohren` leaves the screen again, because the server
+   * has just cleared the sign-off and the window: the hole is going to get
+   * deeper, and the profile with it.
    */
   const setOperatingMode = useCallback(async (mode: OperatingMode) => {
+    const vorher = recordingState.operatingMode;
+    const sessionId = recordingState.sessionId;
     try {
-      await fetch('/api/recording/mode', {
+      const res = await fetch('/api/recording/mode', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, sessionId: recordingState.sessionId }),
+        body: JSON.stringify({ mode, sessionId }),
       });
+      if (!res.ok) return;
     } catch {
       // See above: the switch is server-rendered, so nothing moved.
+      return;
     }
-  }, [recordingState.sessionId]);
+
+    if (mode === 'bohren') {
+      if (route.page === 'geologie') {
+        const name = recordingState.elementName ?? route.params.name;
+        navigate(name ? `bohren/${encodeURIComponent(name)}` : '');
+      }
+      return;
+    }
+
+    // Only the step that ends drilling, and only once per session — a step on
+    // from Austausch to Einbauen has nothing new to confirm.
+    if (vorher !== 'bohren' || !recordingState.active || sessionId === null) return;
+    if (await shouldConfirmGeology(sessionId)) {
+      // Same fallback as every other navigation here: the step is tapped from
+      // the drilling screen, whose route already names the element, so a
+      // recording state that has not caught up yet still lands on the element's
+      // own profile rather than a nameless one.
+      const name = recordingState.elementName ?? route.params.name;
+      navigate(name ? `geologie/${encodeURIComponent(name)}` : 'geologie');
+    }
+  }, [
+    recordingState.sessionId, recordingState.operatingMode, recordingState.active,
+    recordingState.elementName, route.page, route.params.name,
+  ]);
 
   /**
    * Live geology entry, assembled here because two places need the same state:
@@ -247,17 +295,106 @@ export function App() {
       break;
     }
     /**
-     * The geology sign-off, between "Beenden" and the session actually ending.
+     * The geology sign-off.
      *
-     * The commit and the stop are one request: the server writes the geology
-     * readings and only then ends the session, because ending it is what
-     * releases the auto-upload. See the stop route.
+     * Two entry points, told apart by **`?beenden=1` in the route**:
+     *
+     * — **The phase step out of `bohren`** — the normal path, with no flag.
+     *   Drilling has just ended and the recording continues, so the commit is
+     *   its own request and the operator carries on to the next phase.
+     * — **Beenden** — the backstop, with the flag. There the commit and the
+     *   stop are one request: the server writes the geology readings and only
+     *   then ends the session, because ending it is what releases the
+     *   auto-upload. See the stop route.
+     *
+     * The flag rather than the operating mode, which is what this once read.
+     * The mode answers "which phase is the rig in", not "what did the operator
+     * ask for", and the two come apart in both directions. A Beenden on a
+     * session already past `bohren` — the sign-off there was skipped because
+     * its context fetch failed, or left without committing — would have been
+     * answered by a button that commits and returns, leaving the recording
+     * running and the operator tapping Beenden twice. And `operatingMode` is
+     * null until the first `recording-state` message arrives, so a reload on
+     * this screen briefly offered *the opposite consequence* under the same
+     * button: one tap in that window ended a recording mid-Austausch, with
+     * Einbauen and Auffüllen never recorded and the upload released early.
+     * The URL survives a reload and a PM2 restart; the WebSocket state does
+     * not.
      */
     case 'geologie': {
-      content = (
+      const name = recordingState.elementName ?? route.params.name;
+      const zurueck = (): void => navigate(name ? `bohren/${encodeURIComponent(name)}` : '');
+      const mode = recordingState.operatingMode;
+      const nachBohren = route.query.beenden !== '1';
+
+      content = nachBohren ? (
         <GeologieBestaetigung
           sessionId={recordingState.sessionId}
-          elementName={recordingState.elementName ?? route.params.name}
+          elementName={name}
+          aktion={{
+            // Naming the phase needs the mode, which is null until the first
+            // `recording-state` message. A bare "Weiter" until then rather
+            // than "Weiter zum undefined" — safe to fill in under the finger,
+            // because both spellings of this button do the same thing. The
+            // variant itself must never be decided this way; see above.
+            label: isVerpressenMode(mode)
+              ? `Weiter zum ${MODE_LABELS[mode as OperatingMode]}`
+              : 'Weiter',
+            laufend: 'Wird gespeichert…',
+          }}
+          onBeenden={async (layers) => {
+            try {
+              const res = await fetch('/api/recording/geology/commit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ geology: layers }),
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok) {
+                return data.error
+                  || `Das Geologieprofil konnte nicht gespeichert werden (Fehler ${res.status}). Bitte erneut versuchen.`;
+              }
+              /*
+               * A 200 that wrote no boundary means the profile is lost — a
+               * malformed body, no depth readings, sensors that would not
+               * resolve. The route answers 200 on purpose, because the
+               * measurements are fine and nothing may stand between the
+               * operator and the next phase; but it marks the session confirmed
+               * either way, so the stop will not ask again. Swallowing the
+               * message here would make that loss completely silent.
+               *
+               * Shown rather than navigated past, which keeps the button
+               * available for a retry. The way on without one is the phase
+               * stepper in the header, the same way back as from any step.
+               *
+               * A commit that *did* write is never held up, even with a hinweis
+               * attached: that one reports layers the server discarded as
+               * incomplete, which retrying cannot change, so trapping the
+               * operator over it would buy nothing.
+               */
+              const geschrieben = Number(data.geology?.geschrieben ?? 0);
+              if (geschrieben === 0 && typeof data.hinweis === 'string' && data.hinweis) {
+                return data.hinweis;
+              }
+              zurueck();
+              return null;
+            } catch (err) {
+              return `Das Geologieprofil konnte nicht gespeichert werden: ${(err as Error).message}`;
+            }
+          }}
+          /*
+           * Held back until a commit has failed. The review is not optional, so
+           * nothing stands open to skip past; but the phase stepper — the way
+           * back from a mis-tap — is itself a request, so a local server that
+           * cannot be reached would otherwise leave both controls dead and the
+           * screen a dead end.
+           */
+          zurueck={{ aktion: zurueck, nurNachFehler: true }}
+        />
+      ) : (
+        <GeologieBestaetigung
+          sessionId={recordingState.sessionId}
+          elementName={name}
           onBeenden={async (layers) => {
             try {
               const res = await fetch('/api/recording/stop', {
@@ -269,17 +406,13 @@ export function App() {
                 const data = await res.json().catch(() => ({}));
                 return data.error || `Die Aufzeichnung konnte nicht beendet werden (Fehler ${res.status}).`;
               }
-              const name = recordingState.elementName ?? route.params.name;
-              navigate(name ? `bohren/${encodeURIComponent(name)}` : '');
+              zurueck();
               return null;
             } catch (err) {
               return `Die Aufzeichnung konnte nicht beendet werden: ${(err as Error).message}`;
             }
           }}
-          onZurueck={() => {
-            const name = recordingState.elementName ?? route.params.name;
-            navigate(name ? `bohren/${encodeURIComponent(name)}` : '');
-          }}
+          zurueck={{ aktion: zurueck }}
         />
       );
       pageTitle = 'Geologie';
