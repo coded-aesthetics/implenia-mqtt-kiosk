@@ -72,7 +72,13 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
       {/* Center: page title + phase badge */}
       <div style={styles.centerSection}>
         {pageTitle && <span style={styles.pageTitle}>{pageTitle}</span>}
-        {operatingMode && (currentPage === 'element' || currentPage === 'bohren') && (
+        {/*
+          Also on `geologie`, where it is the only way off the screen besides
+          committing: the sign-off has one forward button and no second exit, so
+          the way back from a mis-tapped phase step is the step itself. One way
+          back, the same one as everywhere else.
+        */}
+        {operatingMode && (currentPage === 'element' || currentPage === 'bohren' || currentPage === 'geologie') && (
           <PhaseStepper mode={operatingMode} onChange={onModeChange} />
         )}
       </div>

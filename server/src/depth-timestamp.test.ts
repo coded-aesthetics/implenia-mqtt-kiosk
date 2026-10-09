@@ -214,13 +214,24 @@ describe('drilledDepth', () => {
 });
 
 describe('observedLayers', () => {
+  /**
+   * The layers without the reading each was detected at.
+   *
+   * `observedLayers` carries the `receivedAt` so geology can look a layer's
+   * `Geologie` text up and tell an observation from a back-filled boundary;
+   * these cases are about the depths and ground types, so they drop it.
+   */
+  const ohneZeit = (
+    layers: readonly { receivedAt: number; tiefe: number; nr: number }[],
+  ): { tiefe: number; nr: number }[] => layers.map(({ tiefe, nr }) => ({ tiefe, nr }));
+
   it('reads a GeoDIN series back the way implenia-web does', () => {
     const samples = descent(T0, 0, 5);
     const codes = [
       { receivedAt: T0, nr: 5 },
       { receivedAt: T0 + 5000, nr: 9 },
     ];
-    expect(observedLayers(samples, codes)).toEqual([
+    expect(ohneZeit(observedLayers(samples, codes))).toEqual([
       { tiefe: 0, nr: 5 },
       { tiefe: 2.5, nr: 9 },
     ]);
@@ -241,7 +252,7 @@ describe('observedLayers', () => {
     // the cost of a misaligned write is visible in the test suite.
     const samples = descent(T0, 0, 5);
     const codes = [{ receivedAt: T0 + 2500, nr: 9 }]; // between samples
-    expect(observedLayers(samples, codes)).toEqual([]);
+    expect(ohneZeit(observedLayers(samples, codes))).toEqual([]);
   });
 
   it('round-trips an aligned profile back to the depths it came from', () => {
@@ -256,13 +267,26 @@ describe('observedLayers', () => {
     const { aligned } = alignBoundaries(samples, profile.map((l) => l.tiefe));
     const codes = aligned.map((a, i) => ({ receivedAt: a.receivedAt, nr: profile[i].nr }));
 
-    expect(observedLayers(samples, codes)).toEqual([
+    expect(ohneZeit(observedLayers(samples, codes))).toEqual([
       { tiefe: 0, nr: 5 },
       { tiefe: 2.5, nr: 9 },
       { tiefe: 4, nr: 60 },
       { tiefe: 4.5, nr: 9 },
       { tiefe: 7, nr: 10 },
     ]);
+  });
+
+  it('carries the reading each layer was detected at', () => {
+    // What geology.ts joins the `Geologie` text on to recover provenance. A
+    // depth cannot stand in for it: change detection means a layer's depth
+    // says nothing about which reading produced it.
+    const samples = descent(T0, 0, 5);
+    const codes = [
+      { receivedAt: T0, nr: 5 },
+      { receivedAt: T0 + 5000, nr: 9 },
+    ];
+    expect(observedLayers(samples, codes).map((l) => l.receivedAt))
+      .toEqual([T0, T0 + 5000]);
   });
 
   it('round-trips depths that do not sit on the sampling grid', () => {
@@ -277,7 +301,7 @@ describe('observedLayers', () => {
 
     // The ground types survive exactly; the depths land on the readings that
     // first reached them, which is where web will read them off too.
-    expect(observedLayers(samples, codes)).toEqual([
+    expect(ohneZeit(observedLayers(samples, codes))).toEqual([
       { tiefe: 0, nr: 5 },
       { tiefe: 2.5, nr: 9 },
       { tiefe: 7, nr: 10 },

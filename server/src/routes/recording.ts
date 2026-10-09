@@ -3,7 +3,7 @@ import { beginRecording, endRecording, uploadSession, getRecordingState, tryAuto
 import {
   getSessions, getSessionById, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
   getSessionReadingCount, setOperatingModeRow, getMostRecentSession, getCompletedElements,
-  unclipSessionReadings, getActiveSession,
+  unclipSessionReadings, getActiveSession, setDrillingEndedAt, setGeologyConfirmedAt,
 } from '../db.js';
 import {
   commitDefaultGeology, commitGeology, getGeologyContext, recordLiveLayer,
@@ -102,10 +102,12 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
    * auto-upload. Committing afterwards would race the upload and, on a fast
    * link, leave the geology behind for a later retry that never comes.
    *
-   * **A stop with no profile still back-fills.** Where the body carries none,
-   * the server builds the same profile the sign-off screen would have shown —
-   * the observations with the Vorgabe filling what was never confirmed — and
-   * commits that. This is what makes the sign-off a review step rather than a
+   * **A stop with no profile still back-fills** — unless the operator already
+   * signed one off at the step out of `bohren`, in which case it is already
+   * committed and this route leaves it alone. Where neither applies, the server
+   * builds the same profile the sign-off screen would have shown — the
+   * observations with the Vorgabe filling what was never confirmed — and
+   * commits that. This is what keeps the sign-off a review step rather than a
    * gate: stopping by voice, from a second tab, or straight from the recording
    * bar produces the same complete profile as reviewing it. A Verfahren without
    * geology, and a session that never really drilled, commit nothing and stop
@@ -131,9 +133,25 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
          * which the stop button must still work.
          */
         try {
+          /*
+           * A profile already signed off is left exactly as it is.
+           *
+           * The sign-off happens at the step out of `bohren`, which commits
+           * there — so by the time the stop runs the readings are in
+           * `session_readings` and still `pending`, which is all the upload
+           * needs. Rebuilding here would undo the operator's edits: the
+           * rebuild re-derives the back-fill from the Schichtauftrag, so a
+           * planned boundary they deleted on the sign-off screen would quietly
+           * come back.
+           *
+           * A step back into `bohren` clears the mark, so a session that
+           * resumed drilling commits again from the deeper hole.
+           */
           geology = layers.length > 0
             ? commitGeology(active, layers)
-            : commitDefaultGeology(active) ?? undefined;
+            : active.geology_confirmed_at != null
+              ? undefined
+              : commitDefaultGeology(active) ?? undefined;
         } catch (err) {
           log.error('Session %d: geology commit failed: %s', active.id, (err as Error).message);
           geologieFehler = 'Das Geologieprofil konnte nicht gespeichert werden. '
@@ -210,6 +228,63 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       return reply.send({ nr, ...result });
     },
   );
+
+  /**
+   * Commit the reviewed geology profile and carry on recording.
+   *
+   * The sign-off at the step out of `bohren`: drilling is over, so the profile
+   * is final, but the element is not — Austausch, Einbauen and Auffüllen still
+   * have to happen, and the upload is released by the stop as it always was.
+   *
+   * This is where the profile is written for all but the sessions that never
+   * leave `bohren`. Doing it here rather than at the stop is the point of the
+   * whole arrangement: the operator confirms the ground while the drilling is
+   * still fresh, an hour or a day before the recording ends.
+   *
+   * **Never refused over its geology.** A profile that cannot be committed
+   * costs the profile and nothing else: the mark is still set, the operator
+   * still gets to Austausch, and the measurements upload normally. Leaving them
+   * stuck on a review screen whose only button fails is the dead end this
+   * software does not get to have.
+   */
+  app.post('/api/recording/geology/commit', async (request, reply) => {
+    const session = getActiveSession();
+    if (!session) {
+      return reply.status(409).send({
+        error: 'Es läuft keine Aufzeichnung. Bitte zuerst die Aufzeichnung starten.',
+      });
+    }
+
+    const { layers, hinweis } = readGeologyBody(request.body);
+    let geology: GeologyCommitResult | undefined;
+    let geologieFehler: string | undefined;
+    try {
+      geology = layers.length > 0
+        ? commitGeology(session, layers)
+        : commitDefaultGeology(session) ?? undefined;
+    } catch (err) {
+      log.error('Session %d: geology commit failed: %s', session.id, (err as Error).message);
+      geologieFehler = 'Das Geologieprofil konnte nicht gespeichert werden. '
+        + 'Die Messwerte sind vollständig und werden normal hochgeladen.';
+    }
+
+    /*
+     * Marked confirmed even when the commit failed.
+     *
+     * The alternative is asking again at the stop, which would re-run exactly
+     * the write that just failed and put the operator back on this screen — at
+     * the one moment they are trying to finish the element. The failure is
+     * logged and shown here, once.
+     */
+    setGeologyConfirmedAt(session.id, Date.now());
+    log.info('Session %d: geology confirmed (%d boundaries)', session.id, geology?.geschrieben ?? 0);
+
+    const hinweise = [hinweis, geologieFehler, geology?.hinweis].filter(Boolean);
+    return reply.send({
+      geology,
+      ...(hinweise.length > 0 ? { hinweis: hinweise.join(' ') } : {}),
+    });
+  });
 
   /**
    * Everything the geology confirmation screen needs: the planned profile to
@@ -315,6 +390,27 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       return reply.status(400).send({ error: 'Bitte einen gültigen Modus angeben (bohren, austausch, einbauen, auffuellen).' });
     }
     if (ingestion.operatingMode) {
+      /*
+       * Stepping out of `bohren` is what ends drilling, and stepping back in is
+       * what resumes it.
+       *
+       * Both are stamped on the session before the mode moves, because every
+       * geology read is bounded by `drilling_ended_at` — see
+       * `drillingWindowEnd` in geology.ts. The order matters in the other
+       * direction too: a step back has to clear the sign-off *and* the window,
+       * or the operator drills deeper into a hole whose profile was already
+       * settled and nothing ever asks them about the new ground.
+       */
+      const active = getActiveSession();
+      if (active) {
+        const vorher = active.operating_mode;
+        if (vorher === 'bohren' && mode !== 'bohren') {
+          if (active.drilling_ended_at == null) setDrillingEndedAt(active.id, Date.now());
+        } else if (vorher !== 'bohren' && mode === 'bohren') {
+          setDrillingEndedAt(active.id, null);
+          setGeologyConfirmedAt(active.id, null);
+        }
+      }
       ingestion.setOperatingMode(mode);
       broadcastMessage({ type: 'operating-mode', mode });
       return reply.send({ mode });

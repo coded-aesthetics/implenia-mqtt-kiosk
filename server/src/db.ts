@@ -13,6 +13,16 @@ export interface Session {
   ended_at: number | null;
   status: 'recording' | 'ended' | 'uploading' | 'uploaded' | 'partial';
   operating_mode: string;
+  /**
+   * When the rig stopped drilling: the moment the operator stepped out of
+   * `bohren`. Null while still drilling, and cleared again by a step back.
+   *
+   * Geology reads the depth series up to this instant and no further. See
+   * `drillingWindowEnd` in geology.ts for why that matters.
+   */
+  drilling_ended_at: number | null;
+  /** When the operator signed the geology profile off, if they have. */
+  geology_confirmed_at: number | null;
 }
 
 export interface SessionStats {
@@ -206,6 +216,17 @@ db.exec(`
   if (!has('operating_mode')) {
     db.exec("ALTER TABLE recording_sessions ADD COLUMN operating_mode TEXT NOT NULL DEFAULT 'bohren'");
   }
+  // When drilling ended, and when the operator signed off the geology — both
+  // written by the step out of `bohren`, both cleared by a step back into it.
+  // Persisted rather than held in memory because a PM2 restart mid-element
+  // must not re-ask for a profile that was already confirmed, nor widen the
+  // depth window the profile was built from.
+  if (!has('drilling_ended_at')) {
+    db.exec('ALTER TABLE recording_sessions ADD COLUMN drilling_ended_at INTEGER');
+  }
+  if (!has('geology_confirmed_at')) {
+    db.exec('ALTER TABLE recording_sessions ADD COLUMN geology_confirmed_at INTEGER');
+  }
 }
 
 {
@@ -315,6 +336,42 @@ const getSensorSeriesStmt = db.prepare(`
   FROM session_readings
   WHERE session_id = ? AND sensor_id = ? AND upload_status != 'clipped'
     AND value_numeric IS NOT NULL
+  ORDER BY received_at ASC
+`);
+// The same two reads, bounded to the end of drilling.
+//
+// Separate statements rather than a `received_at <= COALESCE(?, …)` because
+// better-sqlite3 prepares once and the planner is better off with the bound as
+// a plain comparison. See `drillingWindowEnd` in geology.ts for what the bound
+// is worth: readings taken while the rig retracts are stored with
+// `phase = 'bohren'` too, so without it the depth series the geology aligns
+// against contains the whole way back up.
+const getDepthSamplesUntilStmt = db.prepare(`
+  SELECT received_at, value_numeric
+  FROM session_readings
+  WHERE session_id = ? AND sensor_id = ?
+    AND phase = 'bohren' AND upload_status != 'clipped'
+    AND value_numeric IS NOT NULL
+    AND received_at <= ?
+  ORDER BY received_at ASC
+`);
+const getSensorSeriesUntilStmt = db.prepare(`
+  SELECT received_at, value_numeric
+  FROM session_readings
+  WHERE session_id = ? AND sensor_id = ? AND upload_status != 'clipped'
+    AND value_numeric IS NOT NULL
+    AND received_at <= ?
+  ORDER BY received_at ASC
+`);
+// The text counterpart of getSensorSeriesStmt. Geology needs it to tell its
+// own back-filled boundaries apart from the operator's observations when it
+// reads a committed profile back — the ` (Vorgabe)` suffix in `Geologie` is
+// the only place that provenance survives.
+const getSensorTextSeriesStmt = db.prepare(`
+  SELECT received_at, value_text
+  FROM session_readings
+  WHERE session_id = ? AND sensor_id = ? AND upload_status != 'clipped'
+    AND value_text IS NOT NULL
   ORDER BY received_at ASC
 `);
 // The oldest recorded value of one sensor, used to rebuild the volume tracker's
@@ -565,6 +622,29 @@ export function getOperatingMode(sessionId: number): string | null {
   return row?.operating_mode ?? null;
 }
 
+const setDrillingEndedAtStmt = db.prepare(
+  'UPDATE recording_sessions SET drilling_ended_at = ? WHERE id = ?'
+);
+const setGeologyConfirmedAtStmt = db.prepare(
+  'UPDATE recording_sessions SET geology_confirmed_at = ? WHERE id = ?'
+);
+
+/**
+ * Mark when drilling ended, or clear it with null.
+ *
+ * Set by the step out of `bohren` and cleared by the step back, so a session
+ * that resumes drilling widens its own geology window again rather than
+ * keeping a profile built from a hole that has since got deeper.
+ */
+export function setDrillingEndedAt(sessionId: number, at: number | null): void {
+  setDrillingEndedAtStmt.run(at, sessionId);
+}
+
+/** Mark the geology profile as signed off, or clear it with null. */
+export function setGeologyConfirmedAt(sessionId: number, at: number | null): void {
+  setGeologyConfirmedAtStmt.run(at, sessionId);
+}
+
 export function setOperatingModeRow(sessionId: number, mode: string): void {
   setOperatingModeStmt.run(mode, sessionId);
 }
@@ -740,19 +820,40 @@ export interface SeriesPoint {
  *
  * See getDepthSamplesStmt for why each filter is there.
  */
-export function getSessionDepthSamples(sessionId: number, sensorId: string): SeriesPoint[] {
-  const rows = getDepthSamplesStmt.all(sessionId, sensorId) as {
+export function getSessionDepthSamples(
+  sessionId: number, sensorId: string, bis?: number | null,
+): SeriesPoint[] {
+  const rows = (bis == null
+    ? getDepthSamplesStmt.all(sessionId, sensorId)
+    : getDepthSamplesUntilStmt.all(sessionId, sensorId, bis)) as {
     received_at: number; value_numeric: number;
   }[];
   return rows.map((r) => ({ receivedAt: r.received_at, value: r.value_numeric }));
 }
 
-/** Every recorded value of one sensor in a session, oldest first. */
-export function getSessionSensorSeries(sessionId: number, sensorId: string): SeriesPoint[] {
-  const rows = getSensorSeriesStmt.all(sessionId, sensorId) as {
+/**
+ * Every recorded value of one sensor in a session, oldest first — up to `bis`
+ * where one is given.
+ */
+export function getSessionSensorSeries(
+  sessionId: number, sensorId: string, bis?: number | null,
+): SeriesPoint[] {
+  const rows = (bis == null
+    ? getSensorSeriesStmt.all(sessionId, sensorId)
+    : getSensorSeriesUntilStmt.all(sessionId, sensorId, bis)) as {
     received_at: number; value_numeric: number;
   }[];
   return rows.map((r) => ({ receivedAt: r.received_at, value: r.value_numeric }));
+}
+
+/** Every recorded *text* value of one sensor in a session, oldest first. */
+export function getSessionSensorTextSeries(
+  sessionId: number, sensorId: string,
+): { receivedAt: number; text: string }[] {
+  const rows = getSensorTextSeriesStmt.all(sessionId, sensorId) as {
+    received_at: number; value_text: string;
+  }[];
+  return rows.map((r) => ({ receivedAt: r.received_at, text: r.value_text }));
 }
 
 export interface LatestReading {

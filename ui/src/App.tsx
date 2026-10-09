@@ -20,7 +20,8 @@ import { GeologieBestaetigung } from './components/GeologieBestaetigung';
 import { VerpressenScreen, INJEKTIONSBOHREN_VERPRESSEN } from './components/VerpressenScreen';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
-import { isVerpressenMode } from './utils/operating-mode';
+import { isVerpressenMode, MODE_LABELS } from './utils/operating-mode';
+import { shouldConfirmGeology } from './utils/geology-stop';
 import { GeologiePicker } from './components/GeologiePicker';
 import { useGeologieErfassung } from './hooks/useGeologieErfassung';
 import { buildSchichten, collectVorgabeEntries } from './utils/vorgaben';
@@ -124,18 +125,61 @@ export function App() {
    * authoritative, so a failed request simply leaves the segment where it was —
    * visibly a no-op the operator can repeat. The only failure the endpoint has
    * is "no session", and the switch is not shown without one.
+   *
+   * ── The step out of Bohren shows the geology sign-off ──────
+   *
+   * Drilling is over at that step and the profile is final, while the recording
+   * runs on through Austausch, Einbauen and Auffüllen — possibly into the next
+   * day. Confirming the ground here is confirming it while the hole is still
+   * fresh in mind, which is the whole reason the review moved off the stop.
+   *
+   * **The mode is switched first, then the screen opens.** The rig may start
+   * retracting the moment the operator taps, and a server that still thinks
+   * `bohren` reads the Klemmbacke as a pipe change and records the retraction
+   * as drilling data — which would corrupt the very depth series the geology
+   * aligns against. The review may wait; the clipping behaviour may not.
+   *
+   * The request is also what stamps `drilling_ended_at`, so the profile is
+   * built from drilling alone however long the operator spends reviewing it.
+   *
+   * Stepping *back* into `bohren` leaves the screen again, because the server
+   * has just cleared the sign-off and the window: the hole is going to get
+   * deeper, and the profile with it.
    */
   const setOperatingMode = useCallback(async (mode: OperatingMode) => {
+    const vorher = recordingState.operatingMode;
+    const sessionId = recordingState.sessionId;
     try {
-      await fetch('/api/recording/mode', {
+      const res = await fetch('/api/recording/mode', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, sessionId: recordingState.sessionId }),
+        body: JSON.stringify({ mode, sessionId }),
       });
+      if (!res.ok) return;
     } catch {
       // See above: the switch is server-rendered, so nothing moved.
+      return;
     }
-  }, [recordingState.sessionId]);
+
+    if (mode === 'bohren') {
+      if (route.page === 'geologie') {
+        const name = recordingState.elementName ?? route.params.name;
+        navigate(name ? `bohren/${encodeURIComponent(name)}` : '');
+      }
+      return;
+    }
+
+    // Only the step that ends drilling, and only once per session — a step on
+    // from Austausch to Einbauen has nothing new to confirm.
+    if (vorher !== 'bohren' || !recordingState.active || sessionId === null) return;
+    if (await shouldConfirmGeology(sessionId)) {
+      const name = recordingState.elementName;
+      navigate(name ? `geologie/${encodeURIComponent(name)}` : 'geologie');
+    }
+  }, [
+    recordingState.sessionId, recordingState.operatingMode, recordingState.active,
+    recordingState.elementName, route.page, route.params.name,
+  ]);
 
   /**
    * Live geology entry, assembled here because two places need the same state:
@@ -247,17 +291,57 @@ export function App() {
       break;
     }
     /**
-     * The geology sign-off, between "Beenden" and the session actually ending.
+     * The geology sign-off.
      *
-     * The commit and the stop are one request: the server writes the geology
-     * readings and only then ends the session, because ending it is what
-     * releases the auto-upload. See the stop route.
+     * Two entry points, told apart by the operating mode, because the mode is
+     * switched before the screen opens:
+     *
+     * — **Past `bohren`** — the normal path. Drilling has just ended and the
+     *   recording continues, so the commit is its own request and the operator
+     *   carries on to the next phase. No second exit: the way back from a
+     *   mis-tapped phase step is the phase stepper in the header.
+     * — **Still in `bohren`** — the backstop at Beenden, for a session that
+     *   never left drilling. There the commit and the stop are one request: the
+     *   server writes the geology readings and only then ends the session,
+     *   because ending it is what releases the auto-upload. See the stop route.
      */
     case 'geologie': {
-      content = (
+      const name = recordingState.elementName ?? route.params.name;
+      const zurueck = (): void => navigate(name ? `bohren/${encodeURIComponent(name)}` : '');
+      const mode = recordingState.operatingMode;
+      const nachBohren = isVerpressenMode(mode);
+
+      content = nachBohren ? (
         <GeologieBestaetigung
           sessionId={recordingState.sessionId}
-          elementName={recordingState.elementName ?? route.params.name}
+          elementName={name}
+          aktion={{
+            label: `Weiter zum ${MODE_LABELS[mode as OperatingMode]}`,
+            laufend: 'Wird gespeichert…',
+          }}
+          onBeenden={async (layers) => {
+            try {
+              const res = await fetch('/api/recording/geology/commit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ geology: layers }),
+              });
+              if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                return data.error
+                  || `Das Geologieprofil konnte nicht gespeichert werden (Fehler ${res.status}). Bitte erneut versuchen.`;
+              }
+              zurueck();
+              return null;
+            } catch (err) {
+              return `Das Geologieprofil konnte nicht gespeichert werden: ${(err as Error).message}`;
+            }
+          }}
+        />
+      ) : (
+        <GeologieBestaetigung
+          sessionId={recordingState.sessionId}
+          elementName={name}
           onBeenden={async (layers) => {
             try {
               const res = await fetch('/api/recording/stop', {
@@ -269,17 +353,13 @@ export function App() {
                 const data = await res.json().catch(() => ({}));
                 return data.error || `Die Aufzeichnung konnte nicht beendet werden (Fehler ${res.status}).`;
               }
-              const name = recordingState.elementName ?? route.params.name;
-              navigate(name ? `bohren/${encodeURIComponent(name)}` : '');
+              zurueck();
               return null;
             } catch (err) {
               return `Die Aufzeichnung konnte nicht beendet werden: ${(err as Error).message}`;
             }
           }}
-          onZurueck={() => {
-            const name = recordingState.elementName ?? route.params.name;
-            navigate(name ? `bohren/${encodeURIComponent(name)}` : '');
-          }}
+          onZurueck={zurueck}
         />
       );
       pageTitle = 'Geologie';
