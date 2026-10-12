@@ -37,12 +37,38 @@ import { MODE_LABELS, nextPhase, previousPhase } from '../utils/operating-mode';
  * or a pipe string being held. Reversible, so no tap-to-confirm — confirming
  * every phase change would cost more than the occasional mis-tap, which is one
  * tap to undo.
+ *
+ * ── Ausrichten ────────────────────────────────────────────────────────────
+ *
+ * The alignment screen takes the slot *before* Bohren, for an element whose
+ * Vertikalneigung is not 0. It is **not a phase**: `operating_mode` stays
+ * whatever it was, nothing is recorded differently, and both its slots only
+ * navigate. Making it a mode would have put a screen into the column that
+ * decides Klemmbacke clipping and phase-segmented KPIs, for a step that
+ * happens before there is anything to record.
+ *
+ * It is also the only slot that works **without a recording**: aligning
+ * happens before the session starts, so `mode` is null and the stepper is then
+ * just the one way in — [ ‹ Ausrichten ]. Which keeps the way back to it in
+ * the same place at every point in the element's life, which is the whole
+ * reason it lives here rather than in a button on one screen.
  */
 
+export interface AusrichtenSlot {
+  /** True while the alignment screen is the one on screen. */
+  aktiv: boolean;
+  oeffnen: () => void;
+  /** Leave it again — back to the element's own screen. */
+  schliessen: () => void;
+}
+
 interface Props {
-  mode: OperatingMode;
+  /** Null when nothing is being recorded: there is no phase then. */
+  mode: OperatingMode | null;
   /** Omit for a read-only badge. */
   onChange?: (mode: OperatingMode) => void;
+  /** The alignment screen as the step before Bohren. Omit where it does not apply. */
+  ausrichten?: AusrichtenSlot;
 }
 
 /**
@@ -54,50 +80,133 @@ interface Props {
  */
 const BREITE = 420;
 
-export function PhaseStepper({ mode, onChange }: Props) {
-  const vorher = previousPhase(mode);
-  const nachher = nextPhase(mode);
+const AUSRICHTEN_LABEL = 'Ausrichten';
 
+interface Segment {
+  label: string;
+  art: 'vergangen' | 'aktuell' | 'kommend';
+  onClick?: () => void;
+  /** Background of the current segment. */
+  farbe?: string;
+  ariaLabel?: string;
+  /**
+   * Which way the arrow points, where it is not the one the style implies.
+   *
+   * Only the standalone Ausrichten slot needs it: it is a step *back* from the
+   * drilling screen, so its arrow points left — but it is the one way into the
+   * screen and reads as subdued to the point of looking disabled in the
+   * `vergangen` style.
+   */
+  pfeil?: 'links' | 'rechts';
+}
+
+export function PhaseStepper({ mode, onChange, ausrichten }: Props) {
   if (!onChange) {
+    if (!mode) return null;
     return <span style={{ ...styles.badge, backgroundColor: farbe(mode) }}>{MODE_LABELS[mode]}</span>;
   }
 
+  const segmente = baueSegmente(mode, onChange, ausrichten);
+  if (segmente.length === 0) return null;
+
   return (
-    <div style={{ ...styles.group, width: BREITE }} role="group" aria-label="Phase">
-      {vorher && (
+    <div
+      style={{ ...styles.group, ...(segmente.length > 1 ? { width: BREITE } : {}) }}
+      role="group"
+      aria-label="Phase"
+    >
+      {segmente.map((s, i) => (
         <button
-          style={{ ...styles.segment, ...styles.vergangen }}
-          onClick={() => onChange(vorher)}
-          aria-label={`Zurück zu ${MODE_LABELS[vorher]}`}
+          key={s.label}
+          style={{
+            ...styles.segment,
+            ...styles[s.art],
+            ...(s.farbe ? { backgroundColor: s.farbe } : {}),
+            ...(i > 0 ? styles.trenner : {}),
+          }}
+          // The current phase is already current; tapping it is a no-op rather
+          // than a disabled control, so a mis-tap does nothing instead of
+          // looking broken.
+          onClick={s.onClick ?? (() => {})}
+          aria-current={s.art === 'aktuell' ? 'step' : undefined}
+          aria-label={s.ariaLabel}
         >
-          <span style={styles.pfeil}>‹</span>
-          {MODE_LABELS[vorher]}
+          {(s.pfeil ?? (s.art === 'vergangen' ? 'links' : undefined)) === 'links'
+            && <span style={styles.pfeil}>‹</span>}
+          {s.label}
+          {(s.pfeil ?? (s.art === 'kommend' ? 'rechts' : undefined)) === 'rechts'
+            && <span style={styles.pfeil}>›</span>}
         </button>
-      )}
-
-      <button
-        style={{ ...styles.segment, ...styles.aktuell, backgroundColor: farbe(mode) }}
-        // The current phase is already current; tapping it is a no-op rather
-        // than a disabled control, so a mis-tap does nothing instead of
-        // looking broken.
-        onClick={() => {}}
-        aria-current="step"
-      >
-        {MODE_LABELS[mode]}
-      </button>
-
-      {nachher && (
-        <button
-          style={{ ...styles.segment, ...styles.kommend }}
-          onClick={() => onChange(nachher)}
-          aria-label={`Weiter zu ${MODE_LABELS[nachher]}`}
-        >
-          {MODE_LABELS[nachher]}
-          <span style={styles.pfeil}>›</span>
-        </button>
-      )}
+      ))}
     </div>
   );
+}
+
+function baueSegmente(
+  mode: OperatingMode | null,
+  onChange: (mode: OperatingMode) => void,
+  ausrichten?: AusrichtenSlot,
+): Segment[] {
+  // On the alignment screen itself: where you are, and the one way on. No
+  // Austausch slot — you cannot step past drilling from here, and offering it
+  // would mean stepping a phase from a screen that has not drilled anything.
+  if (ausrichten?.aktiv) {
+    return [
+      { label: AUSRICHTEN_LABEL, art: 'aktuell', farbe: 'var(--color-accent)' },
+      {
+        label: mode ? MODE_LABELS[mode] : MODE_LABELS.bohren,
+        art: 'kommend',
+        onClick: ausrichten.schliessen,
+        ariaLabel: `Zurück zu ${mode ? MODE_LABELS[mode] : MODE_LABELS.bohren}`,
+      },
+    ];
+  }
+
+  // No recording: the phases do not exist yet, so the only thing to show is
+  // the way into the alignment screen — and nothing at all without it.
+  if (!mode) {
+    if (!ausrichten) return [];
+    return [{
+      label: AUSRICHTEN_LABEL,
+      art: 'kommend',
+      pfeil: 'links',
+      onClick: ausrichten.oeffnen,
+      ariaLabel: 'Maschine ausrichten',
+    }];
+  }
+
+  const segmente: Segment[] = [];
+  const vorher = previousPhase(mode);
+
+  if (ausrichten && mode === 'bohren') {
+    segmente.push({
+      label: AUSRICHTEN_LABEL,
+      art: 'vergangen',
+      onClick: ausrichten.oeffnen,
+      ariaLabel: 'Zurück zum Ausrichten',
+    });
+  } else if (vorher) {
+    segmente.push({
+      label: MODE_LABELS[vorher],
+      art: 'vergangen',
+      onClick: () => onChange(vorher),
+      ariaLabel: `Zurück zu ${MODE_LABELS[vorher]}`,
+    });
+  }
+
+  segmente.push({ label: MODE_LABELS[mode], art: 'aktuell', farbe: farbe(mode) });
+
+  const nachher = nextPhase(mode);
+  if (nachher) {
+    segmente.push({
+      label: MODE_LABELS[nachher],
+      art: 'kommend',
+      onClick: () => onChange(nachher),
+      ariaLabel: `Weiter zu ${MODE_LABELS[nachher]}`,
+    });
+  }
+
+  return segmente;
 }
 
 /** Drilling reads as the primary phase; everything after it shares one colour. */
@@ -151,7 +260,6 @@ const styles: Record<string, CSSProperties> = {
   vergangen: {
     backgroundColor: 'var(--surface-2)',
     color: 'var(--text-muted)',
-    borderRight: '1px solid var(--border)',
     fontWeight: 600,
   },
   aktuell: {
@@ -161,6 +269,8 @@ const styles: Record<string, CSSProperties> = {
   kommend: {
     backgroundColor: 'var(--surface-3)',
     color: 'var(--text-primary)',
+  },
+  trenner: {
     borderLeft: '1px solid var(--border)',
   },
   pfeil: {

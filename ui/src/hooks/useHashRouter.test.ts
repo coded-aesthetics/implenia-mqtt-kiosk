@@ -121,3 +121,28 @@ describe('parseRoute: the geology sign-off', () => {
     expect(parseRoute('#/geologie/P-01').query.beenden).toBeUndefined();
   });
 });
+
+describe('ausrichten route', () => {
+  it('carries the element name', () => {
+    expect(parseRoute('#/ausrichten/P-01')).toMatchObject({
+      page: 'ausrichten',
+      params: { name: 'P-01' },
+    });
+  });
+
+  it('decodes a name with a slash in it', () => {
+    expect(parseRoute(`#/ausrichten/${encodeURIComponent('A/12')}`).params.name).toBe('A/12');
+  });
+
+  it('is not a route without an element', () => {
+    // There is no recording to fall back on for the name — the screen is
+    // opened before one exists — and without the name there is no Vorgabe to
+    // align to. Home beats a screen with two empty dials.
+    expect(parseRoute('#/ausrichten').page).toBe('home');
+    expect(parseRoute('#/ausrichten/').page).toBe('home');
+  });
+
+  it('does not swallow a similarly named path', () => {
+    expect(parseRoute('#/ausrichtend/P-01').page).toBe('home');
+  });
+});

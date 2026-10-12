@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 export interface Route {
-  page: 'home' | 'config' | 'element' | 'bohren' | 'comments' | 'setup' | 'sensors' | 'calibration' | 'rohrverlaengerung' | 'geologie';
+  page: 'home' | 'config' | 'element' | 'bohren' | 'comments' | 'setup' | 'sensors' | 'calibration' | 'rohrverlaengerung' | 'geologie' | 'ausrichten';
   params: Record<string, string>;
   query: Record<string, string>;
 }
@@ -64,6 +64,19 @@ export function parseRoute(hash: string): Route {
   const setupMatch = path.match(/^setup(?:\/(.+))?$/);
   if (setupMatch) {
     return { page: 'setup', params: { step: setupMatch[1] ?? 'verfahren' }, query };
+  }
+
+  /**
+   * Aiming the rig, the step before drilling.
+   *
+   * The element is in the path and not optional: this screen is opened before
+   * a recording exists, so there is no session to fall back on for the name —
+   * and without the name there is no Vorgabe to align to. A bare `ausrichten`
+   * is therefore not a route at all rather than a screen with two empty dials.
+   */
+  const ausrichtenMatch = path.match(/^ausrichten\/(.+)$/);
+  if (ausrichtenMatch) {
+    return { page: 'ausrichten', params: { name: decodeURIComponent(ausrichtenMatch[1]) }, query };
   }
 
   const bohrenMatch = path.match(/^bohren\/(.+)$/);

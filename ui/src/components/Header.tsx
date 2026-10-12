@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { navigate } from '../hooks/useHashRouter';
 import type { OperatingMode } from '../hooks/useWebSocket';
-import { PhaseStepper } from './PhaseStepper';
+import { PhaseStepper, type AusrichtenSlot } from './PhaseStepper';
 import logo from '../../assets/implenia-logo.png';
 
 interface Props {
@@ -41,9 +41,19 @@ interface Props {
    * remove.
    */
   hidePhaseStepper?: boolean;
+  /**
+   * The alignment screen as the stepper's first slot. Omit for an element that
+   * does not have to be aimed (Vertikalneigung 0, or none given).
+   *
+   * Passed through rather than derived here: whether an element needs aligning
+   * comes from its Vorgabe, which App already holds, and the stepper is the
+   * one place a worker can always reach it from — with or without a running
+   * recording, which is why it may appear when `operatingMode` is null.
+   */
+  ausrichten?: AusrichtenSlot;
 }
 
-export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode, onModeChange, hidePhaseStepper }: Props) {
+export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode, onModeChange, hidePhaseStepper, ausrichten }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -94,8 +104,9 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
           variant, which has its own way back and where a phase step would
           change what the button does — see `hidePhaseStepper`.
         */}
-        {operatingMode && !hidePhaseStepper && (currentPage === 'element' || currentPage === 'bohren' || currentPage === 'geologie') && (
-          <PhaseStepper mode={operatingMode} onChange={onModeChange} />
+        {(operatingMode || ausrichten) && !hidePhaseStepper
+          && (currentPage === 'element' || currentPage === 'bohren' || currentPage === 'geologie' || currentPage === 'ausrichten') && (
+          <PhaseStepper mode={operatingMode ?? null} onChange={onModeChange} ausrichten={ausrichten} />
         )}
       </div>
 

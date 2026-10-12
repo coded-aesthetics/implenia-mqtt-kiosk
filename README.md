@@ -420,6 +420,66 @@ Phase changes live only here. The post-drilling screen used to carry its own thr
 
 The phase is both navigation and a recording setting: it picks which screen renders, and it tells ingestion whether a closed Klemmbacke is a pipe change (clip those readings) or a pipe string being held (keep them).
 
+The stepper carries one slot that is **not** a phase — see Ausrichten below.
+
+## Ausrichten
+
+An element whose **Vertikalneigung** is not 0 has to be aimed before drilling: the machine turned until its rotation matches the **Horizontalneigung** of the Schichtauftrag, and the mast set to the Vertikalneigung. The screen at `#/ausrichten/<element>` is those two dials and nothing else — the one thing the operator is doing at that moment.
+
+**It is not a phase.** `operating_mode` is untouched, nothing is recorded differently, and nothing is gated on it: an element can be drilled without the screen ever being opened. It takes the slot *before* Bohren in the header stepper, which is both the way in and the way out:
+
+```
+no recording     [ ‹ Ausrichten ]
+Bohren           [ ‹ Ausrichten ][ Bohren ][ Austausch › ]
+on the screen    [ Ausrichten ][ Bohren › ]
+```
+
+The first row is the one that shapes the design. Aligning happens *before* the session starts, so there is no phase to show and the stepper is simply the way in — which is also why the alignment screen could not be a mode: it would have put a screen with nothing to record into the column that decides Klemmbacke clipping and every phase-segmented KPI.
+
+The slot appears only where `Vertikalneigung ≠ 0` — a plumb hole has no direction to aim — **except on the screen itself**, where it is offered whatever the Vorgabe says. Without that exception an alignment URL opened for a plumb element (a typed address, a stale bookmark, a reload while the Vorgabe is still loading) is a screen with no exit at all.
+
+### The two dials
+
+**Horizontalneigung** is a full circle, 0° at the top, clockwise. The ticks stay neutral and a pointer marks the Ist, because a filled arc from the minimum is meaningless on a compass. The Soll sits on the rim as a green triangle on its tolerance arc — "aligned" is a width on screen rather than a number to compare against — with the Ist pointer one ring further out, so the two marks are neighbours. Between them runs the **Abweichungskeil**: an arc from Ist to Soll, always the short way round, with an arrowhead at the Soll end. That is what makes the dial an instruction rather than an instrument. The short way matters: a Soll of 2° at an Ist of 358° is 4° to the right, not 356° to the left.
+
+**Vertikalneigung** is a quarter circle, 0° straight down, 90° horizontal, and its needle **is the mast** — it hangs from a pivot on a hatched ground line and leans the way the drill has to lean, with the Soll as a second, dashed mast beside it. A 270° arc like the Bohren gauges would have been consistent and meant nothing: three quarters of the scale on angles no mast can reach. The readout sits in the bottom-right, the one corner a quarter dial always leaves free.
+
+Both carry the deviation **in words** underneath — `5,3° nach rechts`, `2,9° stärker neigen`, `Ausgerichtet` — because colour cannot say which way to turn, and that is the whole instruction. Both dials fill whatever box they are given rather than taking a pixel size: the content area is 612px with the recording bar and more without it.
+
+Degraded states are named, never blank: `Kein Signal` where nothing has arrived, `Letzter Wert vor 23 s` where it stopped (10s window, as on the Kalibrierung screen) with the pointer kept at its last position in grey, and `Keine Vorgabe` where the Schichtauftrag carries no angle. A sensor with no topic gets a hint row with a button straight to the Sensorzuordnung.
+
+### Which sensors it reads
+
+By **role**, not by name: `inclination_x` is read as the rotation and `inclination_y` as the inclination — Injektionsbohren's `Richtung X` / `Richtung Y`, DSV's `Alpha` / `Beta`. Both are ordinary `mqtt` sensors of the Verfahren, so they already appear in the Sensorzuordnung and the Kalibrierung screens: nothing had to be added to either, and no CSV changed.
+
+**Which axis is which is an assumption.** The CSVs say only `Richtung X` / `Richtung Y`, both `°`, both `secondary`, with nothing recording which axis is which. The screen therefore *names the sensor it is reading* under each title, so a swapped pair shows up in one glance instead of as a wrongly turned machine. Confirm it against a rig before this reaches a site.
+
+The reference direction is the other open question: if the rig's 0° is not the Vorgabe's 0°, every reading is off by a constant — which is exactly what the **Kalibrierung** screen's per-sensor offset exists for. Nulling the compass against the surveyed direction is a one-tap correction there, and it needs no release.
+
+### A topic wired on site now reaches the screen
+
+Readings reach the browser keyed by their raw MQTT topic, and a screen found a sensor by matching the topic's **last segment** against the sensor name. A topic bound in the Sensorzuordnung — `plc/ch07` → `Richtung X`, which is the whole point of that screen — therefore resolved correctly for the recording and the upload and showed up **nowhere on screen**.
+
+The `reading` and `snapshot` messages now carry the resolved sensor key alongside the topic (`resolveSensorKey`'s own answer, lowercased), set wherever ingestion fills `lastReadings`: the live path, the snapshot a reconnecting browser gets, and a resumed session's seeded values. `findSensorReading` in `ui/src/utils/sensors.ts` prefers it, then the last segment, then the whole topic. The same silent shape as a sensor name that fails to resolve — correct data, invisible.
+
+### Tolerances and the scale
+
+`±1,0°` horizontal, `±0,5°` vertical, a `0–90°` scale and a 5° "almost there" threshold, all in `ui/src/utils/ausrichtung.ts` and all **placeholders** until the expert says what the rigs can hold and how far they tilt (60° is the other candidate for the maximum).
+
+They are judged in **degrees, never relative**. `statusColor()` in `sensor-viz.ts` works in percent, which is meaningless for an angle: a Soll of 0° would make every reading infinitely wrong, and 2° off a Soll of 180° would come out as 1% — green on a machine pointing two degrees into the neighbouring pillar.
+
+Angles are shown with **one** decimal rather than the house two: 0,1° is the resolution these sensors have, and the second decimal is noise on a number that has to be read at a glance.
+
+### Driving it without a rig
+
+No dump carries these angles — a rotation is set before drilling starts and the field captures begin once it is under way — so the replay server publishes them on demand:
+
+```bash
+npm run replay      # broker on mqtt://localhost:1884, UI on http://localhost:3001
+```
+
+The **MASCHINE AUSRICHTEN** panel has a slider per angle, a noise slider (a perfectly constant value hides a dial that flickers at a threshold), both topic names and a start/stop button. The defaults — `Bohrgeraet/Richtung X` and `Bohrgeraet/Richtung Y` — resolve by name with nothing bound, provided the kiosk's subscription filter covers them (`#`, the wizard's default). `server/src/angle-simulator.ts` holds the state machine and its validation; the publishing loop runs at 500ms, like an Elvis frame.
+
 ## Geology Capture
 
 The conductor records the geology they actually drilled through, and signs the profile off before it goes up. Uploaded as a `GeoDIN` integer series plus a `Geologie` text series — both already defined in the herstellen CSVs, both already read by implenia-web, so this needed no new sensor, no schema change and no backend work.
@@ -648,6 +708,8 @@ server/src/
   mqtt.ts             — MQTT data source
   serial-source.ts    — Serial/Elvis data source
   simulator-source.ts — Simulated data source (dev mode)
+  angle-simulator.ts  — Hand-driven Horizontal-/Vertikalneigung for the replay server
+  replay-server.ts    — Standalone broker + dump playback + angle simulator (dev)
   elvis-parser.ts     — Elvis hex frame parser
   ingestion.ts        — Routes readings to storage/WS/recording, applies depth correction
   rohrwechsel.ts      — Pure Rohrverlängerung state machine (Klemmbacke phase + clipping)
@@ -690,7 +752,11 @@ ui/src/
     ChannelPicker.tsx  — Serial channel → sensor assignment
     ShiftAssignment.tsx — Shift import + element tiles
     RecordingBar.tsx   — Session recording controls, geology entry, Rohrwechsel indicator
-    PhaseStepper.tsx   — Bohren → Austausch → Einbauen → Auffüllen, in the header
+    PhaseStepper.tsx   — Bohren → Austausch → Einbauen → Auffüllen, in the header,
+                         plus the Ausrichten slot before Bohren
+    AusrichtenScreen.tsx — Aiming the rig: rotation and mast inclination vs. Vorgabe
+    RotationDial.tsx   — Full-circle rotation dial with the Abweichungskeil
+    NeigungDial.tsx    — Quarter-circle inclination dial whose needle is the mast
     GeologieBestaetigung.tsx — Geology sign-off at the step out of Bohren, and as a backstop at Beenden
     GeologiePicker.tsx — Full DIN 4023 catalogue behind "Andere": 4 tabs, 58
                          entries, search
