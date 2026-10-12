@@ -169,7 +169,7 @@ export class DataIngestion extends EventEmitter {
     // Only a depth on a retrofitted rig is ever rewritten, and only then does
     // the live screen show something other than what arrived — the corrected
     // depth is the one the worker needs.
-    this.emitReading({ ...reading, payload: corrected.payload });
+    this.emitReading({ ...reading, payload: corrected.payload, sensor: key });
 
     if (this.activeSession) {
       const mapping = key ? this.activeSession.sensorMap.get(key) : undefined;
@@ -193,6 +193,7 @@ export class DataIngestion extends EventEmitter {
           const volPayload = String(roundValue(volResult.volume));
           this.emitReading({
             topic: volResult.topic, payload: volPayload, receivedAt: reading.receivedAt,
+            sensor: resolveSensorKey(volResult.topic, getResolverContext()),
           });
         }
       }
@@ -540,6 +541,7 @@ export class DataIngestion extends EventEmitter {
       if (known && known.receivedAt >= row.receivedAt) continue;
       this.lastReadings.set(row.topic, {
         topic: row.topic, payload, receivedAt: row.receivedAt,
+        sensor: resolveSensorKey(row.topic, getResolverContext()),
       });
     }
 
@@ -549,6 +551,7 @@ export class DataIngestion extends EventEmitter {
     for (const { topic, volume } of volumeSnapshot(sessionId, sensorMap, mappings)) {
       this.lastReadings.set(topic, {
         topic, payload: String(roundValue(volume)), receivedAt: Date.now(),
+        sensor: resolveSensorKey(topic, getResolverContext()),
       });
     }
 

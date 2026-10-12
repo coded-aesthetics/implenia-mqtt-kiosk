@@ -125,6 +125,7 @@ export function setupWebSocket(app: FastifyInstance): void {
       topic: msg.topic,
       payload: msg.payload,
       receivedAt: msg.receivedAt,
+      sensor: msg.sensor ?? null,
     });
   });
 
