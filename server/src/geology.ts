@@ -382,6 +382,32 @@ export function commitDefaultGeology(session: Session): GeologyCommitResult | nu
   })));
 }
 
+/**
+ * Is there any geology on record for this session at all?
+ *
+ * The question the stop asks before it skips its own back-fill. The sign-off
+ * marks a session confirmed even when the commit failed — the operator is not
+ * sent back to a screen whose only button just threw — so the mark says "the
+ * operator was asked", not "a profile was written". Those two come apart on a
+ * kiosk whose disk filled up for a minute, and without this check the stop
+ * trusted the mark and skipped the back-fill: confirmed, nothing written, and
+ * the element uploaded with no geology whatsoever. That is the silent, total
+ * loss "every committed profile is complete" exists to prevent, so it is worth
+ * one query.
+ *
+ * Deliberately only "any", not "complete": a live entry counts, and after a
+ * failed commit it is indistinguishable from a profile the operator observed in
+ * full (the replace-then-write transaction rolls back, leaving the live
+ * readings exactly as they were). A profile that lost its back-fill is a
+ * narrower failure than one that lost everything, and telling those two apart
+ * would take a second mark rather than a read.
+ */
+export function hasGeologyReadings(session: Session): boolean {
+  const sensors = resolveSensors(session);
+  if (isError(sensors)) return false;
+  return getSessionSensorSeries(session.id, sensors.nrId).length > 0;
+}
+
 export interface GeologyCommitResult {
   /** How many boundaries were written. */
   geschrieben: number;

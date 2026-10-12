@@ -485,6 +485,39 @@ describe('POST /api/recording/geology/commit', () => {
     expect(geoDin(id)).toEqual([SAND]);
   });
 
+  it('still back-fills at the stop when the sign-off\'s commit failed', async () => {
+    // The mark says "the operator was asked", not "a profile is on record": it
+    // is set even when the commit threw, so the stop has to check for readings
+    // before it trusts it. Without that check this element uploaded with no
+    // geology at all — signed off, nothing written, back-fill skipped.
+    const id = activeDrilledSession();
+    db.setElementVorgaben('P-01', {
+      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': TON },
+      float_sensors: { 'Tiefe Geologie 1': 2, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
+    });
+
+    const geology = await import('../geology.js');
+    const spy = vi.spyOn(geology, 'commitGeology').mockImplementation(() => {
+      throw new Error('SQLITE_FULL: database or disk is full');
+    });
+    const commit = await app.inject({
+      method: 'POST',
+      url: '/api/recording/geology/commit',
+      payload: { geology: [{ tiefe: 0, nr: SAND, name: 'Sand', quelle: 'ist' }] },
+    });
+    expect(commit.statusCode).toBe(200);
+    expect(db.getSessionById(id)!.geology_confirmed_at).toBeGreaterThan(0);
+    expect(geoDin(id)).toEqual([]);
+
+    // Log rotation frees the disk, and the operator finishes the element.
+    spy.mockRestore();
+    const res = await app.inject({ method: 'POST', url: '/api/recording/stop' });
+
+    expect(res.statusCode).toBe(200);
+    expect(geoDin(id)).toEqual([SAND, TON]);
+    expect(db.getSessionById(id)?.status).toBe('ended');
+  });
+
   it('still back-fills at the stop when the sign-off never happened', async () => {
     const id = activeDrilledSession();
     db.setElementVorgaben('P-01', {

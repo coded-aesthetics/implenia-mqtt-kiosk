@@ -503,6 +503,7 @@ export function App() {
         commentQueueCount={commentQueue.pendingCount}
         operatingMode={recordingState.operatingMode}
         onModeChange={setOperatingMode}
+        hidePhaseStepper={route.page === 'geologie' && route.query.beenden === '1'}
       />
       <VoiceFeedbackOverlay feedback={voice.feedback} />
       <UpdateBanner
