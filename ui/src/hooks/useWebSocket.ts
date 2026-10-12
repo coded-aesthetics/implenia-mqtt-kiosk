@@ -4,6 +4,12 @@ export interface SensorReading {
   topic: string;
   payload: string;
   receivedAt: number;
+  /**
+   * The sensor this topic resolved to on the server, lowercased — null when it
+   * resolved to nothing. The only way to find a sensor whose topic was wired
+   * on site: see `sensorValue()` in utils/sensors.
+   */
+  sensor?: string | null;
 }
 
 /**
@@ -123,6 +129,7 @@ export function useWebSocket() {
                 topic: msg.topic,
                 payload: msg.payload,
                 receivedAt: msg.receivedAt,
+                sensor: msg.sensor ?? null,
               });
               return { ...prev, readings: next };
             });
@@ -147,6 +154,7 @@ export function useWebSocket() {
                   topic: r.topic,
                   payload: r.payload,
                   receivedAt: r.receivedAt,
+                  sensor: r.sensor ?? null,
                 });
               }
               return { ...prev, readings: next };
