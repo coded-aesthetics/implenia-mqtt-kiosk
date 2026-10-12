@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ReplaySource, type ReplaySpeed } from './replay-source.js';
+import { AngleSimulator, type AngleInput } from './angle-simulator.js';
 import type { SensorReading } from './data-source.js';
 import { createLogger } from './logger.js';
 
@@ -37,6 +38,19 @@ source.on('reading', (reading: SensorReading) => {
   client?.publish(reading.topic, reading.payload);
 });
 
+/**
+ * The two alignment angles, driven by hand from the replay UI.
+ *
+ * No dump carries them — a rotation and a mast inclination are set before
+ * drilling starts, and the field captures begin once it is under way — so the
+ * Ausrichten screen is the one part of the pipeline that cannot be replayed.
+ * Published onto the same broker as the dump, which is also how a real rig
+ * presents them: one stream, two more topics.
+ */
+const angles = new AngleSimulator((topic, payload) => {
+  client?.publish(topic, payload);
+});
+
 function publishControl(action: string): Promise<void> {
   return new Promise((resolve) => {
     if (!client) { resolve(); return; }
@@ -49,9 +63,13 @@ function publishControl(action: string): Promise<void> {
 const app = Fastify();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uiHtml = fs.readFileSync(path.join(__dirname, 'replay-ui.html'), 'utf-8');
+const uiFile = path.join(__dirname, 'replay-ui.html');
 
-app.get('/', async (_req, reply) => reply.type('text/html').send(uiHtml));
+// Read per request, not once at import: `tsx watch` restarts on a .ts change
+// but not on an .html one, so an edit to the panel below used to be invisible
+// until the server was restarted by hand — with the API already updated, which
+// is a confusing half-state to debug.
+app.get('/', async (_req, reply) => reply.type('text/html').send(fs.readFileSync(uiFile, 'utf-8')));
 
 app.post<{ Body: { file?: string } }>('/api/replay/load', async (req, reply) => {
   const file = req.body?.file;
@@ -151,6 +169,16 @@ app.post<{ Body: { offsetMs?: number } }>('/api/replay/seek', async (req, reply)
 
 app.get('/api/replay/state', async (_req, reply) => reply.send(source.state));
 
+// ── Angle simulator ─────────────────────────────────────────────────────
+
+app.get('/api/sim/angles', async (_req, reply) => reply.send(angles.state));
+
+app.post<{ Body: AngleInput }>('/api/sim/angles', async (req, reply) => {
+  const result = angles.apply(req.body ?? {});
+  if (!result.ok) return reply.status(400).send({ error: result.error });
+  return reply.send(angles.state);
+});
+
 // ── Start ──────────────────────────────────────────────────────────────
 
 let aedes: InstanceType<typeof Aedes>;
@@ -178,6 +206,7 @@ async function start() {
 
 function shutdown() {
   source.stop();
+  angles.stop();
   client?.end();
   broker?.close();
   app.close();
