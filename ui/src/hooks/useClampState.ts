@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { sensorValue } from '../utils/sensors';
 
 interface ClampConfig {
   clampTopic: string | null;
@@ -34,7 +35,7 @@ export function useClampState(sensorValues: Map<string, number>): ClampState {
 
   const clampValue = useMemo(() => {
     if (!clampConfig.clampTopic) return 0;
-    return sensorValues.get(clampConfig.clampTopic) ?? 0;
+    return sensorValue(sensorValues, clampConfig.clampTopic) ?? 0;
   }, [sensorValues, clampConfig.clampTopic]);
 
   const [isClampOpen, setIsClampOpen] = useState(true);

@@ -19,7 +19,7 @@ import { BohrenScreen, INJEKTIONSBOHREN_BOHREN } from './components/BohrenScreen
 import { GeologieBestaetigung } from './components/GeologieBestaetigung';
 import { VerpressenScreen, INJEKTIONSBOHREN_VERPRESSEN } from './components/VerpressenScreen';
 import { AusrichtenScreen } from './components/AusrichtenScreen';
-import { ausrichtungErforderlich } from './utils/ausrichtung';
+import { ausrichtungErforderlich, ausrichtungMoeglich } from './utils/ausrichtung';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import { isVerpressenMode, MODE_LABELS } from './utils/operating-mode';
@@ -27,7 +27,7 @@ import { shouldConfirmGeology } from './utils/geology-stop';
 import { GeologiePicker } from './components/GeologiePicker';
 import { useGeologieErfassung } from './hooks/useGeologieErfassung';
 import { buildSchichten, collectVorgabeEntries } from './utils/vorgaben';
-import { buildSensorValues } from './utils/sensors';
+import { buildSensorValues, sensorValue } from './utils/sensors';
 import { formatNumber } from './utils/format';
 import type { OperatingMode } from './hooks/useWebSocket';
 import type { ViewTab } from './components/ElementDetail';
@@ -78,7 +78,8 @@ export function App() {
   /**
    * Aiming the rig: offered as the stepper slot before Bohren, and only for an
    * element whose Vertikalneigung is not 0 — a plumb hole has no direction to
-   * aim. Available with no recording running, because that is when it happens.
+   * aim — on a Verfahren that actually has the two live angle sensors.
+   * Available with no recording running, because that is when it happens.
    */
   const ausrichtenElement = route.params.name;
   /*
@@ -88,7 +89,9 @@ export function App() {
    * alone left the operator on a screen with no exit at all.
    */
   const ausrichtenSlot = ausrichtenElement
-    && (route.page === 'ausrichten' || ausrichtungErforderlich(deviceVorgaben))
+    && (route.page === 'ausrichten'
+      || (ausrichtungMoeglich(verfahrenSensoren.sensoren)
+        && ausrichtungErforderlich(deviceVorgaben)))
     ? {
       aktiv: route.page === 'ausrichten',
       oeffnen: () => navigate(`ausrichten/${encodeURIComponent(ausrichtenElement)}`),
@@ -233,7 +236,7 @@ export function App() {
 
   const liveTiefe = useMemo(() => {
     if (setup.verfahren !== 'injektionsbohren') return null;
-    return buildSensorValues(readings).get(INJEKTIONSBOHREN_BOHREN.depthSensor) ?? null;
+    return sensorValue(buildSensorValues(readings), INJEKTIONSBOHREN_BOHREN.depthSensor) ?? null;
   }, [readings, setup.verfahren]);
 
   /**

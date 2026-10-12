@@ -27,11 +27,23 @@ import { kuerzesterWeg, norm360, bewerteStatus, statusFarbe } from '../utils/aus
 interface Props {
   /** Live rotation, or null when nothing has arrived for this sensor. */
   ist: number | null;
-  soll: number;
+  /**
+   * The rotation to aim for, or **null when the Schichtauftrag has none**.
+   *
+   * Null rather than a stand-in 0: a target drawn at 0° is a direction, and
+   * drawing one nobody specified is the one thing a dial on this screen must
+   * never do — the operator turns the machine to it. With no Soll the rim
+   * carries no mark at all and the pointer is drawn tone-free, since there is
+   * nothing to judge it against.
+   */
+  soll: number | null;
   toleranz: number;
   /** The last reading is older than VERALTET_MS — show it, but not as live. */
   veraltet?: boolean;
 }
+
+/** The pointer's colour when there is no Soll to judge it against. */
+const OHNE_URTEIL = 'var(--text-primary)';
 
 const DEG = Math.PI / 180;
 const C = 200;
@@ -100,20 +112,24 @@ export function RotationDial({ ist, soll, toleranz, veraltet }: Props) {
      * Its tolerance is the width of the arc: aligned is an extent on screen,
      * not a figure to work out.
      */
-    out.push(
-      <path key={k++}
-        d={arc(142, soll - toleranz, 2 * toleranz)}
-        fill="none" stroke="var(--color-success)" strokeWidth={9} strokeLinecap="round"
-      />,
-      <polygon key={k++} points={tri(soll, 136, 151, 4.5)} fill="var(--color-success)" />,
-    );
+    if (soll !== null) {
+      out.push(
+        <path key={k++}
+          d={arc(142, soll - toleranz, 2 * toleranz)}
+          fill="none" stroke="var(--color-success)" strokeWidth={9} strokeLinecap="round"
+        />,
+        <polygon key={k++} points={tri(soll, 136, 151, 4.5)} fill="var(--color-success)" />,
+      );
+    }
 
     if (ist !== null) {
-      const abw = kuerzesterWeg(ist, soll);
-      const status = bewerteStatus(abw, toleranz);
-      const farbe = veraltet ? 'var(--text-dim)' : statusFarbe(status);
+      const abw = soll === null ? null : kuerzesterWeg(ist, soll);
+      const status = abw === null ? null : bewerteStatus(abw, toleranz);
+      const farbe = veraltet
+        ? 'var(--text-dim)'
+        : status === null ? OHNE_URTEIL : statusFarbe(status);
 
-      if (!veraltet && status !== 'ok') {
+      if (!veraltet && soll !== null && abw !== null && status !== 'ok') {
         const vz = abw >= 0 ? 1 : -1;
         const [tx, ty] = pt(96, soll);
         const [ax, ay] = pt(84, soll - vz * 6);
@@ -141,9 +157,10 @@ export function RotationDial({ ist, soll, toleranz, veraltet }: Props) {
   return (
     <svg viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet" style={svgStyle}
       role="img"
-      aria-label={ist === null
-        ? `Horizontalneigung: kein Wert, Soll ${formatNumber(soll, 1)} Grad`
-        : `Horizontalneigung: ${formatNumber(norm360(ist), 1)} Grad, Soll ${formatNumber(soll, 1)} Grad`}
+      aria-label={[
+        `Horizontalneigung: ${ist === null ? 'kein Wert' : `${formatNumber(norm360(ist), 1)} Grad`}`,
+        soll === null ? 'keine Vorgabe' : `Soll ${formatNumber(soll, 1)} Grad`,
+      ].join(', ')}
     >
       <circle cx={C} cy={C} r={138} fill="var(--surface-1)" />
       {parts}

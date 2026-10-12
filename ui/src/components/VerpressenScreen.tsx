@@ -5,7 +5,7 @@ import { SensorGauge } from './SensorGauge';
 import { SensorChart, type ChartSeries, type ChartScale } from './SensorChart';
 import { KlemmbackeIndicator } from './KlemmbackeIndicator';
 import { formatNumber } from '../utils/format';
-import { findSoll } from '../utils/sensors';
+import { findSoll, sensorValue } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
 import { useClampState } from '../hooks/useClampState';
 
@@ -47,8 +47,8 @@ export function VerpressenScreen({ readings, vorgaben, config }: Props) {
   const sensorValues = useSensorValues(readings);
   const { clampConfig, clampValue, isClampOpen } = useClampState(sensorValues);
 
-  const depth = sensorValues.get(config.depthSensor) ?? 0;
-  const volume = sensorValues.get(config.volumeSensor) ?? 0;
+  const depth = sensorValue(sensorValues, config.depthSensor) ?? 0;
+  const volume = sensorValue(sensorValues, config.volumeSensor) ?? 0;
   // Chart data accumulation — samples sensorValues at ~1Hz via useEffect
   const chartBufferRef = useRef<Map<string, Array<{ ts: number; value: number }>>>(new Map());
   const lastSampleRef = useRef(0);
@@ -63,7 +63,7 @@ export function VerpressenScreen({ readings, vorgaben, config }: Props) {
     const buf = chartBufferRef.current;
 
     for (const trace of config.chartTraces) {
-      const val = sensorValues.get(trace.sensor);
+      const val = sensorValue(sensorValues, trace.sensor);
       if (val === undefined) continue;
 
       let arr = buf.get(trace.sensor);
@@ -128,7 +128,7 @@ export function VerpressenScreen({ readings, vorgaben, config }: Props) {
         {config.gauges.map((g) => (
           <div key={g.sensor} style={styles.gaugeCell}>
             <SensorGauge
-              value={sensorValues.get(g.sensor) ?? 0}
+              value={sensorValue(sensorValues, g.sensor) ?? 0}
               min={g.min}
               max={g.max}
               label={g.label}

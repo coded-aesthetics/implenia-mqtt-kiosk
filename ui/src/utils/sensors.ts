@@ -10,22 +10,49 @@ export function findSoll(vorgaben: VorgabenData | null, sensorName: string): num
   return null;
 }
 
+/**
+ * Every live value, keyed by every name it can be reached under: the sensor
+ * the server resolved the topic to, the topic's last segment, and the whole
+ * topic.
+ *
+ * **All keys are lowercased**, which is why every read goes through
+ * `sensorValue()` rather than `.get()`. The server's answer is a recording
+ * sensor-map key and therefore lowercase (`resolveSensorKey`), while every
+ * caller holds a CSV name in its original case — so keying it as it arrives
+ * left a `plc/ch05` wired to `Drehzahl` resolving correctly for the upload and
+ * reading 0 on screen, a case-only miss on a name that otherwise matched
+ * exactly. Normalising both sides is what actually closes that hole; it also
+ * makes a topic wired in a different case than the CSV resolve.
+ */
 export function buildSensorValues(readings: Map<string, SensorReading>): Map<string, number> {
   const map = new Map<string, number>();
+  const setze = (key: string | null | undefined, wert: number): void => {
+    const k = key?.trim().toLowerCase();
+    if (k) map.set(k, wert);
+  };
   for (const r of readings.values()) {
     const n = parseFloat(r.payload);
     const val = Number.isFinite(n) ? n : 0;
-    map.set(r.topic, val);
+    setze(r.topic, val);
     const slashIdx = r.topic.lastIndexOf('/');
-    if (slashIdx >= 0) {
-      map.set(r.topic.substring(slashIdx + 1), val);
-    }
-    // The server's own answer, lowercased — the only key that holds for a
-    // topic wired on site, whose name is nowhere in the topic. Additional, not
-    // instead: every existing caller looks up a CSV name in its original case.
-    if (r.sensor) map.set(r.sensor, val);
+    if (slashIdx >= 0) setze(r.topic.substring(slashIdx + 1), val);
+    setze(r.sensor, val);
   }
   return map;
+}
+
+/**
+ * The value of a sensor out of `buildSensorValues`, by name or topic.
+ *
+ * The only correct way to read that map — see the note there. `undefined` when
+ * nothing has arrived, so a caller's own `?? 0` still decides what a missing
+ * value looks like.
+ */
+export function sensorValue(
+  values: Map<string, number>,
+  name: string,
+): number | undefined {
+  return values.get(name.trim().toLowerCase());
 }
 
 /**
