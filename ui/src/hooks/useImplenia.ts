@@ -418,3 +418,42 @@ export function useVorgabenUnits(elementName: string | null): Map<string, string
 
   return units;
 }
+
+// --- Verfahren sensor definitions (local CSV) ---
+
+export interface VerfahrenSensor {
+  name: string;
+  type: string;
+  unit: string;
+  source: string;
+  role: string;
+  priority: string;
+  alias: string;
+}
+
+/**
+ * The sensors the active Verfahren defines, from the CSV the server ships.
+ *
+ * Deliberately not `useElementSensors`, which goes through the Implenia API:
+ * this one is served locally, so it answers with no network, no API key and no
+ * Schichtauftrag — which is what a screen that resolves a sensor by role needs
+ * on a kiosk that has been offline since Monday.
+ *
+ * Fetched once per Verfahren. The CSVs are release assets; they change when a
+ * version is deployed, which restarts the browser along with the server.
+ */
+export function useVerfahrenSensors(verfahren: string | null): VerfahrenSensor[] | null {
+  const [sensors, setSensors] = useState<VerfahrenSensor[] | null>(null);
+
+  useEffect(() => {
+    if (!verfahren) { setSensors(null); return; }
+    let aktuell = true;
+    fetch(`/api/verfahren/${encodeURIComponent(verfahren)}/sensors`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (aktuell && Array.isArray(data)) setSensors(data); })
+      .catch(() => { /* Nothing to show is handled by the screens themselves. */ });
+    return () => { aktuell = false; };
+  }, [verfahren]);
+
+  return sensors;
+}

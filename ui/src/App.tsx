@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useHashRouter, navigate } from './hooks/useHashRouter';
-import { useConfig, useShiftAssignment, useActiveVerfahren, useElementVorgaben } from './hooks/useImplenia';
+import { useConfig, useShiftAssignment, useActiveVerfahren, useElementVorgaben, useVerfahrenSensors } from './hooks/useImplenia';
 import { useVoiceCommands } from './hooks/useVoiceCommands';
 import { Header } from './components/Header';
 import { UpdateBanner } from './components/UpdateBanner';
@@ -18,6 +18,8 @@ import { RohrverlaengerungPage } from './components/RohrverlaengerungPage';
 import { BohrenScreen, INJEKTIONSBOHREN_BOHREN } from './components/BohrenScreen';
 import { GeologieBestaetigung } from './components/GeologieBestaetigung';
 import { VerpressenScreen, INJEKTIONSBOHREN_VERPRESSEN } from './components/VerpressenScreen';
+import { AusrichtenScreen } from './components/AusrichtenScreen';
+import { ausrichtungErforderlich } from './utils/ausrichtung';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import { isVerpressenMode, MODE_LABELS } from './utils/operating-mode';
@@ -65,6 +67,34 @@ export function App() {
     [shift.data, route.params.name],
   );
   const deviceVorgaben = useElementVorgaben(route.params.name ?? null, shiftVorgaben);
+
+  /*
+   * The Verfahren's own sensors, from the CSV the server ships — the alignment
+   * screen finds its two live angles by role in here. Local, so it answers on
+   * a kiosk that has been offline for days.
+   */
+  const verfahrenSensoren = useVerfahrenSensors(setup.verfahren);
+
+  /**
+   * Aiming the rig: offered as the stepper slot before Bohren, and only for an
+   * element whose Vertikalneigung is not 0 — a plumb hole has no direction to
+   * aim. Available with no recording running, because that is when it happens.
+   */
+  const ausrichtenElement = route.params.name;
+  /*
+   * On the screen itself the slot is offered whatever the Vorgabe says: it is
+   * the only way off it. Opened for a plumb element — a typed URL, a stale
+   * bookmark, a reload while the Vorgabe is still loading — the condition
+   * alone left the operator on a screen with no exit at all.
+   */
+  const ausrichtenSlot = ausrichtenElement
+    && (route.page === 'ausrichten' || ausrichtungErforderlich(deviceVorgaben))
+    ? {
+      aktiv: route.page === 'ausrichten',
+      oeffnen: () => navigate(`ausrichten/${encodeURIComponent(ausrichtenElement)}`),
+      schliessen: () => navigate(`element/${encodeURIComponent(ausrichtenElement)}`),
+    }
+    : undefined;
 
   // The wizard is a route, so its visibility cannot be knocked out by the
   // state it writes. An unconfigured kiosk is redirected into it; from there
@@ -418,6 +448,17 @@ export function App() {
       pageTitle = 'Geologie';
       break;
     }
+    case 'ausrichten': {
+      content = (
+        <AusrichtenScreen
+          readings={readings}
+          vorgaben={deviceVorgaben}
+          sensoren={verfahrenSensoren}
+        />
+      );
+      pageTitle = route.params.name;
+      break;
+    }
     case 'comments': {
       content = (
         <CommentQueuePage
@@ -504,6 +545,7 @@ export function App() {
         operatingMode={recordingState.operatingMode}
         onModeChange={setOperatingMode}
         hidePhaseStepper={route.page === 'geologie' && route.query.beenden === '1'}
+        ausrichten={ausrichtenSlot}
       />
       <VoiceFeedbackOverlay feedback={voice.feedback} />
       <UpdateBanner
@@ -519,7 +561,7 @@ export function App() {
       )}
       <main style={{
         ...styles.main,
-        ...(route.page === 'element' || route.page === 'bohren' || route.page === 'sensors' || route.page === 'calibration' || route.page === 'rohrverlaengerung' || route.page === 'geologie'
+        ...(route.page === 'element' || route.page === 'bohren' || route.page === 'sensors' || route.page === 'calibration' || route.page === 'rohrverlaengerung' || route.page === 'geologie' || route.page === 'ausrichten'
           || (route.page === 'config' && !route.params.section)
           ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const }
           : {}),
