@@ -199,6 +199,64 @@
 
   .section { display: flex; flex-direction: column; gap: 1rem; }
   .hidden { display: none !important; }
+
+  /* Angle simulator */
+  .panel-head { display: flex; align-items: center; gap: 1rem; }
+  .panel-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+  }
+  .panel-note { font-size: 1rem; color: var(--text-dim); }
+  .angle-row { display: flex; align-items: center; gap: 0.75rem; }
+  .angle-row label {
+    min-width: 136px;
+    font-size: 1rem;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+  .angle-val {
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    font-weight: 700;
+    min-width: 88px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  input[type=range].angle-slider {
+    flex: 1;
+    height: 36px;
+    margin: 0;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+  }
+  input[type=range].angle-slider::-webkit-slider-runnable-track {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--surface-2);
+  }
+  input[type=range].angle-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 26px; height: 26px;
+    margin-top: -9px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid #fff;
+  }
+  input[type=range].angle-slider::-moz-range-track {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--surface-2);
+  }
+  input[type=range].angle-slider::-moz-range-thumb {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid #fff;
+  }
 </style>
 </head>
 <body>
@@ -244,6 +302,46 @@
       <span><strong id="readings">0</strong> Messwerte</span>
       <span style="margin-left:auto">Aufnahme: <strong id="recTime" style="font-size:1.1rem">—</strong></span>
     </div>
+  </div>
+
+  <!--
+    Angle simulator: always available, with or without a dump. The Ausrichten
+    screen reads two topics no recording contains, so this is the only way to
+    drive it.
+  -->
+  <div class="section" id="angles">
+    <div class="panel-head">
+      <span class="panel-title">MASCHINE AUSRICHTEN</span>
+      <button class="btn btn-round" id="angleToggle" title="Winkel senden">▶</button>
+      <span class="panel-note" id="angleNote">gestoppt</span>
+    </div>
+
+    <div class="angle-row">
+      <label for="angleH">Horizontal</label>
+      <input class="angle-slider" type="range" id="angleH" min="0" max="360" step="0.5" value="0">
+      <span class="angle-val" id="angleHVal">0,0°</span>
+    </div>
+
+    <div class="angle-row">
+      <label for="angleV">Vertikal</label>
+      <input class="angle-slider" type="range" id="angleV" min="0" max="90" step="0.5" value="0">
+      <span class="angle-val" id="angleVVal">0,0°</span>
+    </div>
+
+    <div class="angle-row">
+      <label for="angleNoise">Rauschen</label>
+      <input class="angle-slider" type="range" id="angleNoise" min="0" max="2" step="0.1" value="0.2">
+      <span class="angle-val" id="angleNoiseVal">0,2°</span>
+    </div>
+
+    <div class="file-row">
+      <input class="file-input" id="topicH" type="text" placeholder="Topic Horizontalneigung">
+      <input class="file-input" id="topicV" type="text" placeholder="Topic Vertikalneigung">
+    </div>
+    <span class="panel-note">
+      Ein Topic, dessen letztes Segment einem Sensornamen entspricht, wird ohne
+      Zuordnung erkannt. Andere Topics im Kiosk unter „Sensorzuordnung" zuweisen.
+    </span>
   </div>
 
   <!-- Status messages -->
@@ -446,6 +544,102 @@ slider.addEventListener('input', () => {
   }, 300);
 });
 
+// ── Angle simulator ──
+const angleToggle = $('#angleToggle');
+const angleNote = $('#angleNote');
+const angleH = $('#angleH');
+const angleV = $('#angleV');
+const angleNoise = $('#angleNoise');
+const angleHVal = $('#angleHVal');
+const angleVVal = $('#angleVVal');
+const angleNoiseVal = $('#angleNoiseVal');
+const topicH = $('#topicH');
+const topicV = $('#topicV');
+
+let angles = null;
+let angleTimeout = null;
+
+function grad(n) {
+  return n.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '°';
+}
+
+function renderAngles() {
+  if (!angles) return;
+  angleToggle.textContent = angles.running ? '⏸' : '▶';
+  angleToggle.classList.toggle('active', angles.running);
+  angleNote.textContent = angles.running
+    ? 'sendet alle ' + angles.intervalMs + ' ms'
+    : 'gestoppt';
+  angleHVal.textContent = grad(angles.horizontal);
+  angleVVal.textContent = grad(angles.vertikal);
+  angleNoiseVal.textContent = grad(angles.rauschen);
+}
+
+/**
+ * The sliders are the source of truth while dragging: writing the server's
+ * answer back into them would snap the thumb out from under the pointer on
+ * every reply.
+ */
+function syncAngleInputs() {
+  if (!angles) return;
+  angleH.value = angles.horizontal;
+  angleV.value = angles.vertikal;
+  angleNoise.value = angles.rauschen;
+  topicH.value = angles.topicHorizontal;
+  topicV.value = angles.topicVertikal;
+}
+
+async function sendAngles(patch) {
+  try {
+    angles = await post('/api/sim/angles', patch);
+    renderAngles();
+  } catch (e) {
+    showMsg(msgError, 'msg-error', e.message);
+  }
+}
+
+/** Debounced: a slider fires on every pixel, and each one is an MQTT setting. */
+function queueAngles(patch) {
+  clearTimeout(angleTimeout);
+  angleTimeout = setTimeout(() => sendAngles(patch), 120);
+}
+
+angleToggle.addEventListener('click', () => {
+  clearMsgs();
+  sendAngles({ running: !(angles && angles.running) });
+});
+
+angleH.addEventListener('input', () => {
+  angleHVal.textContent = grad(Number(angleH.value));
+  queueAngles({ horizontal: Number(angleH.value) });
+});
+angleV.addEventListener('input', () => {
+  angleVVal.textContent = grad(Number(angleV.value));
+  queueAngles({ vertikal: Number(angleV.value) });
+});
+angleNoise.addEventListener('input', () => {
+  angleNoiseVal.textContent = grad(Number(angleNoise.value));
+  queueAngles({ rauschen: Number(angleNoise.value) });
+});
+
+for (const el of [topicH, topicV]) {
+  el.addEventListener('change', () => {
+    clearMsgs();
+    sendAngles({ topicHorizontal: topicH.value, topicVertikal: topicV.value })
+      .then(syncAngleInputs);
+  });
+}
+
+async function loadAngles() {
+  try {
+    const r = await fetch('/api/sim/angles');
+    if (!r.ok) return;
+    angles = await r.json();
+    syncAngleInputs();
+    renderAngles();
+  } catch {}
+}
+
 // Clear any cached service workers from the kiosk PWA
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then(regs => {
@@ -455,6 +649,7 @@ if ('serviceWorker' in navigator) {
 
 // Initial poll
 poll();
+loadAngles();
 </script>
 </body>
 </html>
