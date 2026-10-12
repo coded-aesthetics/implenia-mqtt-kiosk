@@ -405,6 +405,13 @@ Three things make it correct rather than merely kinder, and none may be broken:
   rebuilding re-derives the back-fill, so a planned boundary the operator
   deleted would quietly come back. An operator who resumes drilling is asked
   again, about the deeper hole.
+- **The mark means "the operator was asked", never "a profile is on record."**
+  It is set even when the commit threw, because the alternative is sending the
+  operator back to a screen whose only button just failed. Nothing may read it
+  as proof of a write: the stop pairs it with `hasGeologyReadings` before it
+  skips its own back-fill, since a mark set over a failed commit — a kiosk whose
+  disk was full for a minute — would otherwise cost that element its geology
+  entirely, signed off and silently empty.
 
 **Known deviation: a rejected boundary is not remembered across a re-ask.**
 Nothing records that the operator *deleted* a planned boundary — `observedOnly`

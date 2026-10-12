@@ -27,9 +27,23 @@ interface Props {
    * settings.
    */
   onModeChange?: (mode: OperatingMode) => void;
+  /**
+   * Hide the phase stepper on a page that would otherwise show it.
+   *
+   * For the geology sign-off's Beenden variant. There the stepper is not the
+   * escape hatch it is at the phase step — that variant has its own
+   * `Zurück zur Aufzeichnung` — and it is actively dangerous: stepping the
+   * phase from there re-navigates to the route *without* `?beenden=1`, which
+   * silently turns the one button the operator is aiming at from "Beenden"
+   * into "Weiter zum Austausch". A glove catching the stepper instead of the
+   * button would commit and return with the recording still running, which is
+   * the "tapped Beenden, nothing ended" confusion the route flag exists to
+   * remove.
+   */
+  hidePhaseStepper?: boolean;
 }
 
-export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode, onModeChange }: Props) {
+export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode, onModeChange, hidePhaseStepper }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -76,9 +90,11 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
           Also on `geologie`, where it is the only way off the screen besides
           committing: the sign-off has one forward button and no second exit, so
           the way back from a mis-tapped phase step is the step itself. One way
-          back, the same one as everywhere else.
+          back, the same one as everywhere else. Not on that screen's Beenden
+          variant, which has its own way back and where a phase step would
+          change what the button does — see `hidePhaseStepper`.
         */}
-        {operatingMode && (currentPage === 'element' || currentPage === 'bohren' || currentPage === 'geologie') && (
+        {operatingMode && !hidePhaseStepper && (currentPage === 'element' || currentPage === 'bohren' || currentPage === 'geologie') && (
           <PhaseStepper mode={operatingMode} onChange={onModeChange} />
         )}
       </div>

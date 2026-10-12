@@ -6,7 +6,7 @@ import {
   unclipSessionReadings, getActiveSession, setDrillingEndedAt, setGeologyConfirmedAt,
 } from '../db.js';
 import {
-  commitDefaultGeology, commitGeology, getGeologyContext, recordLiveLayer,
+  commitDefaultGeology, commitGeology, getGeologyContext, hasGeologyReadings, recordLiveLayer,
   type GeologyCommitResult, type GeologyLayerInput,
 } from '../geology.js';
 import {
@@ -146,10 +146,18 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
            *
            * A step back into `bohren` clears the mark, so a session that
            * resumed drilling commits again from the deeper hole.
+           *
+           * The mark is not trusted on its own, though. It is set even when the
+           * sign-off's commit threw — see the commit route — so on a kiosk
+           * whose disk was briefly full it would mean "already committed" over
+           * a session with no geology at all, and this back-fill, the last
+           * thing standing between that element and no profile whatsoever,
+           * would be skipped. `hasGeologyReadings` is the second half of the
+           * question.
            */
           geology = layers.length > 0
             ? commitGeology(active, layers)
-            : active.geology_confirmed_at != null
+            : active.geology_confirmed_at != null && hasGeologyReadings(active)
               ? undefined
               : commitDefaultGeology(active) ?? undefined;
         } catch (err) {
@@ -275,6 +283,12 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
      * the write that just failed and put the operator back on this screen — at
      * the one moment they are trying to finish the element. The failure is
      * logged and shown here, once.
+     *
+     * So the mark means "the operator was asked", never "a profile is on
+     * record". Nothing may read it as the latter: the stop pairs it with
+     * `hasGeologyReadings` before it skips its own back-fill, because a mark
+     * set over a failed write would otherwise cost the element its geology
+     * entirely.
      */
     setGeologyConfirmedAt(session.id, Date.now());
     log.info('Session %d: geology confirmed (%d boundaries)', session.id, geology?.geschrieben ?? 0);
