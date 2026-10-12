@@ -436,7 +436,9 @@ on the screen    [ Ausrichten ][ Bohren › ]
 
 The first row is the one that shapes the design. Aligning happens *before* the session starts, so there is no phase to show and the stepper is simply the way in — which is also why the alignment screen could not be a mode: it would have put a screen with nothing to record into the column that decides Klemmbacke clipping and every phase-segmented KPI.
 
-The slot appears only where `Vertikalneigung ≠ 0` — a plumb hole has no direction to aim — **except on the screen itself**, where it is offered whatever the Vorgabe says. Without that exception an alignment URL opened for a plumb element (a typed address, a stale bookmark, a reload while the Vorgabe is still loading) is a screen with no exit at all.
+The slot appears only where `Vertikalneigung ≠ 0` — a plumb hole has no direction to aim — **and only on a Verfahren that actually declares the two live angle sensors**. Both halves are needed because they live in different CSVs and do not move together: `ankerbohren-sensors.csv` carries the Vorgaben while `ankerbohren-sensors-herstellen.csv` has no `inclination_x`/`inclination_y` row, so keying the slot off the Vorgabe alone offered `‹ Ausrichten` on every tilted Ankerbohren element, behind which the screen could only ever say the feature is unavailable — an invitation to a dead end.
+
+**Except on the screen itself**, where the slot is offered whatever the Vorgabe says. Without that exception an alignment URL opened for a plumb element (a typed address, a stale bookmark, a reload while the Vorgabe is still loading) is a screen with no exit at all.
 
 ### The two dials
 
@@ -446,7 +448,13 @@ The slot appears only where `Vertikalneigung ≠ 0` — a plumb hole has no dire
 
 Both carry the deviation **in words** underneath — `5,3° nach rechts`, `2,9° stärker neigen`, `Ausgerichtet` — because colour cannot say which way to turn, and that is the whole instruction. Both dials fill whatever box they are given rather than taking a pixel size: the content area is 612px with the recording bar and more without it.
 
-Degraded states are named, never blank: `Kein Signal` where nothing has arrived, `Letzter Wert vor 23 s` where it stopped (10s window, as on the Kalibrierung screen) with the pointer kept at its last position in grey, and `Keine Vorgabe` where the Schichtauftrag carries no angle. A sensor with no topic gets a hint row with a button straight to the Sensorzuordnung.
+Degraded states are named, never blank: `Kein Signal` where nothing has arrived, `Letzter Wert vor 23 s` where it stopped (10s window, as on the Kalibrierung screen) with the pointer kept at its last position in grey, and `Keine Vorgabe` where the Schichtauftrag carries no angle. A sensor with no topic gets a hint row with a button straight to the Sensorzuordnung; a sensor list that failed to load gets one with `Erneut laden`, and retries by itself every 10s — nobody on a site reloads a browser.
+
+Three distinctions in there are load-bearing, because each collapse states a worker then has to act on:
+
+- **No Vorgabe draws no target.** With no `Horizontalneigung` the rim carries no green mark at all and the pointer is drawn tone-free. A Soll folded to a stand-in `0°` would have put a green target on a direction nobody specified — on the dial the operator turns the machine to — while the chip above it read `Keine Vorgabe`.
+- **The Soll is never clamped into the scale.** A Vorgabe outside `0…90°` gets a chevron at the end of the scale pointing past it, not a mark pinned onto the last degree the dial can draw. Pinning it put the dashed Soll mast exactly under the real one for a Vorgabe of `-8°` at a live `0°`: the picture said aligned while the words said `8,0° steiler stellen`. Clamping the *Ist* is fine — the number below it tells the truth.
+- **"Still loading" is not "this Verfahren has no angle sensors."** The sensor list reports its load state rather than answering `null` for "not fetched yet", "non-2xx" and "network error" alike, which made the screen announce *"Für dieses Verfahren sind keine Winkelsensoren definiert"* on the first paint of every visit — and permanently after one transient 500, telling a worker a feature does not exist when it does.
 
 ### Which sensors it reads
 
@@ -461,6 +469,8 @@ The reference direction is the other open question: if the rig's 0° is not the 
 Readings reach the browser keyed by their raw MQTT topic, and a screen found a sensor by matching the topic's **last segment** against the sensor name. A topic bound in the Sensorzuordnung — `plc/ch07` → `Richtung X`, which is the whole point of that screen — therefore resolved correctly for the recording and the upload and showed up **nowhere on screen**.
 
 The `reading` and `snapshot` messages now carry the resolved sensor key alongside the topic (`resolveSensorKey`'s own answer, lowercased), set wherever ingestion fills `lastReadings`: the live path, the snapshot a reconnecting browser gets, and a resumed session's seeded values. `findSensorReading` in `ui/src/utils/sensors.ts` prefers it, then the last segment, then the whole topic. The same silent shape as a sensor name that fails to resolve — correct data, invisible.
+
+**Both sides are normalised to lowercase**, which is what actually closes the hole for the Bohren and Verpressen screens. The server's answer is a recording sensor-map key and therefore lowercase, while every one of those screens looks up a CSV name in its original case — so keying the answer as it arrives left `plc/ch05` → `Drehzahl` resolving correctly for the upload and reading `0` on the centre gauge: a case-only miss on a name that otherwise matched exactly. `buildSensorValues` lowercases every key it stores and every read goes through `sensorValue()`, which lowercases the name it is given. A topic wired in a different case than the CSV resolves too.
 
 ### Tolerances and the scale
 

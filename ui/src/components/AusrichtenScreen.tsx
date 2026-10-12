@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { navigate } from '../hooks/useHashRouter';
 import type { SensorReading } from '../hooks/useWebSocket';
-import type { VorgabenData } from '../hooks/useImplenia';
+import type { VorgabenData, VerfahrenSensorsState } from '../hooks/useImplenia';
 import { findSoll, findSensorNumber } from '../utils/sensors';
 import { formatNumber } from '../utils/format';
 import { RotationDial } from './RotationDial';
@@ -41,8 +41,13 @@ import {
 interface Props {
   readings: Map<string, SensorReading>;
   vorgaben: VorgabenData | null;
-  /** mqtt sensors of the active Verfahren, from the local CSV. */
-  sensoren: readonly { name: string; role?: string; unit?: string }[] | null;
+  /**
+   * The active Verfahren's sensors from the local CSV, **with their load
+   * state** — "still loading" and "could not be loaded" must not read as "this
+   * Verfahren has no angle sensors", which is a different message and a far
+   * more final one.
+   */
+  sensoren: VerfahrenSensorsState;
 }
 
 /** Re-render on a timer so an angle that stopped arriving goes stale on screen. */
@@ -79,7 +84,11 @@ function streifen(
   veraltet: boolean,
   jetzt: number,
   art: 'rotation' | 'neigung',
+  laedt: boolean,
 ): Streifen {
+  if (laedt) {
+    return { ton: 'neutral', text: 'Sensoren werden geladen …', iconPath: UHR };
+  }
   if (soll === null) {
     return { ton: 'neutral', text: 'Keine Vorgabe', iconPath: UHR };
   }
@@ -111,11 +120,25 @@ function streifen(
   };
 }
 
+/**
+ * The line under a dial's title: which sensor it is reading, and where 0 is.
+ *
+ * "Kein Sensor zugeordnet" is a verdict, so it waits for the CSV to have
+ * actually answered.
+ */
+function untertitel(name: string | null, laedt: boolean, nullpunkt: string): string {
+  if (name) return `${name} · ${nullpunkt}`;
+  return laedt ? 'Sensoren werden geladen …' : 'Kein Sensor zugeordnet';
+}
+
 export function AusrichtenScreen({ readings, vorgaben, sensoren }: Props) {
   const jetzt = useJetzt(1000);
 
-  const hName = sensorFuerRolle(sensoren, ROLLE_HORIZONTAL);
-  const vName = sensorFuerRolle(sensoren, ROLLE_VERTIKAL);
+  const { sensoren: liste, status: sensorStatus, neuLaden } = sensoren;
+  const laedt = sensorStatus === 'laedt';
+
+  const hName = sensorFuerRolle(liste, ROLLE_HORIZONTAL);
+  const vName = sensorFuerRolle(liste, ROLLE_VERTIKAL);
 
   const hSoll = findSoll(vorgaben, VORGABE_HORIZONTAL);
   const vSoll = findSoll(vorgaben, VORGABE_VERTIKAL);
@@ -144,7 +167,15 @@ export function AusrichtenScreen({ readings, vorgaben, sensoren }: Props) {
   ].filter((n): n is string => n !== null);
 
   let hinweis: { text: string; aktion?: { label: string; onClick: () => void } } | null = null;
-  if (!hName || !vName) {
+  if (sensorStatus === 'fehler') {
+    hinweis = {
+      text: 'Die Sensorliste dieses Verfahrens konnte nicht geladen werden. '
+        + 'Der Kiosk versucht es automatisch weiter — oder jetzt sofort erneut laden.',
+      aktion: { label: 'Erneut laden', onClick: neuLaden },
+    };
+  } else if (laedt) {
+    // Nothing to say yet, and "keine Winkelsensoren" would be a lie.
+  } else if (!hName || !vName) {
     hinweis = {
       text: 'Für dieses Verfahren sind keine Winkelsensoren definiert. '
         + 'Das Ausrichten steht hier nicht zur Verfügung.',
@@ -171,29 +202,29 @@ export function AusrichtenScreen({ readings, vorgaben, sensoren }: Props) {
       <div style={styles.reihe}>
         <Karte
           titel="Horizontalneigung"
-          untertitel={hName ? `${hName} · 0° = Referenzrichtung` : 'Kein Sensor zugeordnet'}
+          untertitel={untertitel(hName, laedt, '0° = Referenzrichtung')}
           soll={hSoll}
-          streifen={streifen(hBewertung, hSoll, hIst, hVeraltet, jetzt, 'rotation')}
+          streifen={streifen(hBewertung, hSoll, hIst, hVeraltet, jetzt, 'rotation', laedt)}
         >
           <RotationDial
             ist={hIst?.value ?? null}
-            soll={hSoll ?? 0}
+            soll={hSoll}
             toleranz={TOLERANZ_HORIZONTAL}
-            veraltet={hVeraltet || hSoll === null}
+            veraltet={hVeraltet}
           />
         </Karte>
 
         <Karte
           titel="Vertikalneigung"
-          untertitel={vName ? `${vName} · 0° = senkrecht` : 'Kein Sensor zugeordnet'}
+          untertitel={untertitel(vName, laedt, '0° = senkrecht')}
           soll={vSoll}
-          streifen={streifen(vBewertung, vSoll, vIst, vVeraltet, jetzt, 'neigung')}
+          streifen={streifen(vBewertung, vSoll, vIst, vVeraltet, jetzt, 'neigung', laedt)}
         >
           <NeigungDial
             ist={vIst?.value ?? null}
-            soll={vSoll ?? 0}
+            soll={vSoll}
             toleranz={TOLERANZ_VERTIKAL}
-            veraltet={vVeraltet || vSoll === null}
+            veraltet={vVeraltet}
           />
         </Karte>
       </div>

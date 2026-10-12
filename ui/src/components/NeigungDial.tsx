@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import { formatNumber } from '../utils/format';
-import { bewerteStatus, statusFarbe, MAX_VERTIKAL } from '../utils/ausrichtung';
+import { bewerteStatus, statusFarbe, sollImBild, MAX_VERTIKAL } from '../utils/ausrichtung';
 
 /**
  * The inclination dial: a quarter circle, 0° straight down, 90° horizontal.
@@ -22,12 +22,22 @@ import { bewerteStatus, statusFarbe, MAX_VERTIKAL } from '../utils/ausrichtung';
 interface Props {
   /** Live inclination, or null when nothing has arrived for this sensor. */
   ist: number | null;
-  soll: number;
+  /**
+   * The inclination to aim for, or **null when the Schichtauftrag has none**.
+   *
+   * Null rather than a stand-in 0, which would draw a dashed mast hanging
+   * plumb — a target nobody specified, on the dial the operator sets the mast
+   * by. See the rotation dial for the same reasoning.
+   */
+  soll: number | null;
   toleranz: number;
   /** End of the scale. The machine's real maximum is an open question. */
   max?: number;
   veraltet?: boolean;
 }
+
+/** The mast's colour when there is no Soll to judge it against. */
+const OHNE_URTEIL = 'var(--text-primary)';
 
 const DEG = Math.PI / 180;
 const PX = 84;
@@ -57,12 +67,32 @@ function tri(deg: number, rTip: number, rBase: number, spread: number): string {
   return `${tx},${ty} ${ax},${ay} ${bx},${by}`;
 }
 
+/**
+ * The marker for a Soll that lies off the end of the scale: a chevron *at*
+ * that end, pointing past it, rather than a mark pinned onto the last degree
+ * the dial can draw.
+ *
+ * The Soll used to be clamped into `0…max`, which is wrong in the one way this
+ * screen cannot afford. A Vorgabe of -8° at a live 0° put the dashed Soll mast
+ * exactly under the real one — the picture said aligned while the words said
+ * `8,0° steiler stellen`, on a dial whose whole instruction is "lay one line
+ * over the other". Clamping the *Ist* is defensible because the number below
+ * it tells the truth; the Soll has no such escape hatch.
+ */
+function ausserhalbMarke(ende: number, richtung: number): string {
+  const [tx, ty] = pt(210, ende + richtung * 5);
+  const [ax, ay] = pt(201, ende);
+  const [bx, by] = pt(219, ende);
+  return `${tx},${ty} ${ax},${ay} ${bx},${by}`;
+}
+
 export function NeigungDial({ ist, soll, toleranz, max = MAX_VERTIKAL, veraltet }: Props) {
   const parts = useMemo(() => {
     const out: React.ReactNode[] = [];
     let k = 0;
-    // A reading past the end of the scale still has to point somewhere; the
-    // number below says what it really is.
+    // The *Ist* only: a reading past the end of the scale still has to point
+    // somewhere, and the number below it says what it really is. The Soll is
+    // never clamped — see `ausserhalbMarke`.
     const klemm = (w: number): number => Math.max(0, Math.min(max, w));
 
     for (let deg = 0; deg <= max; deg += 2) {
@@ -96,23 +126,33 @@ export function NeigungDial({ ist, soll, toleranz, max = MAX_VERTIKAL, veraltet 
      * laying one line over the other, which is what the operator is physically
      * doing.
      */
-    const sollK = klemm(soll);
-    out.push(
-      <line key={k++}
-        x1={pt(22, sollK)[0]} y1={pt(22, sollK)[1]}
-        x2={pt(168, sollK)[0]} y2={pt(168, sollK)[1]}
-        stroke="var(--color-success)" strokeWidth={3} strokeDasharray="8 7" opacity={0.8}
-      />,
-      <path key={k++}
-        d={arc(210, sollK - toleranz, 2 * toleranz)}
-        fill="none" stroke="var(--color-success)" strokeWidth={9} strokeLinecap="round"
-      />,
-      <polygon key={k++} points={tri(sollK, 203, 222, 4.5)} fill="var(--color-success)" />,
-    );
+    if (sollImBild(soll, max)) {
+      out.push(
+        <line key={k++}
+          x1={pt(22, soll)[0]} y1={pt(22, soll)[1]}
+          x2={pt(168, soll)[0]} y2={pt(168, soll)[1]}
+          stroke="var(--color-success)" strokeWidth={3} strokeDasharray="8 7" opacity={0.8}
+        />,
+        <path key={k++}
+          d={arc(210, soll - toleranz, 2 * toleranz)}
+          fill="none" stroke="var(--color-success)" strokeWidth={9} strokeLinecap="round"
+        />,
+        <polygon key={k++} points={tri(soll, 203, 222, 4.5)} fill="var(--color-success)" />,
+      );
+    } else if (soll !== null) {
+      const ende = soll < 0 ? 0 : max;
+      out.push(
+        <polygon key={k++}
+          points={ausserhalbMarke(ende, soll < 0 ? -1 : 1)} fill="var(--color-success)"
+        />,
+      );
+    }
 
     if (ist !== null) {
       const istK = klemm(ist);
-      const farbe = veraltet ? 'var(--text-dim)' : statusFarbe(bewerteStatus(soll - ist, toleranz));
+      const farbe = veraltet
+        ? 'var(--text-dim)'
+        : soll === null ? OHNE_URTEIL : statusFarbe(bewerteStatus(soll - ist, toleranz));
       const [tipX, tipY] = pt(168, istK);
       const [aX, aY] = pt(9, istK - 90);
       const [bX, bY] = pt(9, istK + 90);
@@ -146,9 +186,10 @@ export function NeigungDial({ ist, soll, toleranz, max = MAX_VERTIKAL, veraltet 
   return (
     <svg viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet" style={svgStyle}
       role="img"
-      aria-label={ist === null
-        ? `Vertikalneigung: kein Wert, Soll ${formatNumber(soll, 1)} Grad`
-        : `Vertikalneigung: ${formatNumber(ist, 1)} Grad, Soll ${formatNumber(soll, 1)} Grad`}
+      aria-label={[
+        `Vertikalneigung: ${ist === null ? 'kein Wert' : `${formatNumber(ist, 1)} Grad`}`,
+        soll === null ? 'keine Vorgabe' : `Soll ${formatNumber(soll, 1)} Grad`,
+      ].join(', ')}
     >
       <line x1={4} y1={PY} x2={PX} y2={PY} stroke="var(--border)" strokeWidth={3} />
       {hatch}

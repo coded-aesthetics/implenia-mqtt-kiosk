@@ -431,6 +431,20 @@ export interface VerfahrenSensor {
   alias: string;
 }
 
+/** `laedt` until the first answer, then `ok` or `fehler` — never conflated. */
+export type VerfahrenSensorsStatus = 'laedt' | 'ok' | 'fehler';
+
+export interface VerfahrenSensorsState {
+  /** The Verfahren's sensors, or null while loading and after a failure. */
+  sensoren: VerfahrenSensor[] | null;
+  status: VerfahrenSensorsStatus;
+  /** Fetch again now, rather than waiting out the retry timer. */
+  neuLaden: () => void;
+}
+
+/** How long after a failed fetch the kiosk tries again by itself. */
+const SENSOREN_RETRY_MS = 10_000;
+
 /**
  * The sensors the active Verfahren defines, from the CSV the server ships.
  *
@@ -441,19 +455,54 @@ export interface VerfahrenSensor {
  *
  * Fetched once per Verfahren. The CSVs are release assets; they change when a
  * version is deployed, which restarts the browser along with the server.
+ *
+ * **The load state is reported, not folded into the data.** A bare `null` for
+ * "not fetched yet", "non-2xx" and "network error" alike made the alignment
+ * screen announce *"Für dieses Verfahren sind keine Winkelsensoren
+ * definiert"* — on the first paint of every visit, and then permanently after
+ * one transient 500, telling a worker a feature does not exist when it does.
+ * A failure also retries on its own: nobody on a site reloads a browser.
+ *
+ * The answer is kept together with the Verfahren it belongs to, so a Verfahren
+ * change cannot briefly report the previous one's sensors as current.
  */
-export function useVerfahrenSensors(verfahren: string | null): VerfahrenSensor[] | null {
-  const [sensors, setSensors] = useState<VerfahrenSensor[] | null>(null);
+export function useVerfahrenSensors(verfahren: string | null): VerfahrenSensorsState {
+  const [antwort, setAntwort] = useState<
+    { verfahren: string; sensoren: VerfahrenSensor[] | null } | null
+  >(null);
+  const [versuch, setVersuch] = useState(0);
+
+  const neuLaden = useCallback(() => setVersuch((v) => v + 1), []);
 
   useEffect(() => {
-    if (!verfahren) { setSensors(null); return; }
+    if (!verfahren) return;
     let aktuell = true;
+    let wiederholen: ReturnType<typeof setTimeout> | undefined;
     fetch(`/api/verfahren/${encodeURIComponent(verfahren)}/sensors`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => { if (aktuell && Array.isArray(data)) setSensors(data); })
-      .catch(() => { /* Nothing to show is handled by the screens themselves. */ });
-    return () => { aktuell = false; };
-  }, [verfahren]);
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data) => {
+        if (!aktuell) return;
+        if (!Array.isArray(data)) throw new Error('Antwort ist keine Sensorliste');
+        setAntwort({ verfahren, sensoren: data });
+      })
+      .catch(() => {
+        if (!aktuell) return;
+        setAntwort({ verfahren, sensoren: null });
+        wiederholen = setTimeout(() => setVersuch((v) => v + 1), SENSOREN_RETRY_MS);
+      });
+    return () => {
+      aktuell = false;
+      if (wiederholen) clearTimeout(wiederholen);
+    };
+  }, [verfahren, versuch]);
 
-  return sensors;
+  const passend = antwort !== null && antwort.verfahren === verfahren;
+  const status: VerfahrenSensorsStatus = !passend
+    ? 'laedt'
+    : antwort.sensoren === null ? 'fehler' : 'ok';
+
+  return { sensoren: passend ? antwort.sensoren : null, status, neuLaden };
 }

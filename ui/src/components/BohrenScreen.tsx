@@ -7,7 +7,7 @@ import { SensorGauge } from './SensorGauge';
 import { SensorBar } from './SensorBar';
 import { KlemmbackeIndicator } from './KlemmbackeIndicator';
 import { formatNumber } from '../utils/format';
-import { findSoll } from '../utils/sensors';
+import { findSoll, sensorValue } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
 import { useClampState } from '../hooks/useClampState';
 import { buildSchichten, collectVorgabeEntries } from '../utils/vorgaben';
@@ -76,8 +76,8 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
   const sensorValues = useSensorValues(readings);
   const { clampConfig, clampValue, isClampOpen } = useClampState(sensorValues);
 
-  const depth = sensorValues.get(config.depthSensor) ?? 0;
-  const volume = sensorValues.get(config.volumeSensor) ?? 0;
+  const depth = sensorValue(sensorValues, config.depthSensor) ?? 0;
+  const volume = sensorValue(sensorValues, config.volumeSensor) ?? 0;
 
   const showRohr = recordingState.active && operatingMode === 'bohren' && rohrwechsel;
 
@@ -179,7 +179,7 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
               {config.leftGauges.map((g) => (
                 <div key={g.sensor} style={styles.gaugeLabelWrap}>
                   <SensorGauge
-                    value={sensorValues.get(g.sensor) ?? 0}
+                    value={sensorValue(sensorValues, g.sensor) ?? 0}
                     min={g.min}
                     max={g.max}
                     label={g.label}
@@ -196,7 +196,7 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
             {/* Center: full dial */}
             <div style={styles.gaugeCenterWrap}>
               <SensorGauge
-                value={sensorValues.get(config.centerGauge.sensor) ?? 0}
+                value={sensorValue(sensorValues, config.centerGauge.sensor) ?? 0}
                 min={config.centerGauge.min}
                 max={config.centerGauge.max}
                 label={config.centerGauge.label}
@@ -213,7 +213,7 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
               {config.rightGauges.map((g) => (
                 <div key={g.sensor} style={styles.gaugeLabelWrap}>
                   <SensorGauge
-                    value={sensorValues.get(g.sensor) ?? 0}
+                    value={sensorValue(sensorValues, g.sensor) ?? 0}
                     min={g.min}
                     max={g.max}
                     label={g.label}
@@ -232,7 +232,7 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
             {config.bars.map((b) => (
               <SensorBar
                 key={b.sensor}
-                value={sensorValues.get(b.sensor) ?? 0}
+                value={sensorValue(sensorValues, b.sensor) ?? 0}
                 min={b.min}
                 max={b.max}
                 label={b.label}

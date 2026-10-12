@@ -164,6 +164,41 @@ export function ausrichtungErforderlich(vorgaben: VorgabenData | null): boolean 
   return vertikal !== null && vertikal !== 0;
 }
 
+/**
+ * Can a Soll be drawn on the inclination dial, or does it lie off the scale?
+ *
+ * The decision lives here rather than in the dial because the consequence of
+ * getting it wrong is not cosmetic: the Soll used to be clamped into
+ * `0…max`, so a Vorgabe of -8° at a live 0° laid the dashed Soll mast exactly
+ * over the real one — a picture saying "aligned" under words saying
+ * `8,0° steiler stellen`.
+ */
+export function sollImBild(soll: number | null, max = MAX_VERTIKAL): soll is number {
+  return soll !== null && soll >= 0 && soll <= max;
+}
+
+/**
+ * Can this kiosk's Verfahren be aligned at all?
+ *
+ * The Vorgaben and the live roles are declared in different CSVs and do not
+ * move together: `ankerbohren-sensors.csv` carries Horizontal- and
+ * Vertikalneigung while `ankerbohren-sensors-herstellen.csv` has no
+ * `inclination_x`/`inclination_y` row at all. Keying the stepper slot off the
+ * Vorgabe alone therefore offered `‹ Ausrichten` on every tilted Ankerbohren
+ * element, behind which the screen could only ever say the feature is not
+ * available — an invitation to a dead end. Both halves have to exist.
+ *
+ * `null` (the sensor list has not answered yet, or could not be loaded) is not
+ * "no roles": it answers false here, so the slot appears once the CSV is in
+ * rather than flickering, and `useVerfahrenSensors` retries a failure.
+ */
+export function ausrichtungMoeglich(
+  sensoren: readonly { name: string; role?: string }[] | null,
+): boolean {
+  return sensorFuerRolle(sensoren, ROLLE_HORIZONTAL) !== null
+    && sensorFuerRolle(sensoren, ROLLE_VERTIKAL) !== null;
+}
+
 /** The sensor name of a role in the Verfahren's CSV, or null when it has none. */
 export function sensorFuerRolle(
   sensoren: readonly { name: string; role?: string }[] | null,

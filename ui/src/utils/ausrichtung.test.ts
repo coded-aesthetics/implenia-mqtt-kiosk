@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   kuerzesterWeg, norm360, bewerteStatus, bewerteHorizontal, bewerteVertikal,
-  ausrichtungErforderlich, sensorFuerRolle,
+  ausrichtungErforderlich, ausrichtungMoeglich, sollImBild, sensorFuerRolle,
+  MAX_VERTIKAL,
   TOLERANZ_HORIZONTAL, TOLERANZ_VERTIKAL, NAH_SCHWELLE,
 } from './ausrichtung';
 import type { VorgabenData } from '../hooks/useImplenia';
@@ -139,5 +140,51 @@ describe('sensorFuerRolle', () => {
   it('returns null rather than guessing when the role is absent', () => {
     expect(sensorFuerRolle(sensoren, 'rotation')).toBeNull();
     expect(sensorFuerRolle(null, 'inclination_x')).toBeNull();
+  });
+});
+
+describe('ausrichtungMoeglich', () => {
+  const beide = [
+    { name: 'Richtung X', role: 'inclination_x' },
+    { name: 'Richtung Y', role: 'inclination_y' },
+  ];
+
+  it('is true only when both live angle roles exist', () => {
+    expect(ausrichtungMoeglich(beide)).toBe(true);
+  });
+
+  it('is false for a Verfahren that declares the Vorgaben but not the sensors', () => {
+    // Ankerbohren: the Vorgabe CSV carries Horizontal-/Vertikalneigung, the
+    // herstellen CSV has no inclination row — the slot would have led to a
+    // screen that can only say the feature is unavailable.
+    expect(ausrichtungMoeglich([{ name: 'Bohrtiefe', role: 'depth' }])).toBe(false);
+    expect(ausrichtungMoeglich([beide[0]])).toBe(false);
+  });
+
+  it('is false while the sensor list has not answered', () => {
+    expect(ausrichtungMoeglich(null)).toBe(false);
+  });
+});
+
+describe('sollImBild', () => {
+  it('accepts a Soll the inclination dial can draw', () => {
+    expect(sollImBild(0)).toBe(true);
+    expect(sollImBild(17.5)).toBe(true);
+    expect(sollImBild(MAX_VERTIKAL)).toBe(true);
+  });
+
+  it('rejects a Soll off either end of the scale', () => {
+    // Clamping these onto the scale laid the dashed Soll mast over the real
+    // one: the picture said aligned, the words said 8 degrees off.
+    expect(sollImBild(-8)).toBe(false);
+    expect(sollImBild(MAX_VERTIKAL + 0.1)).toBe(false);
+  });
+
+  it('rejects a missing Soll, so no target is drawn at 0', () => {
+    expect(sollImBild(null)).toBe(false);
+  });
+
+  it('honours a narrower scale', () => {
+    expect(sollImBild(75, 60)).toBe(false);
   });
 });
