@@ -38,12 +38,17 @@ interface Props {
   readings: Map<string, import('../hooks/useWebSocket').SensorReading>;
   vorgaben: VorgabenData | null;
   config: VerpressenConfig;
+  /**
+   * Open the depth correction, or undefined when nothing is being recorded.
+   * The depth is the tap target — see BohrenScreen, which has the same hero.
+   */
+  onKorrigieren?: () => void;
 }
 
 const CHART_WINDOW_MINUTES = 5;
 const MAX_BUFFER_POINTS = CHART_WINDOW_MINUTES * 60 * 2;
 
-export function VerpressenScreen({ readings, vorgaben, config }: Props) {
+export function VerpressenScreen({ readings, vorgaben, config, onKorrigieren }: Props) {
   const sensorValues = useSensorValues(readings);
   const { clampConfig, clampValue, isClampOpen } = useClampState(sensorValues);
 
@@ -94,13 +99,18 @@ export function VerpressenScreen({ readings, vorgaben, config }: Props) {
     <div style={styles.container}>
       {/* Row 1: Hero values — Tiefe | Gesamtvolumen | Klemmbacke */}
       <div style={styles.heroRow}>
-        <div style={styles.heroCell}>
+        <button
+          style={onKorrigieren ? { ...styles.heroCellKnopf, cursor: 'pointer' } : styles.heroCellKnopf}
+          disabled={!onKorrigieren}
+          onClick={() => onKorrigieren?.()}
+        >
           <div style={styles.heroLabel}>Tiefe</div>
           <div style={styles.heroValueRow}>
             <span style={styles.heroValue}>{formatNumber(depth)}</span>
             <span style={styles.heroUnit}>m</span>
           </div>
-        </div>
+          {onKorrigieren && <span style={styles.heroHint}>Tippen zum Korrigieren</span>}
+        </button>
         <div style={styles.heroCell}>
           <div style={styles.heroLabel}>Gesamtvolumen</div>
           <div style={styles.heroValueRow}>
@@ -208,6 +218,27 @@ const styles: Record<string, CSSProperties> = {
     justifyContent: 'center',
     alignItems: 'center',
     padding: '0.25rem 0',
+  },
+  // The depth cell is a button, so the whole hero is the tap target — and it
+  // looks exactly like the cells beside it. What says it can be tapped is the
+  // label under the value, not a box drawn around it.
+  heroCellKnopf: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: '0.25rem 0',
+    border: 'none',
+    background: 'none',
+    color: 'inherit',
+    font: 'inherit',
+  },
+  heroHint: {
+    fontSize: 'var(--font-sm)',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    lineHeight: 1.2,
   },
   klemmRohrCell: {
     flex: 1,

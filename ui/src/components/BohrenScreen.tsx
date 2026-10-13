@@ -62,9 +62,21 @@ interface Props {
    * than a screen of its own.
    */
   geologie?: GeologieErfassung;
+  /**
+   * Open the depth correction, or undefined when there is nothing to correct
+   * (no recording running).
+   *
+   * The depth itself is the tap target: it is what the worker is looking at
+   * when they notice the measuring wheel has slipped, and the hint under it is
+   * the only thing that says the number can be moved. A button of its own
+   * would cost 64px of a column that has none to spare.
+   */
+  onKorrigieren?: () => void;
 }
 
-export function BohrenScreen({ readings, vorgaben, config, recordingState, markierteGrenze, geologie }: Props) {
+export function BohrenScreen({
+  readings, vorgaben, config, recordingState, markierteGrenze, geologie, onKorrigieren,
+}: Props) {
   const [geoRef, geoHeight] = useMeasuredHeight();
 
   const rohrwechsel = recordingState.rohrwechsel;
@@ -102,12 +114,17 @@ export function BohrenScreen({ readings, vorgaben, config, recordingState, marki
       <div style={styles.layout}>
         {/* Left column: depth hero + geology */}
         <div style={styles.leftColumn}>
-          <div style={styles.depthHero}>
+          <button
+            style={onKorrigieren ? { ...styles.depthHero, cursor: 'pointer' } : styles.depthHero}
+            disabled={!onKorrigieren}
+            onClick={() => onKorrigieren?.()}
+          >
             <div style={styles.depthRow}>
               <span style={styles.depthValue}>{formatNumber(depth)}</span>
               <span style={styles.depthUnit}>m</span>
             </div>
-          </div>
+            {onKorrigieren && <span style={styles.depthHint}>Tippen zum Korrigieren</span>}
+          </button>
           {geologie?.auswahl ? (
             <GeologieSpalte
               art={geologie.auswahl}
@@ -311,13 +328,32 @@ const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     flexShrink: 0,
-    width: 170,
+    // Wide enough for `Tippen zum Korrigieren` on one line under the depth.
+    // The profile itself is 150px; the slack it costs comes out of the gauge
+    // row, which has ~80px of it, rather than out of the profile's height.
+    width: 192,
     minHeight: 0,
   },
   depthHero: {
     textAlign: 'center',
     padding: '0.25rem 0',
     flexShrink: 0,
+    // A button, so the whole hero is the tap target — and styled as no button
+    // at all. A card drawn around the depth read as crammed next to the
+    // profile, and the affordance it was carrying is in the label underneath.
+    border: 'none',
+    background: 'none',
+    color: 'inherit',
+    font: 'inherit',
+    width: '100%',
+    display: 'block',
+  },
+  depthHint: {
+    display: 'block',
+    fontSize: 'var(--font-sm)',
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    lineHeight: 1.2,
   },
   depthRow: {
     display: 'flex',

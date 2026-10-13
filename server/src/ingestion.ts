@@ -13,9 +13,9 @@ import { deviceSource } from './device-source.js';
 import { getTransport, type Transport } from './transport.js';
 import { createLogger } from './logger.js';
 import {
-  applyClampPressure, initialDrillState, isClipped, observeDepth,
+  applyClampPressure, applyDepthCorrection, initialDrillState, isClipped, observeDepth,
   parseDrillState, toStatus,
-  type DrillPhase, type DrillState, type DrillStatus,
+  type DepthCorrectionApplied, type DrillPhase, type DrillState, type DrillStatus,
 } from './rohrwechsel.js';
 import {
   getRohrwechselConfig, isClampTopic, type RohrwechselConfig,
@@ -42,6 +42,15 @@ const STATUS_TOPIC = 'kiosk/status';
 export const LOG_TOPIC = 'logs';
 
 /**
+ * A manual depth correction, recorded as a `Kommentar` reading. See
+ * recordCorrectionComment.
+ */
+const COMMENT_TOPIC = 'kiosk/kommentar';
+
+/** The element's free-text sensor, lowercased as the sensor map keys it. */
+const COMMENT_SENSOR_KEY = 'kommentar';
+
+/**
  * Topics the kiosk writes into a session itself and never emits.
  *
  * They belong in the upload and are no part of what a screen shows — and
@@ -49,7 +58,7 @@ export const LOG_TOPIC = 'logs';
  * put a `status` tile and a raw JSON log line on the Messwerte screen after
  * every resume.
  */
-const SELF_WRITTEN_TOPICS = new Set<string>([STATUS_TOPIC, LOG_TOPIC]);
+const SELF_WRITTEN_TOPICS = new Set<string>([STATUS_TOPIC, LOG_TOPIC, COMMENT_TOPIC]);
 
 export interface SensorMapEntry {
   sensorId: string;
@@ -122,6 +131,16 @@ interface ActiveSession {
    * *this* element's starting total and mean nothing once it is finished.
    */
   volumeTopics: string[];
+  /**
+   * The topic the depth last arrived on, or null before it ever did.
+   *
+   * A manual correction has to reach the screen immediately, and on a rig
+   * standing still — which is exactly when a worker counts pipes and notices
+   * the drift — the next reading may be minutes away. This is what the
+   * corrected value is re-emitted under. Kept per session rather than derived
+   * from the sensor map because a topic is what `lastReadings` is keyed by.
+   */
+  depthTopic: string | null;
 }
 
 /** What a reading looks like after Rohrverlängerung handling. */
@@ -154,6 +173,30 @@ function roundValue(value: number): number {
  */
 function numericPayload(payload: string): number {
   return parsePayload(payload).valueNumeric ?? NaN;
+}
+
+/** German, two decimals — the Kommentar is read by people, not parsers. */
+function meters(value: number): string {
+  return value.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** ...with an explicit sign, so a correction reads as a direction. */
+function signedMeters(value: number): string {
+  return `${value > 0 ? '+' : ''}${meters(value)}`;
+}
+
+/**
+ * A refused depth correction.
+ *
+ * `kind` is what the route turns into a status: `input` is a 400, `state` a
+ * 409. The message is German and actionable — it is shown to the worker on the
+ * correction screen, and they cannot call anyone.
+ */
+export class DepthCorrectionError extends Error {
+  constructor(message: string, readonly kind: 'input' | 'state') {
+    super(message);
+    this.name = 'DepthCorrectionError';
+  }
 }
 
 export class DataIngestion extends EventEmitter {
@@ -246,14 +289,14 @@ export class DataIngestion extends EventEmitter {
       ? { payload: String(roundValue(calibrated)), valueRaw: raw, phase: 'bohren', clipped: false }
       : { payload: reading.payload, valueRaw: null, phase: 'bohren', clipped: false };
 
-    if (!session || !session.rohrwechsel.enabled) return asRecorded;
+    if (!session) return asRecorded;
 
     const cfg = session.rohrwechsel;
     const mode = session.operatingMode;
 
     const retracting = isRetracting(mode);
 
-    if (hasPipeHandling(mode) && isClampTopic(reading.topic, cfg.clampTopic)) {
+    if (cfg.enabled && hasPipeHandling(mode) && isClampTopic(reading.topic, cfg.clampTopic)) {
       // Deliberately the raw value: the thresholds are set by watching what
       // the clamp actually publishes, so a calibration meant for a sensor of
       // the same name must not move them underneath the technician.
@@ -294,7 +337,13 @@ export class DataIngestion extends EventEmitter {
       return { ...asRecorded, phase: state.phase, clipped: this.clips(state) };
     }
 
+    // Deliberately outside the `cfg.enabled` guard above: with no Klemmbacke
+    // there is no phase and nothing is clipped, but the depth still carries
+    // the worker's manual correction — see applyDepthCorrection. With nothing
+    // to apply this is `absolut` arithmetic with an offset of 0, which is the
+    // reading itself.
     if (key && getSensorRole(key) === 'depth' && Number.isFinite(raw)) {
+      session.depthTopic = reading.topic;
       const { state, depth } = observeDepth(session.drill, calibrated, cfg, retracting);
       session.drill = state;
 
@@ -305,13 +354,29 @@ export class DataIngestion extends EventEmitter {
           // The reading as it arrived, which is what makes a wrong offset or a
           // wrong calibration reconstructable later.
           valueRaw: rounded === raw ? null : raw,
-          phase: state.phase,
+          phase: this.phaseNow(state),
           clipped: this.clips(state),
         };
       }
     }
 
-    return { ...asRecorded, phase: session.drill.phase, clipped: this.clips(session.drill) };
+    return {
+      ...asRecorded,
+      phase: this.phaseNow(session.drill),
+      clipped: this.clips(session.drill),
+    };
+  }
+
+  /**
+   * The phase a reading taken now belongs to.
+   *
+   * Always `bohren` when Rohrverlängerung is off, whatever the state machine
+   * still holds. A clamp topic removed mid-element leaves a persisted
+   * `rohrwechsel` phase that nothing can now end — and a reading tagged with it
+   * is dropped from the geology depth series and from the upload.
+   */
+  private phaseNow(state: DrillState): DrillPhase {
+    return this.activeSession?.rohrwechsel.enabled ? state.phase : 'bohren';
   }
 
   /**
@@ -322,8 +387,9 @@ export class DataIngestion extends EventEmitter {
    * `austausch` and `einbauen` never clip.
    */
   private clips(state: DrillState): boolean {
-    const mode = this.activeSession?.operatingMode;
-    if (mode && hasPipeHandling(mode)) return isClipped(state);
+    const session = this.activeSession;
+    if (!session?.rohrwechsel.enabled) return false;
+    if (hasPipeHandling(session.operatingMode)) return isClipped(state);
     return false;
   }
 
@@ -424,6 +490,124 @@ export class DataIngestion extends EventEmitter {
     );
   }
 
+  /**
+   * Correct the depth of the hole being recorded, by `delta` metres.
+   *
+   * The arithmetic and every reason for it are in `applyDepthCorrection`; this
+   * is the part with side effects. Three of them, in this order:
+   *
+   * 1. **Persisted immediately.** `drill_state` is otherwise written only at a
+   *    phase change, which may be a pipe away or may never come — and a
+   *    correction lost to a PM2 restart would leave the worker looking at the
+   *    wrong depth again with no sign of why.
+   * 2. **Re-emitted to the screens.** A worker corrects the depth while the
+   *    rig is standing still, so waiting for the next reading would leave the
+   *    old value on screen for minutes. Display only: this is the same instant
+   *    re-stated, not a measurement, and recording it would put a depth
+   *    reading in the session that the rig never sent — which is also what
+   *    geology boundaries get dated against.
+   * 3. **Written into the session as a `Kommentar`.** The depth series steps,
+   *    and this is the only thing that tells anyone on the platform why. As a
+   *    session reading rather than a live API call on purpose: it then uploads
+   *    with the element, from a site with no connectivity just the same.
+   *
+   * A failed persist or a missing `Kommentar` sensor is logged and does not
+   * fail the correction. The worker is looking at a corrected depth either
+   * way, and refusing afterwards would leave them with a wrong one.
+   */
+  correctDepth(delta: number): DepthCorrectionApplied {
+    const session = this.activeSession;
+    if (!session) {
+      throw new DepthCorrectionError(
+        'Es läuft keine Aufzeichnung. Die Tiefe kann nur während einer Aufzeichnung ' +
+        'korrigiert werden. Für einen dauerhaft falschen Nullpunkt: ' +
+        'Einstellungen → Kalibrierung.',
+        'state',
+      );
+    }
+
+    const result = applyDepthCorrection(session.drill, delta);
+    if (!result.ok) throw new DepthCorrectionError(result.error, result.kind);
+
+    const { applied } = result;
+    session.drill = applied.state;
+
+    try {
+      setDrillState(session.id, JSON.stringify(applied.state));
+    } catch (err) {
+      log.error('Could not persist depth correction: %s', (err as Error).message);
+    }
+
+    if (session.depthTopic) {
+      const known = this.lastReadings.get(session.depthTopic);
+      if (known) {
+        this.emitReading({
+          ...known,
+          payload: String(roundValue(applied.to)),
+          receivedAt: Date.now(),
+        });
+      }
+    }
+
+    this.recordCorrectionComment(session, applied);
+
+    log.info(
+      'Depth corrected: %s m -> %s m (%s m, total %s m on this element)',
+      applied.from.toFixed(2), applied.to.toFixed(2),
+      applied.delta.toFixed(2), applied.total.toFixed(2),
+    );
+
+    return applied;
+  }
+
+  /**
+   * Note the correction in the element's `Kommentar` sensor.
+   *
+   * German and readable by whoever opens the element on the platform: the
+   * numbers alone would not say that the step in the depth series is a
+   * deliberate correction rather than a sensor fault. The running total is
+   * included because it is the slip diagnosis — a wheel that needed three
+   * metres on one hole needs a technician, not another correction.
+   */
+  private recordCorrectionComment(
+    session: ActiveSession, applied: DepthCorrectionApplied,
+  ): void {
+    const mapping = session.sensorMap.get(COMMENT_SENSOR_KEY);
+    if (!mapping) {
+      log.warn(
+        'Depth corrected, but this element has no "Kommentar" sensor — ' +
+        'the correction is not part of the upload',
+      );
+      return;
+    }
+
+    const text =
+      `Tiefe korrigiert: ${meters(applied.from)} m → ${meters(applied.to)} m ` +
+      `(${signedMeters(applied.delta)} m; Korrektur auf diesem Element insgesamt ` +
+      `${signedMeters(applied.total)} m)`;
+
+    try {
+      insertSessionReading(
+        session.id, COMMENT_TOPIC, mapping.sensorId, mapping.sensorType, null, text,
+      );
+    } catch (err) {
+      log.error('Could not record the depth correction comment: %s', (err as Error).message);
+    }
+  }
+
+  /**
+   * Metres the worker has corrected the depth by on the running element, or
+   * null when nothing is being recorded.
+   *
+   * Separate from `drillStatus`, which is null unless a Klemmbacke is
+   * configured: a correction applies on every rig, so a kiosk with no
+   * Rohrverlängerung tracking must still be able to show it.
+   */
+  get depthCorrection(): number | null {
+    if (!this.activeSession) return null;
+    return this.activeSession.drill.manualCorrection;
+  }
+
   /** Rohrverlängerung state of the running session, or null when idle. */
   get drillStatus(): DrillStatus | null {
     if (!this.activeSession || !this.activeSession.rohrwechsel.enabled) return null;
@@ -481,6 +665,7 @@ export class DataIngestion extends EventEmitter {
         baselinesFromSession(sessionId, sensorMap, mappings),
       ),
       volumeTopics: mappings.map((m) => m.syntheticTopic),
+      depthTopic: null,
     };
     this.pendingMode = null;
     this.seedLastReadings(sessionId, sensorMap, mappings);
@@ -552,15 +737,31 @@ export class DataIngestion extends EventEmitter {
     sensorMap: Map<string, SensorMapEntry>,
     mappings: CumulativeVolumeMapping[],
   ): void {
+    let depthSeenAt = -1;
     for (const row of getLatestSessionReadings(sessionId)) {
       if (SELF_WRITTEN_TOPICS.has(row.topic)) continue;
       const payload = row.valueNumeric !== null ? String(row.valueNumeric) : row.valueText;
       if (payload === null) continue;
+      const key = resolveSensorKey(row.topic, getResolverContext());
+
+      // Which topic the depth arrives on, so a correction made before the rig
+      // publishes again still reaches the screen. The resumed session is
+      // exactly where this matters: after an hourly auto-update the kiosk
+      // shows a depth restored from these rows, and on a rig that is standing
+      // still — which is when a worker has time to count pipes — the next
+      // reading may be minutes away.
+      //
+      // Before the `continue` below, which is about the cached *value*: which
+      // topic carries the depth is true whether or not a fresher one is held.
+      if (key && getSensorRole(key) === 'depth' && row.receivedAt > depthSeenAt && this.activeSession) {
+        this.activeSession.depthTopic = row.topic;
+        depthSeenAt = row.receivedAt;
+      }
+
       const known = this.lastReadings.get(row.topic);
       if (known && known.receivedAt >= row.receivedAt) continue;
       this.lastReadings.set(row.topic, {
-        topic: row.topic, payload, receivedAt: row.receivedAt,
-        sensor: resolveSensorKey(row.topic, getResolverContext()),
+        topic: row.topic, payload, receivedAt: row.receivedAt, sensor: key,
       });
     }
 

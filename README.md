@@ -334,7 +334,7 @@ POST /api/recording/sessions/:id/unclip               → release clipped readin
 
 Both kinds of machine are in the fleet, so `depthMode` is set per kiosk:
 
-- **`absolut`** — the manufacturer publishes the depth of the hole, usually over CAN. It holds still while the string is clamped because the bit has not moved, so nothing is corrected and the reading is recorded as it arrives.
+- **`absolut`** — the manufacturer publishes the depth of the hole, usually over CAN. It holds still while the string is clamped because the bit has not moved, so nothing has to be reconstructed and the reading is recorded as it arrives — give or take a manual *Tiefenkorrektur*, which applies on every rig.
 - **`inkrementell`** — a rig Implenia retrofitted publishes the **Schlittenweg**, how far the Drehantrieb has travelled down the mast. It runs *backwards* by a pipe length at every change and then restarts from the top while the bit is still at the bottom of the hole, so a running offset is carried:
 
   ```
@@ -417,6 +417,46 @@ It refuses — in German, with what to do about it — when nothing is arriving 
 `value_numeric` stores the corrected value, so upload and export need no knowledge of the correction; `value_raw` keeps the reading as it arrived, so a wrong factor can be undone instead of having destroyed the measurement. The Klemmbacke pressure is deliberately **not** calibrated — its thresholds are set by watching what the clamp actually publishes, and a calibration meant for a sensor of the same name must not move them underneath the technician.
 
 The Rohrwechsel per-pipe check reports the correction to make: if a rig consistently reports the wrong distance per pipe, the warning names the factor to multiply the existing one by.
+
+## Depth Correction
+
+The depth measuring wheel slips. Over a hole the published depth creeps away from the real one — not in steps, as a missed pipe change would, but gradually, and not necessarily at a constant rate, so a factor cannot be relied on to fix it either. The worker on the rig can tell what the depth really is from the Bohrrohre they have mounted, so the depth on the drilling screen is **tappable** — labelled `Tippen zum Korrigieren`, because a label naming the action reads as a hint that something is wrong rather than as a button: it opens a correction screen, and the hole carries on from the corrected value.
+
+This is not the calibration above and must not be confused with it. Calibration is per sensor name, persisted, and applies to every element from then on — the right place for a wrong unit or a wrong zero, and the wrong place for drift inside one hole, which it would carry into the next pillar. A Tiefenkorrektur belongs to the element being recorded and goes away with it.
+
+**Forward-only.** Readings already recorded keep the depth they were stored with. That follows from what slip is: the error at any moment is proportional to how far the wheel has turned, so an early reading is nearly right while one from just before the correction is off by nearly the whole delta — re-stating the session at a constant delta would make the early readings *worse*. The depth series therefore steps where a correction was applied, and `value_raw` keeps every uncorrected reading, so the original series stays reconstructable.
+
+**The request carries a delta, not a target depth.** The rig keeps drilling while the screen is open, so the depth on it moves; the worker dials in a difference, the preview tracks the live value, and the server applies that difference whenever the request lands.
+
+**Four pieces of drill state move together** (`applyDepthCorrection` in `rohrwechsel.ts`), and leaving any of them behind breaks it quietly:
+
+| field | what goes wrong without it |
+|---|---|
+| `offset` | nothing is corrected at all |
+| `holeDepth` | `accumulateDepth`'s `max` swallows a downward correction — and the next Rohrwechsel rebuilds the offset from exactly this field, so the correction silently undoes itself a pipe later |
+| `lastDepth` | the screen and the next correction read a stale depth |
+| `depthAtLastChange` | the next per-pipe check counts the correction as drilling progress and warns about a pipe that was fine |
+
+Shifting all four leaves every comparison between them invariant, which is why the per-pipe check needs no knowledge of this. It works in both depth modes and **whether or not a Klemmbacke is configured** — a slipping wheel is not the retrofit's problem alone. `drill_state` is persisted by the correction itself rather than only at the next phase change, which may be a pipe away or may never come.
+
+**Every correction writes a `Kommentar` reading** — `Tiefe korrigiert: 23,70 m → 21,40 m (-2,30 m; Korrektur auf diesem Element insgesamt -2,30 m)` — into the session, so the step in the depth series arrives on the platform with the reason attached. A session reading rather than a live API call, so it uploads with the element from a site with no connectivity. The running total is the slip diagnosis: a wheel that needed three metres on one hole wants a technician, not another correction.
+
+```
+POST /api/recording/depth-correction   → { delta }  (metres, signed)
+                                       → { von, nach, delta, gesamt }
+```
+
+Refused with a German message a worker can act on: **400** for a delta that is not a number, larger than 50 m (a runaway guard — it says to split it in two), or one that would put the depth above the ground; **409** when no recording is running, or when no depth reading has arrived yet to correct.
+
+### The control
+
+Three step sizes, `± 1,00 m`, `± 0,10 m` and `± 0,01 m`, as six oversized buttons either side of the live value, with one `Übernehmen`. The centimetre is finer than anybody can judge from the pipes; it is there because it is the precision the depth is stored at, and the one step that lands on an exact value read off the rig. Three things about the control were decided rather than defaulted:
+
+- **Steps, not a drag control.** The obvious touch control is a rubber band — pull away from the centre, the value runs faster the further you pull, let go and it snaps back. It integrates over *time*, so you steer a moving number by holding a finger still: overshoot is the normal outcome, there is no way to undo precisely, and it wants a pointer-capture and animation loop on a Celeron J1900 for something two buttons do exactly. Discrete steps keep what it was for — holding a button repeats and accelerates, the same tension expressed in time rather than distance — and a release always lands on a clean multiple of 10 cm.
+- **The metre step does not repeat.** A held metre button reached eighteen metres in two seconds, which is not a correction anybody means. Slip is decimetres to a couple of metres over a hole, so three taps cover the coarse case and the smaller steps are for trimming, capped at one step per 120 ms — fast enough that two metres is a comfortable hold on `0,10`, slow enough that the number stays readable while it runs.
+- **Not in Rohr units.** Pipe lengths are the worker's unit for a *missed pipe change*, which is a step error. Slip does not arrive in units of Bohrrohr, and offering it that way would invite a correction of the wrong size.
+
+Full-screen, like the DIN catalogue and for the same reason: CLAUDE.md rules modals out, every exit is a 64px+ target, and nothing happens until `Übernehmen` is tapped. An accidental tap on the depth costs one tap on *Abbrechen* — or nothing at all, because with no touch for twenty seconds the screen gives the drilling profile back by itself. A recording that ends takes it with it, so a stop by voice or from a second tab cannot leave a worker on a screen whose only button can fail.
 
 ## Field Reference Data
 
