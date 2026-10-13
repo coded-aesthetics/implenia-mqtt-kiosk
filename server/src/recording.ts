@@ -1,13 +1,13 @@
 import { fetchImplenia } from './implenia-api.js';
-import { fetchHerstellenSensors, type SensorDefs } from './herstellen-sensors.js';
+import { resolveHerstellenSensors, type SensorDefs } from './herstellen-sensors.js';
 import { ingestion, isOperatingMode, type OperatingMode, type SensorMapEntry } from './ingestion.js';
 import type { DrillStatus } from './rohrwechsel.js';
 import { createLogger, onLogEntry, type LogEntry } from './logger.js';
 import { config } from './config.js';
 import { connectivity } from './connectivity.js';
+import { findSensorNameByRole } from './sensor-meta.js';
 import {
   completionStamp,
-  findCompletionSensorName,
   writeElementCompletion,
 } from './element-completion.js';
 import {
@@ -123,19 +123,35 @@ export async function beginRecording(elementName: string): Promise<{ sessionId: 
     throw new Error(`Aufzeichnung ${existing.id} für „${existing.element_name}" läuft bereits.`);
   }
 
-  // Fetch herstellen sensors (all element sensors minus vorgaben sensors)
-  const defs = await fetchHerstellenSensors(elementName);
+  // Herstellen sensors (all element sensors minus vorgaben sensors), from the
+  // platform or the local cache — see resolveHerstellenSensors.
+  const defs = await resolveHerstellenSensors(elementName);
 
-  // Build sensor map: { topicSuffix (lowercase) -> { sensorId, sensorType, unit } }
+  /*
+   * Build sensor map: { topicSuffix (lowercase) -> { sensorId, sensorType, unit, role } }
+   *
+   * The role is recorded alongside the id because the element's own metadata
+   * is the authority on which sensor means what, and it is only in hand here.
+   * See `sensorNameByRole`.
+   */
   const sensorMap = new Map<string, SensorMapEntry>();
-  const sensorMapJson: Record<string, { sensorId: string; sensorType: string; unit: string }> = {};
+  const sensorMapJson: Record<
+    string,
+    { sensorId: string; sensorType: string; unit: string; role?: string; name?: string }
+  > = {};
 
   for (const [key, type] of Object.entries(SENSOR_TYPE_MAP)) {
     const sensors = defs[key as keyof SensorDefs];
     if (!sensors) continue;
     for (const s of sensors) {
       const suffix = s.name.toLowerCase();
-      const entry = { sensorId: s.id, sensorType: type };
+      const role = s.meta?.role || undefined;
+      const entry: SensorMapEntry = {
+        sensorId: s.id,
+        sensorType: type,
+        name: s.name,
+        ...(role ? { role } : {}),
+      };
       sensorMap.set(suffix, entry);
       sensorMapJson[suffix] = { ...entry, unit: s.unit ?? '' };
     }
@@ -211,12 +227,56 @@ export function parseSensorMap(json: string): Map<string, SensorMapEntry> {
   }
 
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    const entry = value as { sensorId?: unknown; sensorType?: unknown };
+    const entry = value as {
+      sensorId?: unknown; sensorType?: unknown; role?: unknown; name?: unknown;
+    };
     if (typeof entry?.sensorId === 'string' && typeof entry?.sensorType === 'string') {
-      map.set(key, { sensorId: entry.sensorId, sensorType: entry.sensorType });
+      map.set(key, {
+        sensorId: entry.sensorId,
+        sensorType: entry.sensorType,
+        // Both absent on every session recorded before they were persisted.
+        ...(typeof entry.role === 'string' && entry.role ? { role: entry.role } : {}),
+        ...(typeof entry.name === 'string' && entry.name ? { name: entry.name } : {}),
+      });
     }
   }
   return map;
+}
+
+/**
+ * The sensor carrying a role *in this session*, by name, or null if it has
+ * none.
+ *
+ * Why not `findSensorNameByRole()` alone: that answers from the sensor CSVs as
+ * they stand right now, and a role is really a property of the element. Two
+ * snapshots drift apart independently — the platform stamps each sensor's
+ * `meta` from implenia-web's CSV when the element is *created*, while the
+ * kiosk's copy of those CSVs is whatever its last release shipped, synced by
+ * hand. So a role that moved to a different sensor, or a sensor that was
+ * renamed, leaves an older element's role placement disagreeing with the CSV —
+ * and a kiosk self-updates hourly, so the disagreement can also appear
+ * *between* a session's start and its sign-off.
+ *
+ * Resolving from the session's own map keeps a recording behaving the way it
+ * did when it started, which is the same reason the sensor ids are pinned
+ * there rather than re-fetched. The CSV stays the fallback, for sessions
+ * recorded before roles were persisted.
+ *
+ * Returns the name **as the platform spells it**, not the lowercased map key.
+ * Callers need the real spelling for three different reasons: a completion
+ * write is addressed to the platform by sensor name, a German error message
+ * naming a missing sensor should show the operator the real one, and the
+ * entries are keyed by the lowercased name anyway, which every caller
+ * lowercases for itself.
+ */
+export function sensorNameByRole(
+  map: Map<string, SensorMapEntry>,
+  role: string,
+): string | null {
+  for (const [key, entry] of map) {
+    if (entry.role === role) return entry.name || key;
+  }
+  return findSensorNameByRole(role);
 }
 
 /**
@@ -434,7 +494,7 @@ async function runUpload(
   // Ausführungsdatum for it would report a pillar as produced on the strength
   // of no data at all, and drop it out of the shift assignment.
   if (finalStatus === 'uploaded' && getSessionStats(sessionId).uploaded > 0) {
-    await autoMarkComplete(session.element_name);
+    await autoMarkComplete(session);
   }
 
   // Final progress
@@ -489,8 +549,19 @@ export function getRecordingState(): RecordingState {
   };
 }
 
-async function autoMarkComplete(elementName: string): Promise<void> {
-  const completionSensor = findCompletionSensorName();
+/**
+ * Stamp the element's Ausführungsdatum after a successful upload.
+ *
+ * The completion sensor is resolved from the session that was just uploaded,
+ * not from the sensor CSVs: the write goes to the platform's batch endpoint
+ * keyed by sensor *name* (`string_sensors: { Ausführungsdatum: … }`), so a
+ * name the element does not actually carry is a write that either fails or
+ * lands somewhere nobody reads. The session knows which of its own sensors
+ * holds the role. See `sensorNameByRole`.
+ */
+async function autoMarkComplete(session: Session): Promise<void> {
+  const elementName = session.element_name;
+  const completionSensor = sensorNameByRole(parseSensorMap(session.sensor_map), 'is_completed');
   if (!completionSensor) {
     log.warn('No is_completed sensor found — skipping auto-completion for "%s"', elementName);
     return;

@@ -141,6 +141,62 @@ GET /api/elements/:elementName/vorgaben   → { vorgaben } from the cache, 404 i
 
 Local by design: resuming a pillar is exactly the moment a site is likely to be offline, so a fallback that needed the API would fail where it is needed most.
 
+### Sensor definition cache — starting a recording offline
+
+Starting a recording needs the platform's sensor **ids**, not just names: readings upload to `/api/v1/sensor-<type>/<id>/batch`, and one stored without an id is kept locally and never uploadable. Resolving them used to be the only part of `beginRecording` that touched the network, which made the single most important action on a site depend on the thing least likely to work there. A site with an imported Schichtauftrag could list its elements and then fail to record one with `409 fetch failed`.
+
+The definitions are therefore cached per element in `element_sensors`, from two sources:
+
+- **Every successful fetch** from `/measuring-device/self/child/name:<element>`. After the first start, an element works offline.
+- **The imported Schichtauftrag.** implenia-web's export carries each element's `sensors` (id, name, unit, meta), its `vorgaben_sensors` and `vorgaben_sensor_ids` for exactly this reason — it is the only way a site that has *never* been online can record data that is uploadable afterwards. At ~21 KB per DSV element the file is well past Fastify's 1 MiB default body limit, so the import route raises its own to 16 MiB (~750 elements).
+
+```
+POST /api/shift-assignment/import   → { ok, sensorsCached }
+POST /api/recording/start           → 503 + German instructions when there are none
+GET  /api/elements/:name/sensors    → the same resolution; 503 when there are none
+```
+
+Both element-sensor routes are served the same way:
+
+```
+GET /api/elements/:name/sensors           → the element's own (herstellen) sensors
+GET /api/elements/:name/vorgaben/sensors  → the `vorgaben` child's, for the Soll units
+```
+
+`/api/elements/:name/sensors` is what the element screens read to know which sensors exist, what they are called and which of them is a hero tile. It goes through the *same* `resolveHerstellenSensors` as a recording start — deliberately one function, so the two cannot drift apart — and has no `getApiConfig()` guard: a kiosk that was never given API credentials and runs entirely off an imported Schichtauftrag is exactly the case that needs it to answer. Before, it returned 502 offline and `useHerstellenSensors` swallowed that into an empty list, so the screens silently rendered no sensors at all.
+
+`/api/elements/:name/vorgaben/sensors` is the other half of the Vorgaben cache: the *values* have been served locally since that cache went in, and this is what says what they are called and in which unit. `useVorgabenSensors` swallows a failure the same way, so offline every Soll value on the element screen quietly lost its unit. Three details:
+
+- **All six sensor keys are preserved.** The response is passed through to the screen, which reads `sensors_int_float` and `sensors_binary` too — two types the kiosk never records and which are therefore absent from `SensorDefs`. A cache that round-tripped through that type would drop them.
+- **A 404 answers `{}`, not 503.** A pillar predating the `vorgaben` child device genuinely has none, and telling the operator to re-import would send them after a file that cannot help.
+- **The cache row is merged, never overwritten.** The two halves arrive from different requests — the element's own sensors from the herstellen fetch or the import, the Vorgabe sensors from either that fetch or the screen's own request — so a plain write from one would drop the other, leaving the element unable to start a recording or unable to label its Soll values.
+
+One consequence worth knowing: `fetchHerstellenSensors` will not cache an element at all while the Vorgabe answer is merely *assumed* empty (a network failure, as opposed to a 404), because an entry that subtracts nothing would later have the kiosk record a legacy pillar's Soll values as measurements. The exception is an element whose Vorgabe half is already on record, where the merge keeps it and the entry stays safe.
+
+Four things about it are load-bearing:
+
+- **The ids are always real.** Nothing invents or defers one. A session started offline uploads normally once the link returns, with no resolution step and no rewriting of `session_readings`.
+- **Stored unfiltered.** The cache holds the element's sensors *plus* which of them are Vorgabe sensors; which ones get recorded is decided by `filterHerstellenSensors` at the moment of use. Caching the filtered result would freeze the sensor CSVs and `isRecordableSensor` as they stood on the day of the fetch, so a CSV sync or a fix to that filter would never reach anything already cached.
+- **The CSVs enrich, they never decide.** `getSensorMetaLookup()` fills in the `source`/`role`/`priority`/`unit` the platform does not store, and only where they are missing. It must never determine whether a sensor *exists*: the CSVs are synced by hand from implenia-web and version separately from both the platform and this kiosk, so a sensor added there and not yet synced here has to reach the sensor map anyway. One that does not is recorded with a null sensor id and silently never uploaded. This is why the local CSVs are not a fallback source of definitions, tempting as it looks — they already carry name, type, unit, source and role.
+- **A vorgaben set that is only assumed empty is not cached.** The vorgaben request failing on the network is not the same answer as a 404, which legitimately means a pillar predating the `vorgaben` child device. Caching `[]` for the former would later have the kiosk record and upload a legacy pillar's Soll values as if they were measurements.
+
+When there is genuinely nothing — no platform, and an element never recorded here — the start is refused with **503** (not 409: nothing about the kiosk's state is in the way) and a German message naming the one thing that fixes it, using the exact label of the button on the element list. The old behaviour put the words `fetch failed` on a worker's screen.
+
+All three callers bound their wait on the platform at 8s (`SENSOR_RESOLVE_TIMEOUT_MS`). `fetchImplenia` is otherwise unbounded, and a TCP connection to a host that is reachable but not answering — the normal shape of a bad mobile link — hangs for as long as the kernel allows, which on this path is an indefinite spinner with the Start button disabled. Uploads deliberately stay unbounded: they run in the background and giving up early only means retrying later.
+
+### Sensor roles are pinned to the session
+
+A sensor's role (`depth`, `is_completed`, `geology_nr`, …) belongs to the **element**, not to the kiosk: implenia-web's wizard stamps it into `sensor.meta` at element creation and the backend serves it with `include_meta=true`. The kiosk's copies of the same CSVs are whatever its last release shipped. Two independent snapshots of one source — so resolving a role from the CSVs *at the moment of use* reads the wrong one for an element created before a role moved or a sensor was renamed, and for any session that outlives an auto-update (hourly, and a recording can run for a day).
+
+`beginRecording` therefore records each sensor's `role` and its real `name` in the session's `sensor_map` next to the id, and `sensorNameByRole` resolves from there — same reasoning as the ids, which have always been pinned rather than re-fetched. `findSensorNameByRole` stays the fallback for sessions recorded before this. Geology (`resolveSensors`) and post-upload completion (`autoMarkComplete`) both use it.
+
+Two details are load-bearing:
+
+- **`name` is persisted, not derived.** The map is keyed by the *lowercased* name, because that is all a resolved topic gives. A completion write is addressed to the platform by sensor name — `string_sensors: { Ausführungsdatum: … }` — so returning the key would write to `ausführungsdatum`: a different sensor, or a new one nothing reads. It is also the spelling a German "sensor missing" message should show.
+- **Element-independent role lookups stay on the CSVs,** because they have no session to ask: ingestion's Rohrwechsel depth check on every live reading, topic resolution, the calibration and topic-assignment screens, the sensor-mapping UI, the volume-tracking set, and `stream` (absent from `SensorMeta`, which is `{source, role, priority}`). The manual complete/uncomplete routes have no session either and keep `findCompletionSensorName()`.
+
+This closes a *visible* degradation rather than a silent one — before it, the sign-off said `Der Sensor „Bohrtiefe" fehlt in dieser Aufzeichnung` and the measurements still uploaded.
+
 
 ### First-start setup
 
@@ -160,7 +216,7 @@ GET  /api/config/reset   → { allowed, unsafe: { sessions, readings, clipped },
 POST /api/config/reset   → 409 while data is unsafe, otherwise wipes and clears caches
 ```
 
-**Clears:** Verfahren, transport, MQTT settings, devices, channel mappings, topic overrides, recorded sessions and readings, export records, the buffer, the imported shift assignment, the cached element vorgaben. The UI additionally clears the voice comment queue, which lives in `localStorage` and is therefore out of the server's reach — and, for the same reason, blocks the reset itself while comments are still unsent: the server's guard cannot see them, so a kiosk that was offline all shift would otherwise report "nothing unsaved" and discard a shift of dictation.
+**Clears:** Verfahren, transport, MQTT settings, devices, channel mappings, topic overrides, recorded sessions and readings, export records, the buffer, the imported shift assignment, the cached element vorgaben and sensor definitions. The UI additionally clears the voice comment queue, which lives in `localStorage` and is therefore out of the server's reach — and, for the same reason, blocks the reset itself while comments are still unsent: the server's guard cannot see them, so a kiosk that was offline all shift would otherwise report "nothing unsaved" and discard a shift of dictation.
 
 **Keeps:** the API key and server address — the site's credentials, not this machine's setup, and re-entering a token on a touchscreen is miserable.
 
@@ -735,6 +791,7 @@ server/src/
   vorgabe-geology.ts  — Planned profile from "Geologie n" / "Tiefe Geologie n"
   element-completion.ts — Ausführungsdatum writes (sentinel date + data-version stamp)
   element-device.ts     — Element name → platform device id (resolve + cache)
+  herstellen-sensors.ts — Element sensor defs: fetch, filter, offline cache
   session-export.ts   — Stream-driven .xlsx export (HDI/IVL) for implenia-web import
   connectivity.ts     — Online/offline watchdog
   updater.ts          — Self-update from GitHub Releases

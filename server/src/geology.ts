@@ -50,8 +50,7 @@ import {
   alignBoundaries, drilledDepth, observedLayers, type DepthSample,
 } from './depth-timestamp.js';
 import { createLogger } from './logger.js';
-import { parseSensorMap } from './recording.js';
-import { findSensorNameByRole } from './sensor-meta.js';
+import { parseSensorMap, sensorNameByRole } from './recording.js';
 import { mergeProfile, type MergedProfile } from './geology-profile.js';
 import { parseVorgabeGeology, type VorgabeProfile } from './vorgabe-geology.js';
 
@@ -132,15 +131,24 @@ interface GeologySensors {
 /**
  * Resolve the geology sensors for a session, or explain why it cannot be done.
  *
- * By CSV role throughout, never by name: `depth` is `Bohrtiefe` for
- * Injektionsbohren and `Tiefe` for DSV, and the ids come from the session's own
- * `sensor_map` so a session recorded before a sensor was added keeps behaving
- * the way it did when it ran.
+ * By role throughout, never by name: `depth` is `Bohrtiefe` for
+ * Injektionsbohren and `Tiefe` for DSV. Both halves of the resolution come
+ * from the session's own `sensor_map` — the role→name step as much as the
+ * name→id one — so a recording keeps behaving the way it did when it started.
+ *
+ * Taking the name from the current sensor CSVs instead was the subtle half of
+ * this. A role is a property of the element: the platform stamps each sensor's
+ * meta when the element is created, the kiosk's CSV copy is whatever its last
+ * release shipped, and the kiosk self-updates hourly — so a renamed sensor or
+ * a moved role made this resolve to a name that is not in this session's map,
+ * for an older element or simply for a session that outlived an update. See
+ * `sensorNameByRole`.
  */
 function resolveSensors(session: Session): GeologySensors | { fehler: string } {
-  const depthName = findSensorNameByRole('depth');
-  const nrName = findSensorNameByRole('geology_nr');
-  const textName = findSensorNameByRole('geology_text');
+  const map = parseSensorMap(session.sensor_map);
+  const depthName = sensorNameByRole(map, 'depth');
+  const nrName = sensorNameByRole(map, 'geology_nr');
+  const textName = sensorNameByRole(map, 'geology_text');
 
   if (!nrName) {
     return { fehler: 'Dieses Verfahren erfasst keine Geologie.' };
@@ -149,7 +157,6 @@ function resolveSensors(session: Session): GeologySensors | { fehler: string } {
     return { fehler: 'Dieses Verfahren hat keinen Tiefensensor — ohne ihn lässt sich die Geologie keiner Tiefe zuordnen.' };
   }
 
-  const map = parseSensorMap(session.sensor_map);
   const depth = map.get(depthName.toLowerCase());
   const nr = map.get(nrName.toLowerCase());
   const text = textName ? map.get(textName.toLowerCase()) : undefined;
@@ -281,8 +288,9 @@ export function getGeologyContext(session: Session): GeologyContext {
   const sensors = resolveSensors(session);
   if (isError(sensors)) {
     // "No geology sensors" is not a fault, so it carries no hinweis. A missing
-    // sensor in an otherwise geology-capable Verfahren is, and does.
-    const nrName = findSensorNameByRole('geology_nr');
+    // sensor in an otherwise geology-capable Verfahren is, and does. Asked of
+    // the same source resolveSensors just used, so the two cannot disagree.
+    const nrName = sensorNameByRole(parseSensorMap(session.sensor_map), 'geology_nr');
     return nrName ? { ...leer, hinweis: sensors.fehler } : leer;
   }
 

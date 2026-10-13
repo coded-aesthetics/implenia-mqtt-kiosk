@@ -706,9 +706,17 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--color-warning)',
   },
   error: {
-    fontSize: 'var(--font-sm)',
+    /*
+     * Not --font-sm: that is the floor, reserved for labels and meta info,
+     * and an error is the one thing in this bar a worker has to actually read
+     * and act on. These carry the recovery instruction now, so they are body
+     * text.
+     */
+    fontSize: 'var(--font-base)',
     color: 'var(--color-danger)',
     marginBottom: '0.5rem',
+    lineHeight: 1.35,
+    textAlign: 'center',
   },
   /** Like recordingRow, but it must never wrap. See the comment at its use. */
   recordingRowFest: {

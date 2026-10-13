@@ -188,8 +188,19 @@ export function useShiftAssignment(hasApiKey: boolean): ShiftAssignmentState {
         body: text,
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: 'Unbekannter Fehler' }));
-        return { ok: false, error: body.error };
+        /*
+         * `error` is ours; `message` is what Fastify itself answers with (a
+         * body over the limit, a malformed payload), and it is neither German
+         * nor guaranteed to be there. Without the last fallback the bar showed
+         * the worker the word "undefined".
+         */
+        const body = await res.json().catch(() => ({}));
+        return {
+          ok: false,
+          error: body.error ?? body.message
+            ?? `Der Schichtauftrag konnte nicht importiert werden (Fehler ${res.status}). `
+              + 'Bitte die Datei neu aus dem Portal exportieren.',
+        };
       }
       fetchShift();
       return { ok: true };

@@ -20,21 +20,39 @@ vi.mock('./herstellen-sensors.js', () => ({
 }));
 
 vi.mock('./element-completion.js', () => ({
-  findCompletionSensorName: () => 'Ausführungsdatum',
   completionStamp: () => '2026-10-06T12:00:00.000Z',
   writeElementCompletion: vi.fn().mockResolvedValue(undefined),
 }));
 
 let db: typeof import('./db.js');
+let meta: typeof import('./sensor-meta.js');
 let recording: typeof import('./recording.js');
 let writeCompletion: ReturnType<typeof vi.fn>;
 
+/**
+ * The completion sensor is named by the session's own map, through its
+ * `is_completed` role — the write is keyed by sensor *name* on the platform,
+ * and the element is the authority on which of its sensors carries the role.
+ */
 const SENSOR_MAP = JSON.stringify({
+  testsensor: { sensorId: 'sensor-abc', sensorType: 'float' },
+  // Keyed lowercase, `name` carrying the platform's real spelling — which is
+  // what the completion write is addressed to. The key would be a different
+  // sensor, or a newly created one.
+  'ausführungsdatum': {
+    sensorId: 'sensor-ausf', sensorType: 'string',
+    name: 'Ausführungsdatum', role: 'is_completed',
+  },
+});
+
+/** A session from before roles were persisted: no role anywhere in the map. */
+const LEGACY_SENSOR_MAP = JSON.stringify({
   testsensor: { sensorId: 'sensor-abc', sensorType: 'float' },
 });
 
 beforeAll(async () => {
   db = await import('./db.js');
+  meta = await import('./sensor-meta.js');
   recording = await import('./recording.js');
   const completion = await import('./element-completion.js');
   writeCompletion = completion.writeElementCompletion as unknown as ReturnType<typeof vi.fn>;
@@ -46,10 +64,11 @@ beforeAll(async () => {
 
 beforeEach(() => {
   writeCompletion.mockClear();
+  meta.clearVerfahrenCache();
 });
 
-function endedSession(elementName: string): number {
-  const id = db.createSession(elementName, SENSOR_MAP);
+function endedSession(elementName: string, map = SENSOR_MAP): number {
+  const id = db.createSession(elementName, map);
   db.endSession(id);
   return id;
 }
@@ -64,6 +83,20 @@ describe('auto-completion after upload', () => {
     expect(result.status).toBe('uploaded');
     expect(writeCompletion).toHaveBeenCalledWith(
       'F-01', 'Ausführungsdatum', '2026-10-06T12:00:00.000Z',
+    );
+  });
+
+  it('falls back to the sensor CSVs for a session recorded before roles were persisted', async () => {
+    // Those sessions can still be sitting unuploaded on a kiosk that has just
+    // updated, and they must finish their element exactly as before.
+    meta.setActiveVerfahren('dsv');
+    const id = endedSession('F-02', LEGACY_SENSOR_MAP);
+    db.insertSessionReading(id, 'testsensor', 'sensor-abc', 'float', 1.5, null);
+
+    await recording.uploadSession(id);
+
+    expect(writeCompletion).toHaveBeenCalledWith(
+      'F-02', 'Ausführungsdatum', '2026-10-06T12:00:00.000Z',
     );
   });
 

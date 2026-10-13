@@ -54,6 +54,25 @@ const SELF_WRITTEN_TOPICS = new Set<string>([STATUS_TOPIC, LOG_TOPIC]);
 export interface SensorMapEntry {
   sensorId: string;
   sensorType: string;
+  /**
+   * The sensor's semantic role (`depth`, `is_completed`, `geology_nr`, …) as
+   * it stood when the session started, or undefined for a sensor that has
+   * none — and for every session recorded before roles were persisted.
+   *
+   * Pinned to the session on purpose. See `sensorNameByRole` in recording.ts.
+   */
+  role?: string;
+  /**
+   * The sensor's name as the platform spells it.
+   *
+   * The map is keyed by the *lowercased* name, because that is what a resolved
+   * topic gives, and the real spelling is not recoverable from it. It has to
+   * be kept: a completion write is addressed to the platform by sensor name
+   * (`string_sensors: { Ausführungsdatum: … }`), and `ausführungsdatum` is a
+   * different sensor — or a new one. It is also the spelling a German error
+   * message about a missing sensor should show the operator.
+   */
+  name?: string;
 }
 
 /**

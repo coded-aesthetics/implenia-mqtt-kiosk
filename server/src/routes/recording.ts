@@ -1,5 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import { beginRecording, endRecording, uploadSession, getRecordingState, tryAutoUpload } from '../recording.js';
+import {
+  beginRecording, endRecording, uploadSession, getRecordingState, tryAutoUpload,
+} from '../recording.js';
+import { SensorDefsUnavailableError } from '../herstellen-sensors.js';
 import {
   getSessions, getSessionById, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
   getSessionReadingCount, setOperatingModeRow, getMostRecentSession, getCompletedElements,
@@ -89,6 +92,16 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       broadcastMessage({ type: 'recording-state', ...getRecordingState() });
       return reply.send(result);
     } catch (err) {
+      /*
+       * Missing sensor definitions are not a conflict — nothing about this
+       * kiosk's state is in the way. 503 says what it is: the thing needed to
+       * start is not available right now. The message is the error's own,
+       * because it is the only one of these the operator can act on.
+       */
+      if (err instanceof SensorDefsUnavailableError) {
+        log.warn('Start refused for "%s": no sensor definitions', elementName);
+        return reply.status(503).send({ error: err.message });
+      }
       return reply.status(409).send({ error: (err as Error).message });
     }
   });

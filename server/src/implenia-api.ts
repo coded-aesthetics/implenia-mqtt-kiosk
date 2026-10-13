@@ -24,10 +24,17 @@ export function getApiConfig(): ApiConfig | null {
 /**
  * Fetch wrapper that adds Implenia Bearer auth.
  * Returns the parsed JSON response or throws on error.
+ *
+ * `timeoutMs` is opt-in, and belongs only on a request a worker is waiting
+ * behind. A TCP connection to a host that is reachable but not answering — the
+ * normal shape of a bad mobile link on site — hangs for as long as the kernel
+ * lets it, so an unbounded request on such a path is an indefinite spinner.
+ * Uploads deliberately do not set it: they run in the background, their
+ * batches are large, and giving up early would only mean retrying later.
  */
 export async function fetchImplenia<T = unknown>(
   path: string,
-  options?: { method?: string; body?: unknown },
+  options?: { method?: string; body?: unknown; timeoutMs?: number },
 ): Promise<T> {
   const cfg = getApiConfig();
   if (!cfg) throw new Error('Implenia API not configured');
@@ -47,6 +54,10 @@ export async function fetchImplenia<T = unknown>(
   if (options?.body) {
     headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(options.body);
+  }
+
+  if (options?.timeoutMs !== undefined) {
+    init.signal = AbortSignal.timeout(options.timeoutMs);
   }
 
   const res = await fetch(url, init);
