@@ -72,22 +72,79 @@ export function completionBody(
 }
 
 /**
+ * What `readings/batch` answers — including when it accepted nothing.
+ *
+ * Every field is optional here on purpose: the kiosk must keep working against
+ * a backend that predates any of them, and an older one answering without
+ * `success` is treated as having accepted the write, which is what it meant.
+ */
+interface BatchReadingsResponse {
+  success?: boolean;
+  failed_count?: number;
+  results?: Array<{ sensor_name?: string; success?: boolean; error?: string }>;
+}
+
+/**
+ * Turn a batch response that rejected the reading into a thrown error.
+ *
+ * `readings/batch` resolves each sensor **by name** and reports a name it does
+ * not know per reading — `failed_count: 1`, `success: false`, and a `results`
+ * entry saying so — inside an **HTTP 200**. The transaction commits, nothing
+ * is written, and the status code says it went fine.
+ *
+ * That made the one write the whole completion contract rests on silently
+ * ineffective: `autoMarkComplete` logged „Auto-marked element … as complete"
+ * for a stamp that was never stored, the element stayed on the platform's
+ * unfinished list, and implenia-web never saw a changed stamp so it never
+ * re-materialized the element's derived values. A wrong sensor name, an
+ * element whose `Ausführungsdatum` sensor was never created, a cached device id
+ * pointing at another element — all three looked like success.
+ *
+ * Pure, so the shape is pinned by a test rather than by a mock.
+ */
+export function assertBatchAccepted(
+  res: BatchReadingsResponse | null | undefined,
+  completionSensor: string,
+): void {
+  if (!res) return;
+  if (res.success !== false && (res.failed_count ?? 0) === 0) return;
+
+  const detail = (res.results ?? [])
+    .filter((r) => r.success === false)
+    .map((r) => `${r.sensor_name ?? completionSensor}: ${r.error ?? 'unknown error'}`)
+    .join('; ');
+
+  throw new Error(
+    `Die Plattform hat die Fertigmeldung nicht übernommen — der Sensor `
+    + `„${completionSensor}" existiert für dieses Element nicht. `
+    + `(${detail || `failed_count=${res.failed_count ?? 'unbekannt'}`})`,
+  );
+}
+
+/**
  * Write the element's completion value. Throws on API failure — every caller
  * is expected to stay usable when the write does not land, because a stale
  * completion flag must never block the next recording.
  *
  * By resolved device id, not by `name:<element>`: the batch endpoint does not
  * accept the reference form. See element-device.ts.
+ *
+ * The response is checked, not just the status code — see
+ * `assertBatchAccepted`. Deliberately outside the `withElementDevice`
+ * callback: that retry is for a device id that moved, and a reading rejected
+ * by sensor name is a sensor this element does not have, so re-resolving the
+ * id would only send a write that fails the same way.
  */
 export async function writeElementCompletion(
   elementName: string,
   completionSensor: string,
   value: string,
 ): Promise<void> {
-  await withElementDevice(elementName, (deviceId) =>
-    fetchImplenia(
+  const res = await withElementDevice(elementName, (deviceId) =>
+    fetchImplenia<BatchReadingsResponse>(
       `/api/v1/measuring-device/${deviceId}/readings/batch`,
       { method: 'POST', body: completionBody(completionSensor, value) },
     ),
   );
+  assertBatchAccepted(res, completionSensor);
 }
