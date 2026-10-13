@@ -19,6 +19,32 @@ function friendlyApiError(status: number, _body: string): string {
   return `Unerwarteter Fehler (${status})`;
 }
 
+/**
+ * The German, actionable message for a failed Schichtauftrag import.
+ *
+ * `error` alone is ours: the server's own validator answers in German, naming
+ * what is wrong with the file. Fastify's error envelope is
+ * `{statusCode, code, error, message}` and its `error` holds the *English*
+ * status name, so preferring `error` showed the worker "Payload Too Large" for
+ * a file over the body limit and made the German fallback unreachable for
+ * every framework-generated failure. Those are the ones carrying `code` or
+ * `statusCode`, which our own routes never send.
+ */
+function importErrorMessage(status: number, body: Record<string, unknown>): string {
+  const fromFastify = typeof body.code === 'string' || typeof body.statusCode === 'number';
+  if (!fromFastify && typeof body.error === 'string' && body.error) return body.error;
+  if (status === 413) {
+    return 'Die Datei ist zu groß für den Import. Bitte den Schichtauftrag im Portal '
+      + 'auf weniger Elemente einschränken und neu exportieren.';
+  }
+  if (status === 400) {
+    return 'Die Datei ist kein gültiger Schichtauftrag. Bitte eine vom Implenia-Portal '
+      + 'exportierte Datei verwenden.';
+  }
+  return `Der Schichtauftrag konnte nicht importiert werden (Fehler ${status}). `
+    + 'Bitte die Datei neu aus dem Portal exportieren.';
+}
+
 // --- Config ---
 
 export interface ConfigState {
@@ -188,19 +214,8 @@ export function useShiftAssignment(hasApiKey: boolean): ShiftAssignmentState {
         body: text,
       });
       if (!res.ok) {
-        /*
-         * `error` is ours; `message` is what Fastify itself answers with (a
-         * body over the limit, a malformed payload), and it is neither German
-         * nor guaranteed to be there. Without the last fallback the bar showed
-         * the worker the word "undefined".
-         */
         const body = await res.json().catch(() => ({}));
-        return {
-          ok: false,
-          error: body.error ?? body.message
-            ?? `Der Schichtauftrag konnte nicht importiert werden (Fehler ${res.status}). `
-              + 'Bitte die Datei neu aus dem Portal exportieren.',
-        };
+        return { ok: false, error: importErrorMessage(res.status, body) };
       }
       fetchShift();
       return { ok: true };

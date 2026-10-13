@@ -73,6 +73,21 @@ const PLATFORM_VORGABEN = {
 };
 
 /**
+ * A pillar predating the `vorgaben` child device: Soll and Ist sit side by
+ * side on the element itself with no `meta` to tell them apart, so the only
+ * thing that keeps the Soll value out of the recording is the Vorgabe id set.
+ *
+ * `Tiefe` is in the local CSVs and `Soll-Tiefe` is not, which is what makes
+ * this element need that set — see `needsVorgabenIds`.
+ */
+const LEGACY_SENSORS = {
+  sensors_float: [
+    { id: TIEFE_ID, name: 'Tiefe', unit: 'm', meta: null },
+    { id: VORGABE_ID, name: 'Soll-Tiefe', unit: 'm', meta: null },
+  ],
+};
+
+/**
  * One element out of implenia-web's shift assignment export, carrying the
  * `sensors` and `vorgaben_sensor_ids` fields the kiosk needs offline.
  */
@@ -185,6 +200,53 @@ describe('a start that reaches the platform', () => {
     expect(herstellen.cachedHerstellenSensors('P-01')).toBeNull();
   });
 
+  it('refuses a legacy pillar rather than record its Soll values', async () => {
+    /*
+     * The element's own sensors arrive, the vorgaben request dies, and on this
+     * pillar nothing but the Vorgabe id set distinguishes a Soll sensor from a
+     * measurement. Returning the unsubtracted list is how `Soll-Tiefe` ends up
+     * in the session map and uploads as a measurement — the guard on the cache
+     * kept the *entry* safe while handing the caller the very set it refused
+     * to store.
+     */
+    fetchImplenia.mockImplementation(async (path: string) => {
+      if (path.includes('name:vorgaben')) throw new TypeError('fetch failed');
+      return LEGACY_SENSORS;
+    });
+
+    await expect(recording.beginRecording('P-41')).rejects.toBeInstanceOf(
+      herstellen.SensorDefsUnavailableError,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/recording/start',
+      payload: { elementName: 'P-41' },
+    });
+    expect(res.statusCode).toBe(503);
+    // Not „Plattform nicht erreichbar": it answered. A second tap may be all
+    // this needs, so that is what the message says to try first.
+    expect(res.json().error).toContain('Vorgabe-Sensoren');
+    expect(res.json().error).toContain('Start');
+  });
+
+  it('uses the Vorgabe set it already has when the request for it fails', async () => {
+    // Same failure on an element that has been seen before: the answer is on
+    // record, so nothing is lost and the Soll sensor stays out.
+    herstellen.cacheImportedSensors([{
+      name: 'P-42', sensors: LEGACY_SENSORS, vorgaben_sensor_ids: [VORGABE_ID],
+    }]);
+    fetchImplenia.mockImplementation(async (path: string) => {
+      if (path.includes('name:vorgaben')) throw new TypeError('fetch failed');
+      return LEGACY_SENSORS;
+    });
+
+    const { sessionId } = await recording.beginRecording('P-42');
+    const ids = Object.values(sensorMapOf(sessionId)).map((e) => e.sensorId);
+    expect(ids).toContain(TIEFE_ID);
+    expect(ids).not.toContain(VORGABE_ID);
+  });
+
   it('does cache when the element simply has no vorgaben child', async () => {
     // A 404 is the real answer for a pillar predating the `vorgaben` device.
     fetchImplenia.mockImplementation(async (path: string) => {
@@ -255,8 +317,29 @@ describe('a start on a site that has never been online', () => {
       { name: 'P-10', sensors: 'not an object' },
       { name: 'P-11', sensors: PLATFORM_SENSORS, vorgaben_sensor_ids: 'nope' },
     ])).toBe(1);
-    // The one usable element still made it, with no vorgaben to subtract.
+    // The one usable element still made it. Its sensors all carry a source,
+    // so the Vorgabe set decides nothing for it and its absence costs nothing.
     expect(herstellen.cachedHerstellenSensors('P-11')).not.toBeNull();
+  });
+
+  it('counts an unusable Vorgabe field as never answered, not as empty', async () => {
+    /*
+     * The same lenient import, on a legacy pillar: `vorgaben_sensor_ids` is
+     * not a list, so nothing records which sensors are Vorgabe sensors. Read
+     * back as an empty set, this element would record and upload `Soll-Tiefe`
+     * as a measurement. It counts as having no definitions instead — a visible
+     * 503 naming the import, which the operator can act on.
+     */
+    expect(herstellen.cacheImportedSensors([
+      { name: 'P-14', sensors: LEGACY_SENSORS, vorgaben_sensor_ids: 'nope' },
+    ])).toBe(1);
+
+    expect(herstellen.cachedHerstellenSensors('P-14')).toBeNull();
+
+    platformOffline();
+    await expect(recording.beginRecording('P-14')).rejects.toBeInstanceOf(
+      herstellen.SensorDefsUnavailableError,
+    );
   });
 });
 
@@ -458,6 +541,32 @@ describe('the Soll units offline', () => {
     });
 
     const res = await app2.inject({ url: '/api/elements/P-33/vorgaben/sensors' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({});
+
+    await app2.close();
+  });
+
+  it('remembers a 404, and still answers empty once the link is gone', async () => {
+    /*
+     * „Dieses Element hat keine Vorgabe-Sensoren" is an answer worth keeping.
+     * Collapsing a cached empty list back to „nichts gefunden" had this
+     * answer a 503 telling the operator to re-export a Schichtauftrag that
+     * cannot help — for a pillar the kiosk had already checked.
+     */
+    const app2 = await vorgabenApp();
+    fetchImplenia.mockImplementation(async () => {
+      const err = new Error('Implenia API 404: not found') as Error & { statusCode: number };
+      err.statusCode = 404;
+      throw err;
+    });
+
+    expect((await app2.inject({ url: '/api/elements/P-35/vorgaben/sensors' })).statusCode)
+      .toBe(200);
+
+    platformOffline();
+    const res = await app2.inject({ url: '/api/elements/P-35/vorgaben/sensors' });
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({});

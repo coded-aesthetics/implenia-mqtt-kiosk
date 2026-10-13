@@ -135,14 +135,18 @@ export interface ElementSensorDefs {
  * herstellen fetch or an import, the Vorgabe sensors from either that same
  * fetch or the element screen's own request. A plain write from one would
  * drop the other. Never throws — a cache that cannot be written costs the
- * offline path, not the request that succeeded.
+ * offline path, not the request that succeeded — but it does report whether
+ * the write happened, because a caller that only caches once per process
+ * needs to know not to count a failure as done.
  */
-function mergeElementSensors(elementName: string, patch: ElementSensorDefs): void {
+function mergeElementSensors(elementName: string, patch: ElementSensorDefs): boolean {
   try {
     const existing = (getElementSensors(elementName) ?? {}) as ElementSensorDefs;
     setElementSensors(elementName, { ...existing, ...patch });
+    return true;
   } catch (err) {
     log.warn('Could not cache sensors for "%s": %s', elementName, (err as Error).message);
+    return false;
   }
 }
 
@@ -189,17 +193,51 @@ export function filterHerstellenSensors(
 }
 
 /**
- * Whether an element's cache already records which of its sensors are Vorgabe
- * sensors — as a list, or as the legacy bare ids.
+ * Which of an element's sensors are Vorgabe sensors, from its cache — or null
+ * when that was never answered.
  *
- * The distinction that matters is "known to be empty" versus "never
- * answered": a cache entry with neither subtracts nothing, which on a pillar
- * whose Soll and Ist sensors sit side by side would have the kiosk record and
- * upload the Soll values as if they were measurements.
+ * The null is the whole point of the return type. "Known to be empty" is a
+ * real answer: a pillar predating the `vorgaben` child device has none, and
+ * the legacy fallback subtracts nothing. "Never answered" is not an answer,
+ * and treating it as an empty set on a pillar whose Soll and Ist sensors sit
+ * side by side has the kiosk record and upload the Soll values as if they were
+ * measurements. Every path that needs the set goes through here so that
+ * neither of them can quietly turn into the other.
  */
+function vorgabenIdsOf(raw: ElementSensorDefs | null): ReadonlySet<string> | null {
+  if (raw?.vorgabenSensors != null) return collectVorgabenIds(raw.vorgabenSensors);
+  if (Array.isArray(raw?.vorgabenIds)) return new Set(raw.vorgabenIds);
+  return null;
+}
+
+/** Whether an element's cache records which of its sensors are Vorgabe sensors. */
 function hasVorgabenInfo(elementName: string): boolean {
-  const raw = getElementSensors(elementName) as ElementSensorDefs | null;
-  return raw?.vorgabenSensors != null || Array.isArray(raw?.vorgabenIds);
+  return vorgabenIdsOf(getElementSensors(elementName) as ElementSensorDefs | null) != null;
+}
+
+/**
+ * Does deciding this element's sensors actually need that answer?
+ *
+ * Only the legacy fallback in `isRecordableSensor` subtracts the Vorgabe ids.
+ * A sensor whose `source` is known — from the platform's `meta` or from the
+ * local CSVs that `filterHerstellenSensors` enriches from — is decided without
+ * them, and so is one carrying a RECORDABLE_ROLES role. So on a migrated
+ * element an unknown Vorgabe set costs nothing, while on a legacy pillar it
+ * decides whether a Soll sensor is recorded as a measurement: there the kiosk
+ * has to refuse rather than guess, because guessing is silent and wrong in the
+ * one direction that corrupts data.
+ */
+export function needsVorgabenIds(allDefs: SensorDefs): boolean {
+  const csvMeta = getSensorMetaLookup();
+  for (const key of SENSOR_KEYS) {
+    for (const s of allDefs[key] ?? []) {
+      const csv = csvMeta.get(s.name);
+      const role = s.meta?.role ?? csv?.role;
+      if (role != null && RECORDABLE_ROLES.has(role)) continue;
+      if ((s.meta?.source ?? csv?.source) == null) return true;
+    }
+  }
+  return false;
 }
 
 /** Every sensor id on the vorgaben device, across all sensor types. */
@@ -266,7 +304,31 @@ export async function fetchHerstellenSensors(
     }),
   ]);
 
-  const vorgabenIds = collectVorgabenIds(vorgabenDefs);
+  /*
+   * What this fetch learned — or, when the vorgaben request died, what the
+   * element already has on record.
+   *
+   * The guard below keeps an assumed-empty set out of the *cache*; this keeps
+   * it out of the answer, which is where it would do its damage. Returning
+   * `allDefs` unsubtracted after a failed vorgaben request is how a legacy
+   * pillar's Soll sensors end up in the session map and upload as
+   * measurements — the exact corruption this whole path exists to prevent, one
+   * `catch` further along.
+   *
+   * An element fetched before, or imported, answers from its own cache and
+   * loses nothing by the sub-request having failed. With no answer at all the
+   * start is refused, but only where the answer actually decides something:
+   * see `needsVorgabenIds`.
+   */
+  let vorgabenIds: ReadonlySet<string> = collectVorgabenIds(vorgabenDefs);
+  if (!vorgabenKnown) {
+    const known = vorgabenIdsOf(getElementSensors(elementName) as ElementSensorDefs | null);
+    if (known) {
+      vorgabenIds = known;
+    } else if (needsVorgabenIds(allDefs)) {
+      throw new SensorDefsUnavailableError(elementName, vorgabenUnknownMessage(elementName));
+    }
+  }
 
   /*
    * The whole Vorgabe list is cached, not just its ids: the element screen
@@ -303,14 +365,22 @@ export function cachedHerstellenSensors(elementName: string): SensorDefs | null 
     return null;
   }
 
-  // Derived from the cached list where there is one, so a fix to
-  // collectVorgabenIds reaches everything already cached. `vorgabenIds` is the
-  // legacy shape, and an import whose file carries no Vorgabe sensors at all.
-  const vorgabenIds = raw.vorgabenSensors
-    ? collectVorgabenIds(raw.vorgabenSensors)
-    : new Set(Array.isArray(raw.vorgabenIds) ? raw.vorgabenIds : []);
+  /*
+   * Derived from the cached list where there is one, so a fix to
+   * collectVorgabenIds reaches everything already cached.
+   *
+   * Null means never answered, and an entry in that state is reachable: an
+   * import whose element carried `sensors` but no usable Vorgabe field writes
+   * exactly one. Subtracting nothing there would have a legacy pillar record
+   * its Soll values as measurements, so such an element counts as having no
+   * definitions — a visible 503 naming the import, rather than a session that
+   * looks healthy and uploads the wrong numbers. Where the subtraction decides
+   * nothing the element records normally.
+   */
+  const vorgabenIds = vorgabenIdsOf(raw);
+  if (vorgabenIds == null && needsVorgabenIds(raw.sensors)) return null;
 
-  const filtered = filterHerstellenSensors(raw.sensors, vorgabenIds);
+  const filtered = filterHerstellenSensors(raw.sensors, vorgabenIds ?? new Set<string>());
   return SENSOR_KEYS.some((key) => (filtered[key]?.length ?? 0) > 0) ? filtered : null;
 }
 
@@ -325,7 +395,14 @@ export function cachedVorgabenSensors(elementName: string): AnySensorDefs | null
   const raw = getElementSensors(elementName) as ElementSensorDefs | null;
   const vorgaben = raw?.vorgabenSensors;
   if (!vorgaben || typeof vorgaben !== 'object') return null;
-  return ALL_SENSOR_KEYS.some((key) => (vorgaben[key]?.length ?? 0) > 0) ? vorgaben : null;
+  /*
+   * An empty list is returned as the answer it is. Collapsing it to null —
+   * which is what requiring a non-empty key did — turned "this pillar has no
+   * vorgaben child, we checked" into "we have never looked", and the caller
+   * then answered a 503 telling the operator to re-export a Schichtauftrag
+   * that cannot possibly help. Same distinction as `vorgabenIdsOf`.
+   */
+  return vorgaben;
 }
 
 /**
@@ -338,7 +415,7 @@ export function cachedVorgabenSensors(elementName: string): AnySensorDefs | null
  * message naming the one thing that fixes it.
  */
 export class SensorDefsUnavailableError extends Error {
-  constructor(public readonly elementName: string) {
+  constructor(public readonly elementName: string, detail?: string) {
     /*
      * Three sentences, in the order the operator needs them: what is missing,
      * why, and the one thing that fixes it. „Schichtauftrag importieren" is
@@ -346,14 +423,33 @@ export class SensorDefsUnavailableError extends Error {
      * names something they can see rather than something they have to find.
      */
     super(
-      `Für „${elementName}" fehlen die Sensordefinitionen. `
-      + 'Die Implenia-Plattform ist nicht erreichbar und dieses Element wurde hier '
-      + 'noch nie aufgezeichnet. Bitte den Schichtauftrag im Portal neu exportieren '
-      + 'und über „Schichtauftrag importieren" einlesen — oder warten, bis die '
-      + 'Verbindung wieder steht.',
+      detail
+      ?? `Für „${elementName}" fehlen die Sensordefinitionen. `
+        + 'Die Implenia-Plattform ist nicht erreichbar und dieses Element wurde hier '
+        + 'noch nie aufgezeichnet. Bitte den Schichtauftrag im Portal neu exportieren '
+        + 'und über „Schichtauftrag importieren" einlesen — oder warten, bis die '
+        + 'Verbindung wieder steht.',
     );
     this.name = 'SensorDefsUnavailableError';
   }
+}
+
+/**
+ * The refusal for the one case where "nicht erreichbar" would be a lie: the
+ * platform answered with the element's sensors, and only the request for its
+ * Vorgabe sensors failed.
+ *
+ * Worth its own wording because the first thing to try is different. The
+ * element's own definitions are in hand, one sub-request short of usable, so a
+ * second tap on Start may well be enough — where the general message sends the
+ * operator straight to the Portal for a file they probably do not need.
+ */
+function vorgabenUnknownMessage(elementName: string): string {
+  return `Für „${elementName}" konnten die Vorgabe-Sensoren nicht geladen werden. `
+    + 'Ohne sie kann der Kiosk Soll- und Messwerte nicht unterscheiden und würde '
+    + 'Vorgaben als Messungen hochladen. Bitte erneut auf „Start" tippen — oder '
+    + 'den Schichtauftrag im Portal neu exportieren und über „Schichtauftrag '
+    + 'importieren" einlesen.';
 }
 
 /**
@@ -407,6 +503,9 @@ export async function resolveHerstellenSensors(elementName: string): Promise<Sen
       'No sensor definitions for "%s", neither from the platform (%s) nor cached',
       elementName, (err as Error).message,
     );
+    // The fetch raises this itself when the Vorgabe answer is missing and
+    // needed; its message names that, which is more use than this one.
+    if (err instanceof SensorDefsUnavailableError) throw err;
     throw new SensorDefsUnavailableError(elementName);
   }
 }
@@ -451,7 +550,20 @@ export async function resolveVorgabenSensors(elementName: string): Promise<AnySe
      * Schichtauftrag" for that would send the operator after a file that
      * cannot help. An empty list is what the screen already handles.
      */
-    if ((err as ApiError).statusCode === 404) return {};
+    if ((err as ApiError).statusCode === 404) {
+      /*
+       * Recorded, so the next load of this screen does not ask again and an
+       * offline one knows it too — `fetchHerstellenSensors` already caches the
+       * same answer from the same 404. Only when nothing is on record: a
+       * cached list came from a successful fetch or from an import, and
+       * overwriting it with an empty one would drop the id set the legacy
+       * subtraction needs.
+       */
+      if (!hasVorgabenInfo(elementName)) {
+        mergeElementSensors(elementName, { vorgabenSensors: {} });
+      }
+      return {};
+    }
     log.error(
       'No vorgaben sensor definitions for "%s" (%s) and none cached',
       elementName, (err as Error).message,
@@ -471,7 +583,8 @@ export async function resolveVorgabenSensors(elementName: string): Promise<AnySe
  *
  * Lenient throughout: a file is worth whatever can be read out of it, and an
  * element that cannot be is simply not cached, which the start route then
- * reports in terms the operator can act on.
+ * reports in terms the operator can act on. The count is of elements actually
+ * written, not of elements tried — see `mergeElementSensors`.
  */
 export function cacheImportedSensors(devices: unknown): number {
   if (!Array.isArray(devices)) return 0;
@@ -496,8 +609,7 @@ export function cacheImportedSensors(devices: unknown): number {
         .filter((id): id is string => typeof id === 'string');
     }
 
-    mergeElementSensors(d.name, patch);
-    cached++;
+    if (mergeElementSensors(d.name, patch)) cached++;
   }
   return cached;
 }
