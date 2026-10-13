@@ -30,7 +30,9 @@ export type DrillPhase = 'bohren' | 'rohrwechsel';
  * Where the depth a rig publishes comes from.
  *
  * - `absolut` — the rig reports the depth of the hole. It holds still while
- *   the string is clamped, because the bit has not moved. Nothing to correct.
+ *   the string is clamped, because the bit has not moved. Nothing has to be
+ *   reconstructed — but `offset` still applies, because a worker's manual
+ *   depth correction lives there on every rig. See applyDepthCorrection.
  * - `inkrementell` — the rig reports the Schlittenweg, how far the Drehantrieb
  *   has travelled down the mast. It runs *backwards* during a Rohrwechsel and
  *   then restarts from the top while the bit is still at the bottom of the
@@ -76,7 +78,18 @@ export interface DrillState {
   phase: DrillPhase;
   /** Bohrrohre in the ground. 1 while the first one is being drilled. */
   pipeCount: number;
-  /** Metres added to a raw reading to get the true depth. Always 0 in `absolut`. */
+  /**
+   * Metres added to a raw reading to get the true depth.
+   *
+   * In `inkrementell` this is the accumulated pipe offset, rebuilt at every
+   * Rohrwechsel. In `absolut` it is 0 until somebody corrects the depth by
+   * hand — both modes add it, so a correction works on either rig. The two
+   * are deliberately summed into one field: the rebuild derives the new offset
+   * from `holeDepth`, which already carries the correction, so nothing has to
+   * subtract it back out. `manualCorrection` keeps the worker's share
+   * separately for the screen and the log, and is never read by the
+   * arithmetic.
+   */
   offset: number;
   /**
    * Deepest true depth reached — the bottom of the hole.
@@ -94,6 +107,15 @@ export interface DrillState {
   lastDepth: number | null;
   /** True depth when the previous Rohrwechsel began. The baseline for the check. */
   depthAtLastChange: number | null;
+  /**
+   * Metres of this hole's depth the worker has corrected by hand, summed.
+   *
+   * Display and diagnostics only — `offset` is what the arithmetic reads. It
+   * accumulates because the measuring wheel slips: the depth creeps away from
+   * reality over a hole, so one element legitimately sees several corrections,
+   * and the total is what tells a technician the wheel needs looking at.
+   */
+  manualCorrection: number;
   /**
    * Whether the Klemmbacke has ever been seen *open*.
    *
@@ -145,6 +167,7 @@ export function initialDrillState(): DrillState {
     lastRaw: null,
     lastDepth: null,
     depthAtLastChange: null,
+    manualCorrection: 0,
     clampSeenOpen: false,
     clampSince: null,
     warning: null,
@@ -390,15 +413,155 @@ export function observeDepth(
     };
   }
 
-  // absolut: the rig holds still during rohrwechsel. Nothing to freeze.
+  // absolut: the rig holds still during rohrwechsel, so there is nothing to
+  // freeze. The offset is still added — it is 0 unless the depth was corrected
+  // by hand, and a correction has to reach an absolute rig too.
+  const depth = raw + state.offset;
   return {
     state: {
       ...state,
       lastRaw: raw,
-      lastDepth: raw,
-      holeDepth: accumulateDepth(raw),
+      lastDepth: depth,
+      holeDepth: accumulateDepth(depth),
     },
-    depth: raw,
+    depth,
+  };
+}
+
+/**
+ * The largest single depth correction that is accepted (metres).
+ *
+ * Not a physical limit — holes are deeper than this — but a runaway guard:
+ * the correction buttons repeat while held, and a stuck touchscreen must not
+ * be able to move the depth of a hole by a hundred metres. A larger
+ * correction is still reachable by applying it twice, which the message says.
+ */
+export const MAX_DEPTH_CORRECTION_M = 50;
+
+export interface DepthCorrectionApplied {
+  state: DrillState;
+  /** True depth before the correction. */
+  from: number;
+  /** ...and after it. */
+  to: number;
+  /** The correction actually applied, rounded to centimetres. */
+  delta: number;
+  /** Everything the worker has corrected on this hole, including this. */
+  total: number;
+}
+
+export type DepthCorrectionResult =
+  | { ok: true; applied: DepthCorrectionApplied }
+  /**
+   * `input` — the request is wrong (not a number, too large, would go
+   * negative). `state` — the kiosk is not in a position to do it. The two map
+   * to different HTTP statuses; see the route.
+   */
+  | { ok: false; kind: 'input' | 'state'; error: string };
+
+/**
+ * Correct the depth of the hole being drilled by `delta` metres.
+ *
+ * The measuring wheel slips. Over a hole the published depth creeps away from
+ * reality, and the worker on the rig can tell what it really is from the pipes
+ * they have mounted — so they shift it, and keep drilling. Slip is a rate
+ * error, not a step: the depth will creep again, and one element legitimately
+ * sees several corrections.
+ *
+ * **Forward-only.** Readings already recorded keep the depth they were stored
+ * with. That is not caution, it is what slip implies: the error at any moment
+ * is proportional to how far the wheel has turned, so an early reading is
+ * nearly right and one from just before the correction is off by nearly the
+ * whole delta. Re-stating the session at a constant delta would make the early
+ * readings worse than leaving them alone. Every rewritten reading also keeps
+ * its raw value (`value_raw`), so the uncorrected series stays reconstructable.
+ *
+ * **Four fields move together, and leaving any of them out breaks it:**
+ *
+ * - `offset` is what the next reading is corrected by.
+ * - `holeDepth` is the extremum the depth accumulates towards. Left behind, a
+ *   downward correction would be swallowed by `accumulateDepth`'s `max` — and
+ *   worse, the next Rohrwechsel rebuilds `offset` from exactly this field
+ *   (`holeDepth - lastRaw`), which would restore the uncorrected offset a pipe
+ *   later. The correction would appear to work and then silently undo itself.
+ * - `lastDepth` is what the screen and this function's own next call read.
+ * - `depthAtLastChange` is the per-pipe plausibility baseline. Left behind, the
+ *   next Rohrwechsel would measure the correction as drilling progress and
+ *   warn about a pipe that was fine.
+ *
+ * Shifting all four leaves every comparison between them invariant, which is
+ * why the Rohrwechsel plausibility check needs no knowledge of this at all.
+ *
+ * `holeDepth` is deliberately *not* clamped at zero: it is an extremum, not a
+ * depth, and in `auffuellen` it is the shallowest value seen. What must stay
+ * physical is the current depth, and that is what gets refused.
+ */
+export function applyDepthCorrection(state: DrillState, delta: number): DepthCorrectionResult {
+  if (!Number.isFinite(delta)) {
+    return { ok: false, kind: 'input', error: 'Die Tiefenkorrektur muss eine Zahl sein, z. B. -1,5.' };
+  }
+
+  // Centimetres: that is the precision of the control and of what a worker can
+  // judge from the pipes, and it keeps 0,1 + 0,2 from becoming 0,30000000000004.
+  const d = Math.round(delta * 100) / 100;
+
+  if (d === 0) {
+    return {
+      ok: false,
+      kind: 'input',
+      error: 'Die Tiefe wurde nicht verändert. Bitte mit den Tasten einen Wert einstellen.',
+    };
+  }
+  if (Math.abs(d) > MAX_DEPTH_CORRECTION_M) {
+    return {
+      ok: false,
+      kind: 'input',
+      error:
+        `Eine Korrektur um mehr als ${formatMeters(MAX_DEPTH_CORRECTION_M)} m auf einmal ist ` +
+        'nicht möglich. Bitte in zwei Schritten korrigieren.',
+    };
+  }
+  if (state.lastDepth === null) {
+    return {
+      ok: false,
+      kind: 'state',
+      error:
+        'Es liegt noch kein Tiefenmesswert vor — die Tiefe kann erst korrigiert werden, ' +
+        'wenn das Gerät eine Tiefe sendet. Bitte prüfen, ob dem Tiefensensor ein Topic ' +
+        'zugeordnet ist (Einstellungen → Messwerte).',
+    };
+  }
+
+  const round = (v: number) => Math.round(v * 1000) / 1000;
+  const to = round(state.lastDepth + d);
+
+  if (to < 0) {
+    return {
+      ok: false,
+      kind: 'input',
+      error:
+        `Die Tiefe wäre danach ${formatMeters(to)} m. Eine Tiefe über dem Boden gibt es ` +
+        'nicht — bitte einen kleineren Wert einstellen.',
+    };
+  }
+
+  return {
+    ok: true,
+    applied: {
+      state: {
+        ...state,
+        offset: round(state.offset + d),
+        holeDepth: round(state.holeDepth + d),
+        lastDepth: to,
+        depthAtLastChange:
+          state.depthAtLastChange === null ? null : round(state.depthAtLastChange + d),
+        manualCorrection: round(state.manualCorrection + d),
+      },
+      from: state.lastDepth,
+      to,
+      delta: d,
+      total: round(state.manualCorrection + d),
+    },
   };
 }
 
@@ -462,6 +625,7 @@ export function parseDrillState(json: string | null | undefined): DrillState | n
     lastRaw: numOrNull(p.lastRaw),
     lastDepth: numOrNull(p.lastDepth),
     depthAtLastChange: numOrNull(p.depthAtLastChange),
+    manualCorrection: num(p.manualCorrection, 0),
     clampSeenOpen: p.clampSeenOpen === true,
     clampSince: numOrNull(p.clampSince),
     warningSince: numOrNull(p.warningSince),

@@ -72,6 +72,14 @@ export interface RecordingState {
   rohrwechsel: DrillStatus | null;
   /** What the rig is doing. Null when nothing is being recorded. */
   operatingMode: OperatingMode | null;
+  /**
+   * Metres the worker has corrected the depth by on this element, or null when
+   * nothing is being recorded.
+   *
+   * Its own field rather than part of `rohrwechsel`, which is null on a kiosk
+   * with no Klemmbacke configured — a depth correction applies on every rig.
+   */
+  depthCorrection: number | null;
 }
 
 export interface UploadProgress {
@@ -535,6 +543,7 @@ export function getRecordingState(): RecordingState {
       readingCount: getSessionReadingCount(active.id),
       rohrwechsel: ingestion.drillStatus,
       operatingMode: ingestion.operatingMode,
+      depthCorrection: ingestion.depthCorrection,
     };
   }
 
@@ -552,13 +561,14 @@ export function getRecordingState(): RecordingState {
         readingCount: count,
         rohrwechsel: null,
         operatingMode: storedMode && isOperatingMode(storedMode) ? storedMode : null,
+        depthCorrection: null,
       };
     }
   }
 
   return {
     active: false, sessionId: null, elementName: null, startedAt: null,
-    readingCount: 0, rohrwechsel: null, operatingMode: null,
+    readingCount: 0, rohrwechsel: null, operatingMode: null, depthCorrection: null,
   };
 }
 

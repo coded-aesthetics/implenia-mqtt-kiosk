@@ -25,6 +25,7 @@ import { useCommentQueue } from './hooks/useCommentQueue';
 import { isVerpressenMode, MODE_LABELS } from './utils/operating-mode';
 import { shouldConfirmGeology } from './utils/geology-stop';
 import { GeologiePicker } from './components/GeologiePicker';
+import { TiefenKorrektur } from './components/TiefenKorrektur';
 import { useGeologieErfassung } from './hooks/useGeologieErfassung';
 import { buildSchichten, collectVorgabeEntries } from './utils/vorgaben';
 import { buildSensorValues, sensorValue } from './utils/sensors';
@@ -48,6 +49,14 @@ export function App() {
 
   // Lifted tab state for ElementDetail (so voice commands can control it)
   const [activeTab, setActiveTab] = useState<ViewTab>('messwerte');
+  /**
+   * Whether the depth correction is open.
+   *
+   * Here rather than in the drilling screen because it covers the viewport —
+   * the same reason GeologiePicker is mounted at this level — and because both
+   * the Bohren and the Verpressen screen open the same one.
+   */
+  const [korrekturOffen, setKorrekturOffen] = useState(false);
 
   // Reset tab when navigating to a different element
   useEffect(() => {
@@ -179,6 +188,40 @@ export function App() {
    * has just cleared the sign-off and the window: the hole is going to get
    * deeper, and the profile with it.
    */
+  /**
+   * Apply a depth correction, and keep the screen open if it was refused.
+   *
+   * Returns the server's German message rather than swallowing it: the
+   * refusals a worker can hit — no depth reading yet, a depth above the ground
+   * — are all actionable, and this is the one place they can act on them.
+   */
+  const tiefeKorrigieren = useCallback(async (deltaMeter: number): Promise<string | null> => {
+    try {
+      const res = await fetch('/api/recording/depth-correction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delta: deltaMeter }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return data.error || `Die Tiefe konnte nicht korrigiert werden (Fehler ${res.status}).`;
+      }
+      setKorrekturOffen(false);
+      return null;
+    } catch (err) {
+      return `Die Tiefe konnte nicht korrigiert werden: ${(err as Error).message}`;
+    }
+  }, []);
+
+  /*
+   * A recording that ends takes the correction screen with it: there is
+   * nothing left to correct, and a stop by voice or from a second tab would
+   * otherwise leave a worker holding a screen whose Übernehmen can only fail.
+   */
+  useEffect(() => {
+    if (!recordingState.active && korrekturOffen) setKorrekturOffen(false);
+  }, [recordingState.active, korrekturOffen]);
+
   const setOperatingMode = useCallback(async (mode: OperatingMode) => {
     const vorher = recordingState.operatingMode;
     const sessionId = recordingState.sessionId;
@@ -483,6 +526,9 @@ export function App() {
               readings={readings}
               vorgaben={deviceVorgaben}
               config={INJEKTIONSBOHREN_VERPRESSEN}
+              onKorrigieren={
+                recordingState.active ? () => setKorrekturOffen(true) : undefined
+              }
             />
           );
         } else {
@@ -494,6 +540,9 @@ export function App() {
               recordingState={recordingState}
               markierteGrenze={geologie.vorschlag?.tiefe ?? null}
               geologie={geologie}
+              onKorrigieren={
+                recordingState.active ? () => setKorrekturOffen(true) : undefined
+              }
             />
           );
         }
@@ -601,6 +650,20 @@ export function App() {
           aktiveNr={geologie.aktiveArt}
           onWaehlen={(nr, name) => geologie.erfasse(nr, name)}
           onAbbrechen={geologie.schliesse}
+        />
+      )}
+      {/*
+        Depth correction — the measuring wheel slips and the worker fixes it
+        from the pipes they have mounted. Mounted here for the same reason as
+        the picker above: it covers the viewport, and both drilling screens
+        open the same one.
+      */}
+      {korrekturOffen && (
+        <TiefenKorrektur
+          tiefe={liveTiefe}
+          bisherigeKorrektur={recordingState.depthCorrection}
+          onUebernehmen={tiefeKorrigieren}
+          onAbbrechen={() => setKorrekturOffen(false)}
         />
       )}
     </div>

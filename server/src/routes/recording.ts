@@ -19,7 +19,7 @@ import {
   recordStreamExport,
 } from '../session-export.js';
 import { broadcastMessage } from '../websocket.js';
-import { ingestion, isOperatingMode } from '../ingestion.js';
+import { DepthCorrectionError, ingestion, isOperatingMode } from '../ingestion.js';
 import { connectivity } from '../connectivity.js';
 import { createLogger } from '../logger.js';
 
@@ -212,6 +212,50 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       });
     }
   });
+
+  /**
+   * Correct the depth of the hole being drilled.
+   *
+   * The body carries a **delta in metres**, not a target depth. The worker
+   * taps the correction up and down while the depth on screen keeps moving
+   * with the rig, so a target would be stale by whatever was drilled during
+   * the correction; the delta is exactly what they dialled in and is right
+   * whenever it arrives.
+   *
+   * Why this exists: the depth measuring wheel slips, the reading creeps away
+   * from the hole over a shift, and the worker can tell what it really is from
+   * the pipes they have mounted. See applyDepthCorrection for what moves and
+   * why nothing already recorded is rewritten.
+   */
+  app.post<{ Body: { delta?: unknown } }>(
+    '/api/recording/depth-correction',
+    async (request, reply) => {
+      const raw = request.body?.delta;
+      const delta = typeof raw === 'number' ? raw : Number(raw);
+
+      try {
+        const applied = ingestion.correctDepth(delta);
+        // The depth itself reaches the screens as a reading; this is for the
+        // running total, which a second tab would otherwise never see.
+        broadcastMessage({ type: 'recording-state', ...getRecordingState() });
+        return reply.send({
+          von: applied.from,
+          nach: applied.to,
+          delta: applied.delta,
+          gesamt: applied.total,
+        });
+      } catch (err) {
+        if (err instanceof DepthCorrectionError) {
+          log.warn('Depth correction refused: %s', err.message);
+          return reply.status(err.kind === 'input' ? 400 : 409).send({ error: err.message });
+        }
+        log.error('Depth correction failed: %s', (err as Error).message);
+        return reply.status(500).send({
+          error: 'Die Tiefe konnte nicht korrigiert werden. Bitte erneut versuchen.',
+        });
+      }
+    },
+  );
 
   /**
    * Record one layer change at the depth the rig is at right now.

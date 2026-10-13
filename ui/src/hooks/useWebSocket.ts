@@ -20,7 +20,10 @@ export interface RohrwechselStatus {
   phase: 'bohren' | 'rohrwechsel';
   /** Bohrrohre in the ground. 1 while the first one is being drilled. */
   pipeCount: number;
-  /** Metres currently added to the rig's reading. Always 0 on an absolute rig. */
+  /**
+   * Metres currently added to the rig's reading. On an absolute rig this is
+   * the worker's manual depth correction and nothing else.
+   */
   offset: number;
   /** German, user-facing. Set when the last Rohrwechsel did not add up. */
   warning: string | null;
@@ -41,6 +44,14 @@ export interface RecordingState {
   readingCount: number;
   rohrwechsel: RohrwechselStatus | null;
   operatingMode: OperatingMode | null;
+  /**
+   * Metres the worker has corrected the depth by on this element, or null when
+   * nothing is being recorded.
+   *
+   * Its own field rather than part of `rohrwechsel`, which is null on a kiosk
+   * with no Klemmbacke — a depth correction applies on every rig.
+   */
+  depthCorrection: number | null;
 }
 
 export interface UploadProgress {
@@ -79,6 +90,7 @@ const INITIAL_RECORDING: RecordingState = {
   readingCount: 0,
   rohrwechsel: null,
   operatingMode: null,
+  depthCorrection: null,
 };
 
 export function useWebSocket() {
@@ -188,6 +200,7 @@ export function useWebSocket() {
                 readingCount: msg.readingCount,
                 rohrwechsel: msg.rohrwechsel ?? null,
                 operatingMode: msg.operatingMode ?? null,
+                depthCorrection: msg.depthCorrection ?? null,
               },
             }));
             break;
