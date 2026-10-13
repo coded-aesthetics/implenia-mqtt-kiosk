@@ -328,11 +328,19 @@ What follows from this, and must not be broken:
   measurements. It is empty for a migrated pillar, whose `sensors` are already
   production-only. `vorgaben_sensor_ids` stays in the file for kiosks that
   predate `vorgaben_sensors`.
-- **"Known to be empty" and "never answered" are different.** A 404 on the
-  `vorgaben` child is the real answer for a pillar that has none. A network
-  failure is not, and the kiosk deliberately caches *nothing* for an element in
-  that state rather than an entry that subtracts nothing — see
-  `hasVorgabenInfo`.
+- **"Known to be empty" and "never answered" are different**, on every path
+  that touches the Vorgabe id set. A 404 on the `vorgaben` child is the real
+  answer for a pillar that has none, is cached as such, and subtracts nothing.
+  A network failure is not an answer: the kiosk caches *nothing* for an element
+  in that state, does not hand the unsubtracted list to the caller either, and
+  refuses the start with a 503 naming the Vorgabe sensors — but only where the
+  set decides something. `needsVorgabenIds` is that question: a sensor whose
+  `source` is known, from the platform's `meta` or from the local CSVs, is
+  decided without the set, so a migrated element records normally and only a
+  legacy pillar is held back. Getting this wrong in the lenient direction is
+  silent and corrupting — the Soll values upload as measurements — which is why
+  `vorgabenIdsOf` returns `null` rather than an empty set and every reader goes
+  through it.
 - **The field is additive and its absence is legal.** A file exported before
   this existed is still a valid Schichtauftrag — it just leaves the offline
   start to whatever the kiosk has already seen online. Kiosks self-update
@@ -356,7 +364,7 @@ What follows from this, and must not be broken:
   drift apart); `element_sensors` in `db.ts` is the store, written by every
   successful fetch and by the import, and always *merged* rather than
   overwritten because its two halves arrive from different requests. `recording.ts` prefers the platform and falls back to the
-  cache, bounded by `START_SENSOR_TIMEOUT_MS` so a half-open TCP connection
+  cache, bounded by `SENSOR_RESOLVE_TIMEOUT_MS` so a half-open TCP connection
   cannot become an indefinite spinner. With neither, the start is refused with
   **503** — not 409, nothing about the kiosk's state is in the way — and a
   German message naming the import button on the element list.

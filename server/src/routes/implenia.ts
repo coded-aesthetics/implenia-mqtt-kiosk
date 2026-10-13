@@ -27,6 +27,12 @@ const IMPORT_KEY = 'imported_shift_assignment';
  * than on every read: this endpoint is hit on every page load, and rewriting
  * fifty elements' definitions each time would be a few hundred kilobytes of
  * pointless disk writes on hardware that has better things to do.
+ *
+ * Set from the result, never before the attempt. A write that failed — a disk
+ * briefly full is the realistic one — used to latch this to true anyway, and
+ * since a kiosk only restarts on an update or a crash, the whole shift then
+ * ran without the definitions the import exists to provide. Nothing retried,
+ * nothing on screen said so.
  */
 let importedSensorsCached = false;
 
@@ -37,8 +43,7 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
     if (resolved) {
       cacheVorgaben(resolved.data.measuring_devices);
       if (!importedSensorsCached) {
-        importedSensorsCached = true;
-        cacheImportedSensors(resolved.data.measuring_devices);
+        importedSensorsCached = cacheImportedSensors(resolved.data.measuring_devices) > 0;
       }
       return reply.send({ ...resolved.data, source: resolved.source });
     }
@@ -93,8 +98,8 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
      * is still a perfectly good import; it just leaves the offline start to
      * whatever the kiosk has seen online.
      */
-    importedSensorsCached = true;
     const cached = cacheImportedSensors(result.data.measuring_devices);
+    importedSensorsCached = cached > 0;
     if (cached > 0) {
       log.info('Cached sensor definitions for %d element(s) from the import', cached);
     } else {
