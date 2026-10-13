@@ -263,14 +263,17 @@ export function parseSensorMap(json: string): Map<string, SensorMapEntry> {
  * recorded before roles were persisted.
  *
  * The fallback is deliberately not narrowed to those sessions: it also answers
- * for a modern session whose element simply has no sensor carrying the role,
- * and in both callers that is the better answer. A completion write addressed
- * to a name the platform does not have yet *creates* that sensor, which is how
- * an element predating `Ausführungsdatum` gets completed at all — returning
- * null there would leave an uploaded element on the unfinished list for good,
- * with nothing but a log line to say why. The geology screen likewise has to
- * name a sensor in its German message, and the CSVs are the only place left to
- * get the spelling from. `session-roles.test.ts` pins both.
+ * for a modern session whose element simply has no sensor carrying the role.
+ * The geology screen needs it — `verfuegbar: false` comes with a German
+ * message that has to name a sensor, and with nothing in the map the CSVs are
+ * the only place left to get a spelling from. For the completion write it is
+ * the lesser of two bad answers: the write is attempted under the CSV name and
+ * the platform reports whether it landed, which is more than a skipped write
+ * ever says. Note that it does *not* create the sensor — the batch endpoint
+ * resolves string sensors by name and fails the reading when there is none,
+ * and it says so in a 200 body, so the check belongs in
+ * `writeElementCompletion`, not here. `session-roles.test.ts` pins both
+ * callers.
  *
  * Returns the name **as the platform spells it**, not the lowercased map key.
  * Callers need the real spelling for three different reasons: a completion
