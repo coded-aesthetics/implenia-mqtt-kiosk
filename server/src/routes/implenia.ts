@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { fetchImplenia, getApiConfig, type ApiError } from '../implenia-api.js';
-import { fetchHerstellenSensors } from '../herstellen-sensors.js';
+import {
+  cacheImportedSensors, resolveHerstellenSensors, resolveVorgabenSensors,
+  SensorDefsUnavailableError,
+} from '../herstellen-sensors.js';
 import { getMeta, setMeta, deleteMeta, setElementVorgaben, getElementVorgaben } from '../db.js';
 import { validateShiftImport, resolveShiftAssignment } from '../shift-import.js';
 import {
@@ -15,12 +18,28 @@ const log = createLogger('implenia');
 
 const IMPORT_KEY = 'imported_shift_assignment';
 
+/**
+ * Whether the stored import's sensor definitions have been cached since boot.
+ *
+ * The import caches them itself, so this is only for a file imported by an
+ * earlier version of this kiosk — which is the normal case right after an
+ * auto-update, mid-shift, on a site that is offline. Once per process rather
+ * than on every read: this endpoint is hit on every page load, and rewriting
+ * fifty elements' definitions each time would be a few hundred kilobytes of
+ * pointless disk writes on hardware that has better things to do.
+ */
+let importedSensorsCached = false;
+
 export function registerImpleniaRoutes(app: FastifyInstance): void {
   // Shift assignment: return import if available, otherwise proxy to API
   app.get('/api/shift-assignment', async (request, reply) => {
     const resolved = resolveShiftAssignment(getMeta(IMPORT_KEY));
     if (resolved) {
       cacheVorgaben(resolved.data.measuring_devices);
+      if (!importedSensorsCached) {
+        importedSensorsCached = true;
+        cacheImportedSensors(resolved.data.measuring_devices);
+      }
       return reply.send({ ...resolved.data, source: resolved.source });
     }
 
@@ -42,19 +61,59 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
     }
   });
 
-  // Import a shift assignment from a JSON file
-  app.post('/api/shift-assignment/import', async (request, reply) => {
+  /*
+   * Import a shift assignment from a JSON file.
+   *
+   * The body limit is raised well past Fastify's 1 MiB default because the
+   * file now carries each element's sensor definitions, production and
+   * Vorgabe: ~21 KB of pretty-printed JSON for a DSV element, so a shift
+   * assignment of around fifty pillars would otherwise be rejected with a
+   * 413 — on the one path that exists for a site with no connectivity. 16 MiB
+   * covers roughly 750 elements, and the cost is a transient buffer on an
+   * import that happens once a shift.
+   */
+  app.post('/api/shift-assignment/import', {
+    bodyLimit: 16 * 1024 * 1024,
+  }, async (request, reply) => {
     const result = validateShiftImport(request.body);
     if (!result.valid) {
       return reply.status(400).send({ error: result.error });
     }
     setMeta(IMPORT_KEY, JSON.stringify(result.data));
-    return reply.send({ ok: true });
+
+    /*
+     * The sensor definitions are the half of this file that makes an offline
+     * site able to *record*, not merely to list its elements: they carry the
+     * platform's sensor ids, which is what `beginRecording` would otherwise
+     * have to fetch. Cached here rather than read back out of the stored file
+     * at start time so that an element still works once it drops out of the
+     * shift assignment — the same reason the Vorgaben are cached.
+     *
+     * A file exported before implenia-web carried the field caches nothing and
+     * is still a perfectly good import; it just leaves the offline start to
+     * whatever the kiosk has seen online.
+     */
+    importedSensorsCached = true;
+    const cached = cacheImportedSensors(result.data.measuring_devices);
+    if (cached > 0) {
+      log.info('Cached sensor definitions for %d element(s) from the import', cached);
+    } else {
+      log.warn(
+        'Imported Schichtauftrag carries no sensor definitions — '
+        + 'offline recording will only work for elements seen online before',
+      );
+    }
+
+    return reply.send({ ok: true, sensorsCached: cached });
   });
 
   // Clear an imported shift assignment
   app.delete('/api/shift-assignment/import', async (_request, reply) => {
     deleteMeta(IMPORT_KEY);
+    // The cached definitions stay: they are what lets an element already
+    // recorded here be resumed offline, and clearing the import is about which
+    // elements are on the list, not about forgetting their sensors.
+    importedSensorsCached = false;
     return reply.send({ ok: true });
   });
 
@@ -70,20 +129,26 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
     return reply.send({ vorgaben });
   });
 
-  // Proxy: sensor definitions for an element's vorgaben device (includes units)
-  // GET /api/elements/:elementName/vorgaben/sensors
+  /*
+   * Sensor definitions for an element's vorgaben device (includes units).
+   * GET /api/elements/:elementName/vorgaben/sensors
+   *
+   * From the platform, or from the local cache when it cannot be reached —
+   * the element screen labels every Soll value from this, and
+   * `useVorgabenSensors` swallows a failure into an empty list, so a 502 here
+   * is a screen whose Soll values silently lose their units. The cached
+   * *values* have been served locally since the Vorgaben cache went in; this
+   * is the half that says what they are called.
+   */
   app.get('/api/elements/:elementName/vorgaben/sensors', async (request, reply) => {
-    if (!getApiConfig()) {
-      return reply.status(503).send({ error: 'Implenia API not configured' });
-    }
     const { elementName } = request.params as { elementName: string };
 
     try {
-      const data = await fetchImplenia(
-        `/api/v1/measuring-device/self/child/name:${encodeURIComponent(elementName)}/child/name:vorgaben`,
-      );
-      return reply.send(data);
+      return reply.send(await resolveVorgabenSensors(elementName));
     } catch (err) {
+      if (err instanceof SensorDefsUnavailableError) {
+        return reply.status(503).send({ error: err.message });
+      }
       log.error('vorgaben sensors for %s error: %s', elementName, (err as Error).message);
       return reply.status(502).send({ error: (err as Error).message });
     }
@@ -123,18 +188,31 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
     }
   });
 
-  // Herstellen (production) sensors = all element sensors − vorgaben sensors
-  // GET /api/elements/:elementName/sensors
+  /*
+   * Herstellen (production) sensors = all element sensors − vorgaben sensors.
+   * GET /api/elements/:elementName/sensors
+   *
+   * From the platform, or from the local cache when it cannot be reached —
+   * the same resolution a recording start uses, and deliberately the same
+   * function, so the two cannot drift apart. This is what the element screens
+   * read to know which sensors exist, what they are called and which of them
+   * is a hero tile; without it they render nothing at all, because
+   * `useHerstellenSensors` swallows the failure and returns an empty list.
+   *
+   * Note there is no `getApiConfig()` guard any more. A kiosk that was never
+   * given API credentials, and works entirely off an imported Schichtauftrag,
+   * is exactly the case that needs this to answer.
+   */
   app.get('/api/elements/:elementName/sensors', async (request, reply) => {
-    if (!getApiConfig()) {
-      return reply.status(503).send({ error: 'Implenia API not configured' });
-    }
     const { elementName } = request.params as { elementName: string };
 
     try {
-      const data = await fetchHerstellenSensors(elementName);
+      const data = await resolveHerstellenSensors(elementName);
       return reply.send(data);
     } catch (err) {
+      if (err instanceof SensorDefsUnavailableError) {
+        return reply.status(503).send({ error: err.message });
+      }
       log.error('sensors for %s error: %s', elementName, (err as Error).message);
       return reply.status(502).send({ error: (err as Error).message });
     }

@@ -188,6 +188,12 @@ db.exec(`
     vorgaben     TEXT    NOT NULL,
     updated_at   INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS element_sensors (
+    element_name TEXT    PRIMARY KEY,
+    defs         TEXT    NOT NULL,
+    updated_at   INTEGER NOT NULL
+  );
 `);
 
 // --- Additive migrations ---
@@ -723,6 +729,51 @@ export function getElementVorgaben(elementName: string): unknown | null {
   }
 }
 
+// --- Sensor definition cache ---
+
+const setElementSensorsStmt = db.prepare(
+  `INSERT INTO element_sensors (element_name, defs, updated_at) VALUES (?, ?, ?)
+   ON CONFLICT(element_name) DO UPDATE SET
+     defs = excluded.defs, updated_at = excluded.updated_at`
+);
+const getElementSensorsStmt = db.prepare(
+  'SELECT defs FROM element_sensors WHERE element_name = ?'
+);
+
+/**
+ * Remember an element's sensor definitions so a recording can be started for
+ * it without the Implenia API.
+ *
+ * Starting a recording needs the platform's sensor *ids*: readings upload to
+ * `/api/v1/sensor-<type>/<id>/batch`, and a reading stored without one is kept
+ * locally and never uploadable. Resolving them is the one step of
+ * `beginRecording` that used to reach the network, which made starting an
+ * element the single most load-bearing thing on a site's connectivity — the
+ * thing least likely to be there.
+ *
+ * Written from two places: every successful fetch from the API, and the
+ * imported Schichtauftrag, which carries the same definitions for exactly this
+ * reason. Stored unfiltered and opaque — which of them the kiosk records is
+ * decided by `filterHerstellenSensors` at the moment of use, so a later sensor
+ * CSV sync or a fix to that filter applies to everything already cached.
+ */
+export function setElementSensors(elementName: string, defs: unknown): void {
+  setElementSensorsStmt.run(elementName, JSON.stringify(defs), Date.now());
+}
+
+/** Cached sensor definitions for an element, or null if none were ever seen. */
+export function getElementSensors(elementName: string): unknown | null {
+  const row = getElementSensorsStmt.get(elementName) as { defs: string } | undefined;
+  if (!row) return null;
+  try {
+    return JSON.parse(row.defs);
+  } catch {
+    // An unreadable cache is the same as no cache: the caller reports that it
+    // has no definitions, which is a message the operator can act on.
+    return null;
+  }
+}
+
 // --- Session reading functions ---
 
 export function insertSessionReading(
@@ -1240,6 +1291,7 @@ export function resetKiosk(): void {
     db.prepare('DELETE FROM topic_overrides').run();
     db.prepare('DELETE FROM sensor_calibration').run();
     db.prepare('DELETE FROM element_vorgaben').run();
+    db.prepare('DELETE FROM element_sensors').run();
     db.prepare(
       `DELETE FROM meta WHERE key NOT IN (${RESET_PRESERVED_META.map(() => '?').join(',')})`
     ).run(...RESET_PRESERVED_META);

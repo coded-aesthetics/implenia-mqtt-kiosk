@@ -231,6 +231,143 @@ overwritten or deleted.
 
 Keep all three projects in sync when this contract changes.
 
+## Sensor roles are pinned to the session
+
+A sensor's **role** (`depth`, `is_completed`, `geology_nr`, `geology_text`, …)
+is a property of the *element*, not of the kiosk. implenia-web's wizard stamps
+it into the sensor's `meta` when the element is created
+(`sensor-blueprint.server.ts`), and the backend serves it back with
+`include_meta=true`. The kiosk's copies of the same CSVs are whatever its last
+release shipped, synced by hand with `./scripts/sync-sensors.sh`.
+
+Those are **two independent snapshots of the same source**, and resolving a
+role against the CSVs *at the moment of use* reads the wrong one in three
+situations:
+
+- an element created before a role moved to a different sensor,
+- an element created before a sensor was renamed,
+- any session that outlives an auto-update — kiosks take one hourly and a
+  recording can run for a day, so the role can resolve differently at sign-off
+  than it did at start.
+
+`beginRecording` therefore writes each sensor's `role` into the session's
+`sensor_map` alongside its id, and `sensorNameByRole` (recording.ts) resolves
+from there, falling back to `findSensorNameByRole` for sessions recorded before
+roles were persisted. Same reasoning as the ids, which have always been pinned
+there rather than re-fetched: a recording keeps behaving the way it did when it
+started.
+
+- **`name` is persisted with the role, and it is not optional.** The map is
+  keyed by the *lowercased* sensor name, because that is all a resolved topic
+  gives, and the real spelling is not recoverable from it. A completion write
+  is addressed to the platform *by sensor name* —
+  `string_sensors: { Ausführungsdatum: … }` — so returning the key would write
+  to `ausführungsdatum`, a different sensor or a newly created one nothing
+  reads. It is also the spelling a German error message about a missing sensor
+  should show the operator.
+- **The CSVs keep every element-independent question.** Role lookups that have
+  no element cannot use this and must not try: ingestion's Rohrwechsel depth
+  check (`getSensorRole`, on every live reading, recording or not), topic
+  resolution, the calibration and topic-assignment screens, the sensor-mapping
+  UI, the volume-tracking sensor set, and `stream` (which is not in
+  `SensorMeta` at all — that is `{source, role, priority}` only). The manual
+  `POST`/`DELETE /api/elements/:name/complete` routes have no session either,
+  so they stay on `findCompletionSensorName()`.
+- **What this is not.** It closes a visible degradation, not a silent one:
+  before it, `resolveSensors` answered `Der Sensor „Bohrtiefe" fehlt in dieser
+  Aufzeichnung` and the measurements still uploaded. Worth keeping that way.
+
+## Schichtauftrag export carries sensor ids — shared convention across two projects
+
+The JSON a site imports when the API is unreachable is produced by
+implenia-web's `api.shift-assignment-export.$id.tsx`. Per element it carries,
+besides the Vorgabe values, the element's **own sensor definitions with their
+platform ids**:
+
+```
+measuring_devices[].sensors             = { sensors_float|int|string|geo: [{ id, name, unit, meta }] }
+measuring_devices[].vorgaben_sensors    = { …the same, for the `vorgaben` child }
+measuring_devices[].vorgaben_sensor_ids = [ sensor id, … ]
+```
+
+**Why the ids and not just the names.** Starting a recording builds the
+session's `sensor_map`, and readings upload to
+`/api/v1/sensor-<type>/<sensor id>/batch`. A reading stored without an id is
+kept locally and silently never uploadable. Resolving them was the only part of
+`beginRecording` that touched the network, which made the most important action
+on a construction site depend on the thing least likely to work there — a site
+with an imported Schichtauftrag could list its elements and then fail to record
+one with `409 fetch failed`. The export is what makes a site that has **never**
+been online able to record data that still uploads afterwards.
+
+The shape is deliberately the one the machine backend returns for
+`/measuring-device/self/child/name:<element>?include_meta=true`, so the kiosk
+feeds an imported file through the identical filter it uses online
+(`filterHerstellenSensors`). One consumer, two sources.
+
+What follows from this, and must not be broken:
+
+- **The ids must be the real platform ids.** Not a placeholder to be resolved
+  later, not a name-derived stand-in. Anything else means a session recorded
+  offline needs a rewrite of `session_readings.sensor_id` before it can upload,
+  and a rewrite that never runs is a shift of measurements lost without a
+  symptom.
+- **`vorgaben_sensors` carries names and units, not just ids.** The element
+  screen labels every Soll value from it, and that request is one more thing an
+  offline site cannot make — the Vorgabe *values* have been cached locally
+  since `element_vorgaben` went in, and this is the half that says what they
+  are called. The kiosk also derives the Vorgabe id set from it, so the two
+  cannot disagree. All six sensor keys must survive the round trip, including
+  the `int_float` and `binary` ones the kiosk never records: the response goes
+  straight to the screen, which reads them.
+- **The Vorgabe id set is what makes a legacy pillar safe.** On pillars
+  predating the `vorgaben` child device, Soll and Ist sensors sit side by side
+  on the pillar with no `meta` to tell them apart, and the kiosk subtracts that
+  set (`isRecordableSensor`'s legacy fallback). An export that omitted it would
+  have the kiosk record and upload the Soll values as if they were
+  measurements. It is empty for a migrated pillar, whose `sensors` are already
+  production-only. `vorgaben_sensor_ids` stays in the file for kiosks that
+  predate `vorgaben_sensors`.
+- **"Known to be empty" and "never answered" are different.** A 404 on the
+  `vorgaben` child is the real answer for a pillar that has none. A network
+  failure is not, and the kiosk deliberately caches *nothing* for an element in
+  that state rather than an entry that subtracts nothing — see
+  `hasVorgabenInfo`.
+- **The field is additive and its absence is legal.** A file exported before
+  this existed is still a valid Schichtauftrag — it just leaves the offline
+  start to whatever the kiosk has already seen online. Kiosks self-update
+  hourly and implenia-web deploys separately, so both shapes are live in the
+  field at once.
+- **The local sensor CSVs are not an alternative source.** They carry name,
+  type, unit, source and role — everything but the ids — which makes them look
+  like a fallback. They are not: they are synced by hand, version separately
+  from both the platform and the kiosk, and a sensor added in implenia-web but
+  not yet synced here would be absent from the sensor map, recorded with a null
+  id and never uploaded. Their role is to *enrich* what the platform listed,
+  filling in missing `source`/`role`/`priority`/`unit` and nothing more. They
+  never decide whether a sensor exists.
+
+### Per project
+
+- **implenia-mqtt-kiosk** — `herstellen-sensors.ts` owns the fetches, the
+  filter and every cache path (`cacheImportedSensors`,
+  `cachedHerstellenSensors`, `cachedVorgabenSensors`, and the two
+  `resolve*Sensors` functions the routes and the start share so they cannot
+  drift apart); `element_sensors` in `db.ts` is the store, written by every
+  successful fetch and by the import, and always *merged* rather than
+  overwritten because its two halves arrive from different requests. `recording.ts` prefers the platform and falls back to the
+  cache, bounded by `START_SENSOR_TIMEOUT_MS` so a half-open TCP connection
+  cannot become an indefinite spinner. With neither, the start is refused with
+  **503** — not 409, nothing about the kiosk's state is in the way — and a
+  German message naming the import button on the element list.
+  `offline-recording-start.test.ts` pins the whole path.
+- **implenia-web** — the export route is the only writer. No sensor *values*
+  are selected for `sensors`; the Vorgabe values keep coming off the pillar's
+  `vorgaben` child as before, and `vorgaben_sensors` is built from that same
+  query, so it costs no extra round trip.
+
+Keep both projects in sync when this contract changes.
+
 ## Worker-observed geology (`GeoDIN`) — shared convention across two projects
 
 The geology a worker actually encountered is uploaded as a **`GeoDIN`** integer
@@ -276,14 +413,15 @@ What follows from this, and must not be broken:
   of the mode, which a second tab does not share, so the server cannot rely on
   them. Clamping onto the last drilling reading instead would silently assert
   the operator saw that ground at the bottom of the hole.
-- **The depth sensor is resolved by role, never by name.** It is `Bohrtiefe` for
-  Injektionsbohren and Ankerbohren but `Tiefe` for DSV
-  (`findSensorNameByRole('depth')`). Note that web's reader hardcodes
-  `Bohrtiefe`: for Injektionsbohren — the only Verfahren with a consumer today —
-  that is the role-`depth` sensor, so the two agree. A future DSV consumer
-  reading `Bohrtiefe` while the kiosk aligned against `Tiefe` would see nothing,
-  and the two sensors only share a timestamp when they arrive in one Elvis
-  frame.
+- **The depth sensor is resolved by role, never by name** — and the role comes
+  from the session, not from the sensor CSVs (`sensorNameByRole`, see
+  "Sensor roles are pinned to the session"). It is `Bohrtiefe` for
+  Injektionsbohren and Ankerbohren but `Tiefe` for DSV. Note that web's reader
+  hardcodes `Bohrtiefe`: for Injektionsbohren — the only Verfahren with a
+  consumer today — that is the role-`depth` sensor, so the two agree. A future
+  DSV consumer reading `Bohrtiefe` while the kiosk aligned against `Tiefe`
+  would see nothing, and the two sensors only share a timestamp when they
+  arrive in one Elvis frame.
 - **Readings are matched by `sensor_id`, not by topic.**
   `session_readings.topic` holds the rig's raw MQTT topic, which differs per
   machine; the session's own `sensor_map` resolves a name to the id every
