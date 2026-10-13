@@ -21,6 +21,23 @@ export function MesswerteConfig() {
         </div>
       </div>
 
+      {/* Datenübertragung link */}
+      <div style={styles.cardWrapper}>
+        <div style={styles.card}>
+          <div style={styles.statusRow}>
+            <span style={styles.label}>Datenübertragung</span>
+          </div>
+          <div style={styles.envHint}>
+            Wie viele Messwerte zur Plattform und auf den USB-Stick gehen, und
+            auf welchem Weg. Die Aufzeichnung auf dem Kiosk bleibt davon
+            unberührt — reduziert wird erst beim Hochladen und beim Export.
+          </div>
+          <button onClick={() => navigate('config/datenuebertragung')} style={styles.presetButtonActive}>
+            Datenübertragung öffnen
+          </button>
+        </div>
+      </div>
+
       {/* Rohrverlängerung link */}
       <div style={styles.cardWrapper}>
         <div style={styles.card}>

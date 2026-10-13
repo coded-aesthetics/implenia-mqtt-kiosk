@@ -1,5 +1,12 @@
-import { fetchImplenia } from './implenia-api.js';
+import { fetchImplenia, type ApiError } from './implenia-api.js';
 import { resolveHerstellenSensors, type SensorDefs } from './herstellen-sensors.js';
+import { getReductionConfig, holdMsFor } from './reduction-config.js';
+import {
+  ALIGNMENT_ANCHOR_ROLES, ANCHORED_ROLE, csvChunkProblem, pinAnchorReadings, planCsvUpload,
+  type CsvBatchResponse, type CsvChunk, type CsvUploadPlan, type PinnedBatch,
+  type UploadSensorMeta,
+} from './csv-upload.js';
+import { withElementDevice } from './element-device.js';
 import { ingestion, isOperatingMode, type OperatingMode, type SensorMapEntry } from './ingestion.js';
 import type { DrillStatus } from './rohrwechsel.js';
 import { createLogger, onLogEntry, type LogEntry } from './logger.js';
@@ -18,6 +25,7 @@ import {
   getSessionById,
   getSessionUploadGroups,
   getSessionReadingCount,
+  getSessionSensorSeries,
   getSessionStats,
   getSessions,
   insertSessionReading,
@@ -88,6 +96,13 @@ export interface UploadProgress {
   sensorsCompleted: number;
   sensorsFailed: number;
   currentSensor: string | null;
+  /**
+   * What the counters count. The per-sensor upload advances once per sensor;
+   * the CSV upload advances once per chunk, and calling those "Sensoren" on the
+   * recording bar would have a worker report the wrong thing to the office. The
+   * bar's percentage arithmetic is the same either way.
+   */
+  unit: 'sensor' | 'paket';
 }
 
 /**
@@ -401,6 +416,113 @@ export function uploadSession(
   return attempt;
 }
 
+/**
+ * Statuses that say the CSV route will not work here, however often it is
+ * retried: the endpoint is missing or refuses this content type (a backend
+ * deployed before it existed — kiosks self-update hourly while the backend
+ * deploys separately, so the field runs both versions at once), the element
+ * does not resolve to a device, or the body was rejected outright.
+ *
+ * A network error, a timeout and a 5xx are deliberately *not* in here. Those
+ * mean "not now", and falling back on them would send the same measurements
+ * twice over the mobile link this whole change exists to spare.
+ */
+const CSV_STRUCTURAL_STATUS = new Set([400, 401, 403, 404, 405, 413, 415, 422]);
+
+/**
+ * Post the CSV chunks, marking each chunk's readings as it goes.
+ *
+ * Returns `fallback` when the *first* chunk failed structurally. Only the first:
+ * nothing has been written at that point, so the session can still take the
+ * per-sensor path whole. A later chunk failing is an ordinary transport failure
+ * — its readings go to `failed`, the recording bar offers a retry, and the
+ * platform's upsert makes the re-send a no-op.
+ */
+async function uploadCsvChunks(
+  session: Session,
+  chunks: CsvChunk[],
+  hooks: {
+    report: (currentSensor: string | null) => void;
+    onChunkDone: (ok: boolean) => void;
+  },
+): Promise<{ fallback: boolean; reason?: string }> {
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    hooks.report(`Paket ${i + 1}/${chunks.length}`);
+
+    let problem: string | null = null;
+    let structural = false;
+    try {
+      const res = await withElementDevice(session.element_name, (deviceId) =>
+        fetchImplenia<CsvBatchResponse>(
+          `/api/v1/measuring-device/${encodeURIComponent(deviceId)}/readings/batch/csv`,
+          { method: 'POST', rawBody: chunk.csv, contentType: 'text/csv; charset=utf-8' },
+        ),
+      );
+      // A 200 is not yet a success. The endpoint addresses sensors by the names
+      // in the header and reports the ones it could not match instead of
+      // failing, so a column that went nowhere would otherwise look uploaded.
+      problem = csvChunkProblem(chunk, res);
+      structural = problem !== null;
+    } catch (err) {
+      problem = (err as Error).message;
+      const status = (err as ApiError).statusCode;
+      structural = status !== undefined && CSV_STRUCTURAL_STATUS.has(status);
+    }
+
+    if (problem === null) {
+      markSessionReadingsUploaded(chunk.ids);
+      hooks.onChunkDone(true);
+      continue;
+    }
+
+    if (i === 0 && structural) return { fallback: true, reason: problem };
+
+    markSessionReadingsFailed(chunk.ids);
+    hooks.onChunkDone(false);
+    log.error(
+      'CSV upload failed for session %d chunk %d/%d (%d rows): %s',
+      session.id, i + 1, chunks.length, chunk.rows, problem,
+    );
+  }
+
+  return { fallback: false };
+}
+
+/**
+ * The depth readings this session's geology boundaries are dated at.
+ *
+ * Both sensors are resolved by **role from the session's own map**, never by
+ * name: the depth sensor is `Bohrtiefe` for Injektionsbohren and Ankerbohren
+ * but `Tiefe` for DSV, and a session keeps the roles it started with. A
+ * Verfahren with no geology sensor, or a pillar where none was recorded, yields
+ * nothing and the depth series is simply gridded like any other.
+ */
+function anchorBatch(
+  sessionId: number,
+  sensorMeta: Map<string, UploadSensorMeta>,
+): PinnedBatch | null {
+  let anchorId: string | null = null;
+  let depthId: string | null = null;
+  let depth: UploadSensorMeta | undefined;
+  for (const [sensorId, meta] of sensorMeta) {
+    if (meta.role === ANCHORED_ROLE) anchorId = sensorId;
+    else if (meta.role && ALIGNMENT_ANCHOR_ROLES.has(meta.role)) {
+      depthId = sensorId;
+      depth = meta;
+    }
+  }
+  if (!anchorId || !depthId || !depth?.name) return null;
+
+  const instants = getSessionSensorSeries(sessionId, anchorId).map((p) => p.receivedAt);
+  return pinAnchorReadings(instants, {
+    sensorId: depthId,
+    sensorType: depth.type ?? 'float',
+    name: depth.name,
+    readings: getSessionSensorSeries(sessionId, depthId),
+  });
+}
+
 async function runUpload(
   sessionId: number,
   onProgress?: (progress: UploadProgress) => void,
@@ -412,32 +534,141 @@ async function runUpload(
   resetFailedReadings(sessionId);
   updateSessionStatus(sessionId, 'uploading');
 
-  // Build reverse map: sensorId → human-readable name from the persisted sensor map
-  const sensorNames = new Map<string, string>();
+  // Build reverse map: sensorId → what the session pinned about that sensor.
+  //
+  // The map is keyed by the *lowercased* sensor name, so `entry.name` is the
+  // only place the platform's real spelling survives — and the CSV upload
+  // addresses its columns by that spelling. `sensorName` keeps falling back to
+  // the key for sessions recorded before names were persisted, because it only
+  // feeds log lines.
+  const sensorMeta = new Map<string, UploadSensorMeta>();
+  const sensorKeys = new Map<string, string>();
   if (session.sensor_map) {
     try {
-      const map = JSON.parse(session.sensor_map) as Record<string, { sensorId?: string }>;
-      for (const [name, entry] of Object.entries(map)) {
-        if (entry?.sensorId) sensorNames.set(entry.sensorId, name);
+      const map = JSON.parse(session.sensor_map) as Record<
+        string, { sensorId?: string; sensorType?: string; name?: string; role?: string }
+      >;
+      for (const [key, entry] of Object.entries(map)) {
+        if (!entry?.sensorId) continue;
+        sensorMeta.set(entry.sensorId, {
+          name: entry.name, role: entry.role, type: entry.sensorType,
+        });
+        sensorKeys.set(entry.sensorId, key);
       }
     } catch {}
   }
-  const sensorName = (id: string) => sensorNames.get(id) ?? id;
+  const sensorName = (id: string) =>
+    sensorMeta.get(id)?.name ?? sensorKeys.get(id) ?? id;
 
   const groups = getSessionUploadGroups(sessionId);
-  const sensorsTotal = groups.length;
+  const reduction = getReductionConfig();
+
+  // The CSV route needs a grid; `validateReduction` refuses the combination,
+  // but a kiosk whose settings predate that check must not produce a sparse
+  // CSV, so the guard is repeated where it decides something.
+  let plan: CsvUploadPlan | null = null;
+  if (reduction.uploadMode === 'csv' && reduction.uploadBucketMs > 0) {
+    plan = planCsvUpload(groups, sensorMeta, {
+      bucketMs: reduction.uploadBucketMs,
+      maxHoldMs: holdMsFor(reduction.uploadBucketMs),
+    });
+    log.info(
+      'Session %d: %d readings of %d sensor(s) reduced to %d row(s) in %d CSV chunk(s) at %d ms; %d sensor(s) keep their own instants',
+      sessionId,
+      groups.reduce((n, g) => n + g.readings.length, 0),
+      plan.gridded.length,
+      plan.chunks.reduce((n, c) => n + c.rows, 0),
+      plan.chunks.length,
+      reduction.uploadBucketMs,
+      plan.leftovers.length,
+    );
+  }
+
+  // The depth readings a geology boundary was dated at, which the grid re-dates
+  // and implenia-web pairs by exact millisecond. Built from the session rather
+  // than from the pending groups, and sent whenever the grid is in play — on a
+  // retry the chunks that gridded them have already been marked uploaded, and
+  // the boundary would otherwise be left pointing at nothing.
+  let pinned: PinnedBatch | null = plan ? anchorBatch(sessionId, sensorMeta) : null;
+  if (pinned) {
+    log.info(
+      'Session %d: pinning %d %s reading(s) at geology instants alongside the grid',
+      sessionId, pinned.readings.length, pinned.name,
+    );
+  }
+
+  let chunks = plan?.chunks ?? [];
+  let perSensorGroups = plan ? plan.leftovers : groups;
+
+  let sensorsTotal = chunks.length + perSensorGroups.length + (pinned ? 1 : 0);
   let sensorsCompleted = 0;
   let sensorsFailed = 0;
+  let unit: UploadProgress['unit'] = chunks.length > 0 ? 'paket' : 'sensor';
 
-  for (const group of groups) {
-    const progress: UploadProgress = {
-      sessionId,
-      sensorsTotal,
-      sensorsCompleted,
-      sensorsFailed,
-      currentSensor: group.sensorId,
-    };
-    onProgress?.(progress);
+  const report = (currentSensor: string | null) => {
+    onProgress?.({
+      sessionId, sensorsTotal, sensorsCompleted, sensorsFailed, currentSensor, unit,
+    });
+  };
+
+  if (chunks.length > 0) {
+    const csv = await uploadCsvChunks(session, chunks, {
+      report,
+      onChunkDone: (ok) => { if (ok) sensorsCompleted++; else sensorsFailed++; },
+    });
+    if (csv.fallback) {
+      // The first chunk was refused in a way that says this route will not work
+      // at all on this backend or for these sensor names. Nothing has been
+      // written yet, so the whole session can take the id-addressed per-sensor
+      // path instead — the one that has always worked. Only the first chunk
+      // decides this: a later failure is an ordinary transport failure, which
+      // costs that chunk and is retried.
+      log.warn(
+        'Session %d: CSV upload not usable (%s) — falling back to the per-sensor upload',
+        sessionId, csv.reason,
+      );
+      chunks = [];
+      perSensorGroups = groups;
+      // Nothing was gridded, so nothing needs pinning back in.
+      pinned = null;
+      sensorsTotal = groups.length;
+      sensorsCompleted = 0;
+      sensorsFailed = 0;
+      unit = 'sensor';
+    }
+  }
+
+  if (pinned) {
+    report(pinned.name);
+    try {
+      await fetchImplenia(
+        `/api/v1/sensor-${pinned.sensorType}/${pinned.sensorId}/batch`,
+        {
+          method: 'POST',
+          body: {
+            readings: pinned.readings.map((r) => ({
+              date: new Date(r.receivedAt).toISOString(),
+              value: r.value,
+            })),
+          },
+        },
+      );
+      sensorsCompleted++;
+    } catch (err) {
+      // No reading ids to mark — the chunk that gridded them owns those. What
+      // this failure must do is keep the session off `uploaded`, so the element
+      // is not completed on a geology profile nothing can reassemble, and the
+      // recording bar offers the retry that runs this again.
+      sensorsFailed++;
+      log.error(
+        'Pinning %d %s reading(s) at geology instants failed for session %d: %s',
+        pinned.readings.length, pinned.name, sessionId, (err as Error).message,
+      );
+    }
+  }
+
+  for (const group of perSensorGroups) {
+    report(sensorName(group.sensorId));
 
     const allIds = group.readings.map((r) => r.id);
 
@@ -519,13 +750,7 @@ async function runUpload(
   }
 
   // Final progress
-  onProgress?.({
-    sessionId,
-    sensorsTotal,
-    sensorsCompleted,
-    sensorsFailed,
-    currentSensor: null,
-  });
+  report(null);
 
   log.info('Upload complete for session %d: %d ok, %d failed', sessionId, sensorsCompleted, sensorsFailed);
   return { status: finalStatus };

@@ -4,6 +4,7 @@ import { ConfigHub } from './ConfigHub';
 import { VerbindungConfig } from './VerbindungConfig';
 import { DatenquelleConfig } from './DatenquelleConfig';
 import { MesswerteConfig } from './MesswerteConfig';
+import { DatenuebertragungConfig } from './DatenuebertragungConfig';
 import { SystemConfig } from './SystemConfig';
 
 interface Props {
@@ -14,7 +15,9 @@ interface Props {
   section?: string;
 }
 
-const VALID_SECTIONS = ['verbindung', 'datenquelle', 'messwerte', 'system'] as const;
+const VALID_SECTIONS = [
+  'verbindung', 'datenquelle', 'messwerte', 'datenuebertragung', 'system',
+] as const;
 type Section = typeof VALID_SECTIONS[number];
 
 function isSection(v: string): v is Section {
@@ -32,6 +35,8 @@ export function ConfigPage({ config, devMode, deviceFrames, updateAvailable, sec
       return <DatenquelleConfig devMode={devMode} deviceFrames={deviceFrames} />;
     case 'messwerte':
       return <MesswerteConfig />;
+    case 'datenuebertragung':
+      return <DatenuebertragungConfig />;
     case 'system':
       return <SystemConfig />;
   }

@@ -625,6 +625,151 @@ picture is slightly wrong and nothing is miscommitted.
 
 Keep both projects in sync when this contract changes.
 
+## Reduction happens on the way out, and only there
+
+A recording leaves the kiosk twice — the xlsx on a USB stick, the batch upload
+to the platform — and both used to carry one row per *reading*. On the only rig
+that has been captured that is 275 935 readings on 274 475 distinct
+milliseconds (every MQTT message is stamped with its own `Date.now()`), so the
+sheet was 92.8 % empty cells, 12.4 MB, and 28 s and 2.0 GB of heap to build on a
+machine that has 4 GB. `grid-reduce.ts` is the one implementation that reduces
+both, configured per kiosk on the Datenübertragung screen
+(`reduction-config.ts`, defaults: 1 s for both, `uploadMode: 'csv'`).
+
+**`session_readings` is never reduced.** Everything here applies on the way out,
+so a granularity chosen wrong costs resolution on the platform and is undone by
+re-uploading or re-exporting the same session. Nothing in this area may start
+deleting or rewriting recorded rows.
+
+What follows from the shape of the data, and must not be broken:
+
+- **Last value in the interval, never a mean.** The readings are mostly
+  duplicates — 58 % to 90 % per channel are exact repeats of the previous value,
+  because the rig re-publishes rather than re-measures — so the interval almost
+  always holds one distinct value. Where it does not, a mean *invents a number
+  the machine never reported*: `Klemmdruck` is bimodal at ~1650 open / ~4200
+  closed and its 1 s mean falls in the impossible band between them in 35
+  intervals of that capture; `Tiefe` steps by a Bohrrohr during a
+  Rohrverlängerung and its 1 s mean sits up to 1.0 m from every sample in the
+  interval; the volume channels are monotonic counters. Any aggregation that is
+  not "a value that was actually recorded" is wrong here, not merely imprecise.
+- **A row is dated at a real reading's instant**, the newest in the interval —
+  never at the interval boundary. Downstream never has to trust a timestamp no
+  sensor produced.
+- **Forward-fill is bounded, and a `null` is not carried.** `holdMsFor` gives
+  four intervals and never less than 4 s, which is what lets the ~3 s pump
+  channels fill a 1 s grid while a dead sensor still reads as dead. A recorded
+  `null` is the kiosk's outage marker: it is emitted in its own interval and
+  stops the fill, so a pre-outage value can never reappear after it.
+- **An interval nobody recorded in produces no row.** A stalled rig must not
+  come out looking like a running one.
+
+### What the CSV upload may not be given
+
+`uploadMode: 'csv'` posts to
+`POST /api/v1/measuring-device/<device_id>/readings/batch/csv` in chunks of
+`CHUNK_ROWS` rows, device id resolved by `element-device.ts`. It cuts the
+captured session from 13.9 MB in 64 requests to 0.99 MB in 9.
+
+**An empty cell in that endpoint is a written NULL** (`sensors.go`, the float
+branch adds the nil), and a NULL is this kiosk's outage marker. Three
+consequences, none of them optional:
+
+- **A CSV upload with no grid is refused.** Ungridded, each row carries one
+  value and thirteen empty cells, so the captured session would upload 275 935
+  measurements and 3 566 722 fabricated outages. `validateReduction` rejects the
+  combination and `runUpload` re-checks it, because a settings row written before
+  that check must not produce one either.
+- **Each chunk carries only the columns it has values for.** A sensor that
+  records only during Verpressen is simply absent from the Bohren chunks instead
+  of contributing an empty cell to every one of their rows.
+- **String sensors never go this way at all** — an empty cell there writes an
+  empty *string*, and for `Ausführungsdatum` an empty string un-completes an
+  element.
+
+**`GeoDIN` may never be gridded.** implenia-web turns it into layers by change
+detection, and `alignBoundaries` deliberately gives every boundary its *own*
+depth reading so the timestamps stay strictly increasing (see "Worker-observed
+geology"). Two boundaries 290 ms apart share a 1 s interval, and one row is one
+layer, so a grid drops layers from a profile that uploads cleanly and shows
+nothing.
+
+**Protecting only `GeoDIN` achieves nothing, which is the trap.** A `GeoDIN`
+entry carries no depth of its own: `geology.ts` writes it at the exact
+`received_at` of a **depth** reading, and web recovers the layer's depth by
+pairing the two on millisecond equality, dropping any row whose `bohrtiefe` is
+null. The timestamp is the entire mechanism. Grid the depth series and the
+reading the boundary points at stops existing on the platform — it looks for a
+depth at 580 ms, the platform has one at 870 ms, and the layer is gone. The
+first version of this change guarded one end of that link and cut the other.
+
+**The depth series is gridded anyway, and the anchors are pinned back in.**
+Leaving it ungridded costs the largest single channel its reduction — 26 699 of
+G08's 275 935 readings, 14x down to 6.2x — and it is not necessary. The value at
+the boundary's instant is not something to interpolate: it is a reading that
+exists, because the boundary was dated at it in the first place.
+`pinAnchorReadings` (`csv-upload.ts`) selects exactly those readings and
+`runUpload` sends them as one extra per-sensor batch beside the chunks. The
+platform upserts on `(sensor_id, date)`, so they join the thinned series as
+extra points. On G08 with 18 boundaries that is **18 readings, about 1 KB**, and
+all 18 stay joinable.
+
+Three things about that batch, none optional:
+
+- **It claims no reading ids.** They belong to the CSV chunk that gridded them;
+  marking them twice would have two halves of one upload fighting over the same
+  rows.
+- **It still counts in `sensorsFailed`.** A profile the platform cannot
+  reassemble is the same loss as one that never uploaded, so a failure holds the
+  element open and the recording bar's retry runs it again.
+- **It is built from the session, not from the pending groups**, and runs
+  whenever the grid is in play. On a retry the chunks that gridded those
+  readings are already marked uploaded, so a pending-only lookup would find
+  nothing to pin and leave the boundaries pointing at nothing.
+
+`ALIGNMENT_ANCHOR_ROLES` (`depth`) and `ANCHORED_ROLE` (`geology_nr`) name the
+two ends. Both resolve by role from the session's own map, never by name: the
+depth sensor is `Bohrtiefe` for Injektionsbohren and Ankerbohren but `Tiefe` for
+DSV. `EXACT_TIMESTAMP_ROLES` (`geology_nr`, `geology_text`, `is_completed`)
+stays what it was — every reading keeps its instant, per-sensor, in the same
+upload.
+
+The honest long-term fix is for a geology entry to carry its own depth instead
+of borrowing one by timestamp. That is a contract change across all three
+projects, not something to slip into a compression change.
+
+### Addressing by name is only safe because it is checked
+
+The CSV endpoint matches columns to sensors **by name**, which is the opposite
+of how the rest of this kiosk works — the Schichtauftrag carries real platform
+ids precisely because a name can drift (see "Schichtauftrag export carries
+sensor ids"). Two checks are what make it acceptable, and removing either turns
+a drifted name into measurements that upload cleanly and land nowhere:
+
+- **A sensor with no `name` in the session's `sensor_map` is never gridded.** The
+  map is keyed by the lowercased name and the real spelling is not recoverable
+  from it, so it takes the id-addressed route rather than being written to
+  `bohrtiefe`. Sessions recorded before names were persisted therefore upload
+  exactly as they always did.
+- **A `200` is not a success.** The endpoint reports headers it could not match
+  in `unknown_sensors` rather than failing, so `csvChunkProblem` fails the chunk
+  when any of *our* columns appear there — or when `rows_processed` falls short
+  of what was sent.
+
+**The fallback is decided on the first chunk only.** A structural refusal there
+(404/405/415 from a backend deployed before the endpoint existed — kiosks
+self-update hourly while the backend deploys separately, so both versions are
+live in the field at once; 422; unmatched names) switches the whole session to
+the per-sensor route, which is clean because nothing has been written yet. A
+5xx, a timeout or a network error is **not** structural: those mean "not now",
+and falling back on them would re-send the whole session over the mobile link
+this exists to spare. A later chunk failing costs that chunk, which goes to
+`failed` and is retried — the platform upserts on `(sensor_id, date)`, so the
+re-send is a no-op.
+
+`grid-reduce.test.ts`, `csv-upload.test.ts`, `reduction-config.test.ts` and
+`csv-upload-session.test.ts` pin all of this.
+
 ## Testing
 
 This software auto-updates on machines where a broken deploy costs real time and money. Tests are a safety net, not a checkbox.

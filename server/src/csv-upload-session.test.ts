@@ -1,0 +1,477 @@
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+
+/**
+ * The CSV upload, end to end against a real in-memory database.
+ *
+ * `upload.test.ts` covers the per-sensor path; its fixtures carry no sensor
+ * names, so they stay on it. This one pins the route the kiosk takes by
+ * default: the telemetry reduced onto a grid and posted as chunked CSV, the
+ * sensors that must keep their own instants posted the per-sensor way, and the
+ * two ways the CSV route can turn out to be unusable.
+ */
+
+vi.mock('./implenia-api.js', () => ({
+  fetchImplenia: vi.fn().mockResolvedValue({}),
+  getApiConfig: () => ({ apiUrl: 'http://test', apiKey: 'key' }),
+}));
+
+vi.mock('./herstellen-sensors.js', () => ({
+  fetchHerstellenSensors: vi.fn(),
+}));
+
+let db: typeof import('./db.js');
+let recording: typeof import('./recording.js');
+let reductionConfig: typeof import('./reduction-config.js');
+let CHUNK_ROWS: number;
+let elementDevice: typeof import('./element-device.js');
+let apiFn: ReturnType<typeof vi.fn>;
+
+const DEVICE = { device_id: 'dev-1' };
+
+/**
+ * Stand in for the platform: resolve the element, and answer a CSV post the way
+ * the endpoint does — counting the data rows it was actually given, so a test
+ * cannot pass on a response that claims more than was sent.
+ */
+function fakePlatform(
+  csvResponse: (body: string) => unknown = (body) => ({
+    success: true,
+    rows_processed: body.trimEnd().split('\n').length - 1,
+    values_inserted: 0,
+    failed_count: 0,
+  }),
+) {
+  return (path: string, opts?: { rawBody?: string }) => {
+    if (path.includes('/resolve')) return Promise.resolve(DEVICE);
+    if (path.includes('/readings/batch/csv')) {
+      const result = csvResponse(opts?.rawBody ?? '');
+      return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
+    }
+    return Promise.resolve({});
+  };
+}
+
+/** The columns of a posted CSV, and a cell lookup by column name. */
+function readCsv(body: string) {
+  const lines = body.trimEnd().split('\n');
+  const header = lines[0].split(';');
+  return {
+    header,
+    rows: lines.slice(1).map((line) => {
+      const cells = line.split(';');
+      return {
+        at: cells[0],
+        get: (name: string) => cells[header.indexOf(name)],
+      };
+    }),
+  };
+}
+
+beforeAll(async () => {
+  db = await import('./db.js');
+  recording = await import('./recording.js');
+  reductionConfig = await import('./reduction-config.js');
+  elementDevice = await import('./element-device.js');
+  const api = await import('./implenia-api.js');
+  apiFn = api.fetchImplenia as ReturnType<typeof vi.fn>;
+  CHUNK_ROWS = (await import('./csv-upload.js')).CHUNK_ROWS;
+
+  if (db.databasePath() !== ':memory:') {
+    throw new Error(`Refusing to run against "${db.databasePath()}" — expected :memory:`);
+  }
+});
+
+beforeEach(() => {
+  apiFn.mockReset();
+  elementDevice.forgetElementDevices();
+  reductionConfig.setReductionConfig({
+    exportBucketMs: 1000, uploadBucketMs: 1000, uploadMode: 'csv',
+  });
+});
+
+const SENSOR_MAP = {
+  bohrtiefe: { sensorId: 's-tiefe', sensorType: 'float', name: 'Bohrtiefe', role: 'depth' },
+  drehzahl: { sensorId: 's-rpm', sensorType: 'float', name: 'Drehzahl', role: 'rpm' },
+  vorschubdruck: { sensorId: 's-druck', sensorType: 'float', name: 'Vorschubdruck' },
+  geodin: { sensorId: 's-geo', sensorType: 'int', name: 'GeoDIN', role: 'geology_nr' },
+  kommentar: { sensorId: 's-kom', sensorType: 'string', name: 'Kommentar' },
+  'ausführungsdatum': {
+    sensorId: 's-fertig', sensorType: 'string', name: 'Ausführungsdatum', role: 'is_completed',
+  },
+};
+
+let element = 0;
+
+/** A session with four 250 ms samples of two channels, a GeoDIN and a comment. */
+function seedSession(): { sessionId: number; elementName: string } {
+  const elementName = `P-${++element}`;
+  const sessionId = db.createSession(elementName, JSON.stringify(SENSOR_MAP));
+  db.endSession(sessionId);
+  const t0 = Date.parse('2026-05-18T12:00:00.000Z');
+
+  for (let i = 0; i < 8; i++) {
+    db.insertSessionReading(
+      sessionId, 'rig/Bohrtiefe', 's-tiefe', 'float', i * 0.1, null,
+      { receivedAt: t0 + i * 250 },
+    );
+    db.insertSessionReading(
+      sessionId, 'rig/Drehzahl', 's-rpm', 'float', 60 + i, null,
+      { receivedAt: t0 + i * 250 + 12 },
+    );
+    db.insertSessionReading(
+      sessionId, 'rig/Vorschubdruck', 's-druck', 'float', 5 + i, null,
+      { receivedAt: t0 + i * 250 + 24 },
+    );
+  }
+  db.insertSessionReading(
+    sessionId, 'rig/GeoDIN', 's-geo', 'int', 23, null, { receivedAt: t0 + 750 },
+  );
+  db.insertSessionReading(
+    sessionId, 'rig/Kommentar', 's-kom', 'string', null, 'Hindernis',
+    { receivedAt: t0 + 900 },
+  );
+
+  return { sessionId, elementName };
+}
+
+/** A session long enough to need more than one CSV chunk. */
+function seedLongSession(): { sessionId: number; elementName: string } {
+  const elementName = `L-${++element}`;
+  const sessionId = db.createSession(elementName, JSON.stringify(SENSOR_MAP));
+  db.endSession(sessionId);
+  const t0 = Date.parse('2026-05-18T12:00:00.000Z');
+  const rows = CHUNK_ROWS + 10;
+  for (let i = 0; i < rows; i++) {
+    db.insertSessionReading(
+      sessionId, 'rig/Bohrtiefe', 's-tiefe', 'float', i * 0.01, null,
+      { receivedAt: t0 + i * 1000 },
+    );
+    db.insertSessionReading(
+      sessionId, 'rig/Drehzahl', 's-rpm', 'float', 60, null,
+      { receivedAt: t0 + i * 1000 + 12 },
+    );
+  }
+  return { sessionId, elementName };
+}
+
+function callsTo(fragment: string) {
+  return apiFn.mock.calls.filter(([path]: [string]) => String(path).includes(fragment));
+}
+
+describe('uploadSession on the CSV route', () => {
+  it('posts the telemetry as CSV to the element\'s device', async () => {
+    apiFn.mockImplementation(fakePlatform());
+
+    const { sessionId } = seedSession();
+    const result = await recording.uploadSession(sessionId);
+
+    const csvCalls = callsTo('/readings/batch/csv');
+    expect(csvCalls).toHaveLength(1);
+    const [path, opts] = csvCalls[0];
+    expect(path).toBe('/api/v1/measuring-device/dev-1/readings/batch/csv');
+    expect(opts.method).toBe('POST');
+    expect(opts.contentType).toContain('text/csv');
+    expect(opts.body).toBeUndefined();
+    expect(result.status).toBe('uploaded');
+  });
+
+  it('reduces the session to one row per second, last value per channel', async () => {
+    apiFn.mockImplementation(fakePlatform());
+
+    const { sessionId } = seedSession();
+    await recording.uploadSession(sessionId);
+
+    const [, opts] = callsTo('/readings/batch/csv')[0];
+    const csv = readCsv(opts.rawBody as string);
+    expect(csv.header[0]).toBe('Zeitpunkt');
+    expect(csv.header.slice(1).sort()).toEqual(['Bohrtiefe', 'Drehzahl', 'Vorschubdruck']);
+
+    // 2 s of 250 ms samples → two rows, each holding that second's last value
+    // and dated at that reading's own instant, not at the bucket edge.
+    expect(csv.rows).toHaveLength(2);
+    expect(csv.rows[0].at).toBe('2026-05-18T12:00:00.774Z');
+    expect(csv.rows[0].get('Drehzahl')).toBe('63');
+    expect(csv.rows[1].at).toBe('2026-05-18T12:00:01.774Z');
+    expect(csv.rows[1].get('Drehzahl')).toBe('67');
+  });
+
+  it('sends GeoDIN and the comment per sensor, at their own instants', async () => {
+    apiFn.mockImplementation(fakePlatform());
+
+    const { sessionId } = seedSession();
+    await recording.uploadSession(sessionId);
+
+    // A grid merges geology boundaries, and one row is one layer to
+    // implenia-web — so this series may never go through it.
+    const geo = callsTo('/api/v1/sensor-int/s-geo/batch');
+    expect(geo).toHaveLength(1);
+    expect(geo[0][1].body.readings).toEqual([
+      { date: '2026-05-18T12:00:00.750Z', value: 23 },
+    ]);
+
+    const kom = callsTo('/api/v1/sensor-string/s-kom/batch');
+    expect(kom).toHaveLength(1);
+    expect(kom[0][1].body.readings).toEqual([
+      { date: '2026-05-18T12:00:00.900Z', value: 'Hindernis' },
+    ]);
+  });
+
+  it('never posts a gridded sensor to the per-sensor endpoint as well', async () => {
+    apiFn.mockImplementation(fakePlatform());
+
+    const { sessionId } = seedSession();
+    await recording.uploadSession(sessionId);
+
+    expect(callsTo('/api/v1/sensor-float/s-rpm/batch')).toHaveLength(0);
+    expect(callsTo('/api/v1/sensor-float/s-druck/batch')).toHaveLength(0);
+  });
+
+  it('keeps the depth reading a geology boundary is dated at', async () => {
+    // End to end, the join implenia-web makes: a boundary at an exact instant,
+    // and a Bohrtiefe value at that same instant for it to pair with. The depth
+    // series is gridded like everything else — which re-dates it — so the
+    // readings the boundaries point at are pinned back in at their own
+    // instants. Without that the profile uploads cleanly and shows no layers.
+    apiFn.mockImplementation(fakePlatform());
+
+    const { sessionId } = seedSession();
+    await recording.uploadSession(sessionId);
+
+    const geoDates = callsTo('/api/v1/sensor-int/s-geo/batch')[0][1]
+      .body.readings.map((r: { date: string }) => r.date);
+    const pinnedDates = callsTo('/api/v1/sensor-float/s-tiefe/batch')[0][1]
+      .body.readings.map((r: { date: string }) => r.date);
+
+    expect(geoDates).toHaveLength(1);
+    expect(pinnedDates).toContain(geoDates[0]);
+
+    // Only the anchors go that way — the rest of the depth series is in the CSV.
+    expect(pinnedDates).toHaveLength(1);
+    const [, opts] = callsTo('/readings/batch/csv')[0];
+    expect(opts.rawBody).toContain('Bohrtiefe');
+  });
+
+  it('pins the recorded value, not an interpolated one', async () => {
+    apiFn.mockImplementation(fakePlatform());
+
+    const { sessionId } = seedSession();
+    await recording.uploadSession(sessionId);
+
+    // seedSession records Bohrtiefe = i * 0.1 every 250 ms; the boundary sits
+    // on the reading at +750 ms, which is the fourth, so 0.3.
+    const pinnedReadings = callsTo('/api/v1/sensor-float/s-tiefe/batch')[0][1].body.readings;
+    expect(pinnedReadings[0].date).toBe('2026-05-18T12:00:00.750Z');
+    expect(pinnedReadings[0].value).toBeCloseTo(0.3, 10);
+  });
+
+  it('pins nothing for a session that recorded no geology', async () => {
+    apiFn.mockImplementation(fakePlatform());
+
+    const { sessionId } = seedLongSession();   // telemetry only
+    await recording.uploadSession(sessionId);
+
+    expect(callsTo('/api/v1/sensor-float/s-tiefe/batch')).toHaveLength(0);
+  });
+
+  it('does not complete the element when the pinned readings fail', async () => {
+    // A geology profile the platform cannot reassemble is the same loss as one
+    // that never uploaded, so this failure has to hold the element open.
+    apiFn.mockImplementation((path: string, opts?: { rawBody?: string }) => {
+      if (path.includes('/resolve')) return Promise.resolve(DEVICE);
+      if (path.includes('/readings/batch/csv')) {
+        return Promise.resolve({
+          success: true,
+          rows_processed: (opts?.rawBody ?? '').trimEnd().split('\n').length - 1,
+          failed_count: 0,
+        });
+      }
+      if (path.includes('/sensor-float/s-tiefe/batch')) {
+        const err = new Error('Implenia API 502: bad gateway') as Error & { statusCode: number };
+        err.statusCode = 502;
+        return Promise.reject(err);
+      }
+      return Promise.resolve({});
+    });
+
+    const { sessionId } = seedSession();
+    const result = await recording.uploadSession(sessionId);
+
+    expect(result.status).toBe('partial');
+    const completion = callsTo('/readings/batch')
+      .filter(([path]: [string]) => !String(path).endsWith('/csv'))
+      .filter(([path]: [string]) => !String(path).includes('/sensor-'));
+    expect(completion).toHaveLength(0);
+  });
+
+  it('marks every reading it reduced away as uploaded', async () => {
+    apiFn.mockImplementation(fakePlatform());
+
+    const { sessionId } = seedSession();
+    await recording.uploadSession(sessionId);
+
+    const stats = db.getSessionStats(sessionId);
+    expect(stats.pending).toBe(0);
+    expect(stats.failed).toBe(0);
+    expect(stats.uploaded).toBe(stats.total);
+  });
+
+  it('keeps a chunk\'s readings for a retry when that chunk fails', async () => {
+    let csvCalls = 0;
+    apiFn.mockImplementation(fakePlatform((body) => {
+      csvCalls++;
+      // The first chunk lands, the second is lost to the link. A structural
+      // refusal switches routes, but only on the first chunk — a 502 is "not
+      // now", and re-sending everything per sensor would put the whole session
+      // back on the link this change exists to spare.
+      if (csvCalls > 1) {
+        const err = new Error('Implenia API 502: bad gateway') as Error & { statusCode: number };
+        err.statusCode = 502;
+        return err;
+      }
+      return {
+        success: true,
+        rows_processed: body.trimEnd().split('\n').length - 1,
+        failed_count: 0,
+      };
+    }));
+
+    const { sessionId } = seedLongSession();
+    const result = await recording.uploadSession(sessionId);
+
+    expect(csvCalls).toBeGreaterThan(1);
+    expect(result.status).toBe('partial');
+    const stats = db.getSessionStats(sessionId);
+    expect(stats.failed).toBeGreaterThan(0);
+    expect(stats.uploaded).toBeGreaterThan(0);
+    // It did not fall back and re-send the gridded channels per sensor.
+    expect(callsTo('/api/v1/sensor-float/s-rpm/batch')).toHaveLength(0);
+  });
+
+  it('falls back to the per-sensor route when the endpoint is not deployed', async () => {
+    apiFn.mockImplementation((path: string) => {
+      if (path.includes('/resolve')) return Promise.resolve(DEVICE);
+      if (path.includes('/readings/batch/csv')) {
+        const err = new Error('Implenia API 404: not found') as Error & { statusCode: number };
+        err.statusCode = 404;
+        return Promise.reject(err);
+      }
+      return Promise.resolve({});
+    });
+
+    const { sessionId } = seedSession();
+    const result = await recording.uploadSession(sessionId);
+
+    expect(result.status).toBe('uploaded');
+    expect(callsTo('/api/v1/sensor-float/s-rpm/batch')).toHaveLength(1);
+    expect(callsTo('/api/v1/sensor-float/s-druck/batch')).toHaveLength(1);
+    expect(db.getSessionStats(sessionId).pending).toBe(0);
+  });
+
+  it('falls back when the platform does not recognise the column names', async () => {
+    // A 200 that silently matched nothing is the failure the response check
+    // exists for: by name is not how the rest of this kiosk addresses sensors.
+    apiFn.mockImplementation((path: string) =>
+      Promise.resolve(
+        path.includes('/resolve') ? DEVICE
+          : path.includes('/readings/batch/csv')
+            ? { success: true, rows_processed: 2, unknown_sensors: ['Bohrtiefe', 'Drehzahl'] }
+            : {},
+      ));
+
+    const { sessionId } = seedSession();
+    const result = await recording.uploadSession(sessionId);
+
+    expect(result.status).toBe('uploaded');
+    expect(callsTo('/api/v1/sensor-float/s-tiefe/batch')).toHaveLength(1);
+  });
+
+  it('completes the element once both halves of the upload have landed', async () => {
+    apiFn.mockImplementation(fakePlatform());
+
+    const { sessionId, elementName } = seedSession();
+    await recording.uploadSession(sessionId);
+
+    const completion = callsTo('/readings/batch')
+      .filter(([path]: [string]) => !String(path).endsWith('/csv'));
+    expect(completion).toHaveLength(1);
+    const body = completion[0][1].body;
+    expect(body.string_sensors['Ausführungsdatum']).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
+    expect(elementName).toBeTruthy();
+  });
+
+  it('does not complete an element whose chunks did not all land', async () => {
+    // "Only an upload that actually put readings on the platform finishes the
+    // element" has to hold across both halves, or a dropped chunk would report
+    // a pillar as produced on data the platform never received.
+    let csvCalls = 0;
+    apiFn.mockImplementation(fakePlatform((body) => {
+      csvCalls++;
+      if (csvCalls > 1) {
+        const err = new Error('Implenia API 502: bad gateway') as Error & { statusCode: number };
+        err.statusCode = 502;
+        return err;
+      }
+      return {
+        success: true,
+        rows_processed: body.trimEnd().split('\n').length - 1,
+        failed_count: 0,
+      };
+    }));
+
+    const { sessionId } = seedLongSession();
+    const result = await recording.uploadSession(sessionId);
+
+    expect(result.status).toBe('partial');
+    const completion = callsTo('/readings/batch')
+      .filter(([path]: [string]) => !String(path).endsWith('/csv'));
+    expect(completion).toHaveLength(0);
+  });
+
+  it('takes the per-sensor route when that is what is configured', async () => {
+    reductionConfig.setReductionConfig({
+      exportBucketMs: 1000, uploadBucketMs: 1000, uploadMode: 'sensor',
+    });
+    apiFn.mockResolvedValue({});
+
+    const { sessionId } = seedSession();
+    await recording.uploadSession(sessionId);
+
+    expect(callsTo('/readings/batch/csv')).toHaveLength(0);
+    expect(callsTo('/api/v1/sensor-float/s-rpm/batch')).toHaveLength(1);
+  });
+
+  it('does not build a sparse CSV if a kiosk has no grid configured', async () => {
+    // validateReduction refuses the combination, but a settings row written
+    // before that check must not produce one value and thirteen NULLs per row.
+    reductionConfig.setReductionConfig({
+      exportBucketMs: 0, uploadBucketMs: 0, uploadMode: 'csv',
+    });
+    apiFn.mockResolvedValue({});
+
+    const { sessionId } = seedSession();
+    await recording.uploadSession(sessionId);
+
+    expect(callsTo('/readings/batch/csv')).toHaveLength(0);
+    expect(callsTo('/api/v1/sensor-float/s-rpm/batch')).toHaveLength(1);
+  });
+
+  it('reports progress in Paketen on the CSV route and in Sensoren otherwise', async () => {
+    apiFn.mockImplementation(fakePlatform());
+
+    const csvUnits: string[] = [];
+    const a = seedSession();
+    await recording.uploadSession(a.sessionId, (p) => csvUnits.push(p.unit));
+    expect(new Set(csvUnits)).toEqual(new Set(['paket']));
+
+    reductionConfig.setReductionConfig({
+      exportBucketMs: 1000, uploadBucketMs: 1000, uploadMode: 'sensor',
+    });
+    apiFn.mockResolvedValue({});
+    const sensorUnits: string[] = [];
+    const b = seedSession();
+    await recording.uploadSession(b.sessionId, (p) => sensorUnits.push(p.unit));
+    expect(new Set(sensorUnits)).toEqual(new Set(['sensor']));
+  });
+});

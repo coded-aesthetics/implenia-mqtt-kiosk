@@ -519,7 +519,11 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
         <div style={styles.recordingRow}>
           <span style={styles.warningIcon}>!</span>
           <span style={styles.warningLabel}>
-            {uploadProgress.sensorsFailed} Sensoren fehlgeschlagen
+            {uploadProgress.sensorsFailed}{' '}
+            {uploadProgress.unit === 'paket'
+              ? uploadProgress.sensorsFailed === 1 ? 'Paket' : 'Pakete'
+              : uploadProgress.sensorsFailed === 1 ? 'Sensor' : 'Sensoren'}{' '}
+            fehlgeschlagen
           </span>
           <button
             style={{ ...styles.button, ...styles.retryButton }}

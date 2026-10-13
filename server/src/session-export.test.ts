@@ -180,3 +180,96 @@ describe('exportFilename', () => {
     expect(exportFilename('', 'hdi')).toBe('session_hdi.xlsx');
   });
 });
+
+// ── reduced export ──────────────────────────────────────────────────────────
+
+describe('buildStreamRows at a time grid', () => {
+  const sensors = ['Bohrtiefe', 'Drehzahl', 'Wassermenge'];
+  const T0 = Date.parse('2026-05-18T12:00:00.000Z');
+  const at = (ms: number) => T0 + ms;
+
+  it('keeps every reading on its own row without a grid', () => {
+    // What this export always did, and what "Voll" on the Datenübertragung
+    // screen must still produce.
+    const rows = buildStreamRows('hdi', sensors, [
+      r('rig/Bohrtiefe', 1, at(0)),
+      r('rig/Drehzahl', 2, at(10)),
+      r('rig/Bohrtiefe', 3, at(20)),
+    ]);
+    expect(rows).toHaveLength(4);
+    expect(rows[1]).toEqual(['2026-05-18T12:00:00.000Z', 1, '', '']);
+    expect(rows[2]).toEqual(['2026-05-18T12:00:00.010Z', '', 2, '']);
+  });
+
+  it('collapses the same readings onto one row at a one-second grid', () => {
+    const rows = buildStreamRows('hdi', sensors, [
+      r('rig/Bohrtiefe', 1, at(0)),
+      r('rig/Drehzahl', 2, at(10)),
+      r('rig/Bohrtiefe', 3, at(20)),
+    ], 1000);
+    expect(rows).toHaveLength(2);
+    // Last value per sensor, dated at the newest reading in the bucket.
+    expect(rows[1]).toEqual(['2026-05-18T12:00:00.020Z', 3, 2, '']);
+  });
+
+  it('turns a sparse matrix into a dense one', () => {
+    // The shape of the real problem: ten channels at ~290 ms, each on its own
+    // millisecond, so the ungridded sheet is one filled cell per row.
+    const readings = [];
+    for (let i = 0; i < 30; i++) {
+      readings.push(r('rig/Bohrtiefe', i, at(i * 290)));
+      readings.push(r('rig/Drehzahl', 100 + i, at(i * 290 + 12)));
+      readings.push(r('rig/Wassermenge', 200 + i, at(i * 290 + 24)));
+    }
+    const raw = buildStreamRows('hdi', sensors, readings);
+    const gridded = buildStreamRows('hdi', sensors, readings, 1000);
+
+    const filled = (rows: (string | number)[][]) =>
+      rows.slice(1).reduce((n, row) => n + row.slice(1).filter((c) => c !== '').length, 0);
+    const cells = (rows: (string | number)[][]) => (rows.length - 1) * sensors.length;
+
+    expect(filled(raw) / cells(raw)).toBeLessThan(0.4);
+    expect(filled(gridded) / cells(gridded)).toBe(1);
+    expect(gridded.length).toBeLessThan(raw.length / 5);
+  });
+
+  it('carries a slow channel into the rows between its readings', () => {
+    // The pump case: one reading every 3 s against a 1 s grid.
+    const readings = [];
+    for (let i = 0; i < 4; i++) readings.push(r('rig/Bohrtiefe', i, at(i * 1000)));
+    readings.push(r('rig/Wassermenge', 70, at(0)));
+    readings.push(r('rig/Wassermenge', 71, at(3000)));
+
+    const rows = buildStreamRows('hdi', sensors, readings, 1000);
+    expect(rows.slice(1).map((row) => row[3])).toEqual([70, 70, 70, 71]);
+  });
+
+  it('leaves a recorded gap empty instead of carrying the value before it', () => {
+    const rows = buildStreamRows('hdi', sensors, [
+      r('rig/Bohrtiefe', 5, at(0)),
+      { topic: 'rig/Bohrtiefe', valueNumeric: null, valueText: null, receivedAt: at(1000) },
+      r('rig/Drehzahl', 1, at(2000)),
+      r('rig/Drehzahl', 1, at(3000)),
+    ], 1000);
+    expect(rows.slice(1).map((row) => row[1])).toEqual([5, '', '', '']);
+  });
+
+  it('numbers the IVL rows after the grid, not before it', () => {
+    const rows = buildStreamRows('ivl', ['Alpha', 'Beta'], [
+      r('rig/Alpha', 1, at(0)),
+      r('rig/Beta', 2, at(10)),
+      r('rig/Alpha', 3, at(1000)),
+    ], 1000);
+    expect(rows[0][0]).toBe(INDEX_COLUMN);
+    expect(rows.slice(1).map((row) => row[0])).toEqual([0, 1]);
+  });
+
+  it('keeps the column order the stream defines', () => {
+    const rows = buildStreamRows('hdi', sensors, [
+      r('rig/Wassermenge', 9, at(0)),
+      r('rig/Bohrtiefe', 1, at(10)),
+    ], 1000);
+    expect(rows[0]).toEqual([TIMESTAMP_COLUMN, 'Bohrtiefe', 'Drehzahl', 'Wassermenge']);
+    expect(rows[1]).toEqual(['2026-05-18T12:00:00.010Z', 1, '', 9]);
+  });
+});

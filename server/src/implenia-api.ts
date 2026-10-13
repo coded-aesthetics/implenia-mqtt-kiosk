@@ -34,7 +34,18 @@ export function getApiConfig(): ApiConfig | null {
  */
 export async function fetchImplenia<T = unknown>(
   path: string,
-  options?: { method?: string; body?: unknown; timeoutMs?: number },
+  options?: {
+    method?: string;
+    body?: unknown;
+    /**
+     * A body to send verbatim, with `contentType`, instead of JSON. The CSV
+     * batch endpoint reads the raw request body as a file, so it cannot be
+     * handed a JSON envelope.
+     */
+    rawBody?: string;
+    contentType?: string;
+    timeoutMs?: number;
+  },
 ): Promise<T> {
   const cfg = getApiConfig();
   if (!cfg) throw new Error('Implenia API not configured');
@@ -51,7 +62,10 @@ export async function fetchImplenia<T = unknown>(
     headers,
   };
 
-  if (options?.body) {
+  if (options?.rawBody !== undefined) {
+    headers['Content-Type'] = options.contentType ?? 'text/plain; charset=utf-8';
+    init.body = options.rawBody;
+  } else if (options?.body) {
     headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(options.body);
   }
