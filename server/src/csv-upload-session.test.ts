@@ -385,6 +385,74 @@ describe('uploadSession on the CSV route', () => {
     expect(callsTo('/api/v1/sensor-float/s-tiefe/batch')).toHaveLength(1);
   });
 
+  it('keeps the CSV route when a 422 blames the platform\'s own inserts', async () => {
+    // The endpoint answers `failed_count > 0` with a 422 carrying the same
+    // result shape as a success. That is its database having a bad minute, not
+    // a body it will keep refusing — falling back would re-send the whole
+    // session as JSON over the mobile link this route exists to spare.
+    apiFn.mockImplementation(fakePlatform((body) => {
+      const err = new Error('Implenia API 422') as Error & {
+        statusCode: number; body: string;
+      };
+      err.statusCode = 422;
+      err.body = JSON.stringify({
+        success: false,
+        rows_processed: body.trimEnd().split('\n').length - 1,
+        failed_count: 7,
+        errors: ['insert error (7 values): statement timeout'],
+      });
+      return err;
+    }));
+
+    const { sessionId } = seedSession();
+    const result = await recording.uploadSession(sessionId);
+
+    expect(result.status).toBe('partial');
+    expect(callsTo('/api/v1/sensor-float/s-rpm/batch')).toHaveLength(0);
+    expect(db.getSessionStats(sessionId).failed).toBeGreaterThan(0);
+  });
+
+  it('falls back when a 422 blames the column names', async () => {
+    apiFn.mockImplementation(fakePlatform(() => {
+      const err = new Error('Implenia API 422') as Error & {
+        statusCode: number; body: string;
+      };
+      err.statusCode = 422;
+      err.body = JSON.stringify({
+        success: false,
+        rows_processed: 0,
+        unknown_sensors: ['Bohrtiefe', 'Drehzahl', 'Vorschubdruck'],
+        errors: ['no matching sensors found: all CSV columns are unknown for this device'],
+      });
+      return err;
+    }));
+
+    const { sessionId } = seedSession();
+    const result = await recording.uploadSession(sessionId);
+
+    expect(result.status).toBe('uploaded');
+    expect(callsTo('/api/v1/sensor-float/s-tiefe/batch')).toHaveLength(1);
+  });
+
+  it('falls back when the element does not resolve to a device', async () => {
+    // The CSV endpoint is addressed per element device, so an element the
+    // platform does not know leaves it with nothing to post to — while the
+    // per-sensor route is addressed by sensor id and needs no device at all.
+    // Marking every chunk failed here would strand measurements that the route
+    // this kiosk shipped with uploads fine.
+    apiFn.mockImplementation((path: string) =>
+      Promise.resolve(path.includes('/resolve') ? {} : {}));
+
+    const { sessionId } = seedSession();
+    const result = await recording.uploadSession(sessionId);
+
+    expect(callsTo('/readings/batch/csv')).toHaveLength(0);
+    expect(callsTo('/api/v1/sensor-float/s-tiefe/batch')).toHaveLength(1);
+    expect(callsTo('/api/v1/sensor-float/s-rpm/batch')).toHaveLength(1);
+    expect(db.getSessionStats(sessionId).pending).toBe(0);
+    expect(result.status).toBe('uploaded');
+  });
+
   it('completes the element once both halves of the upload have landed', async () => {
     apiFn.mockImplementation(fakePlatform());
 

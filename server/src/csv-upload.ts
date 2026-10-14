@@ -302,10 +302,19 @@ export function pinAnchorReadings(
   const wanted = new Set(anchorInstants);
   if (wanted.size === 0) return null;
 
-  const readings = depth.readings
-    .filter((r) => wanted.has(r.receivedAt))
-    .map((r) => ({ receivedAt: r.receivedAt, value: r.value }));
-  if (readings.length === 0) return null;
+  // Deduplicated by instant, last value winning — the same rule, for the same
+  // reason, as the per-sensor loop's own dedup: at a high ingest rate (replay
+  // 60x, fast MQTT) two readings share a millisecond, and the platform's
+  // multi-row upsert refuses a batch naming one `(sensor_id, date)` twice
+  // ("ON CONFLICT DO UPDATE command cannot affect row a second time"). Here
+  // that would fail the *whole* pinned batch, which is every boundary's anchor,
+  // and fail it identically on every retry.
+  const byInstant = new Map<number, number | null>();
+  for (const r of depth.readings) {
+    if (wanted.has(r.receivedAt)) byInstant.set(r.receivedAt, r.value);
+  }
+  if (byInstant.size === 0) return null;
+  const readings = Array.from(byInstant, ([receivedAt, value]) => ({ receivedAt, value }));
 
   return {
     sensorId: depth.sensorId,
@@ -326,6 +335,23 @@ export interface CsvBatchResponse {
   errors?: string[];
 }
 
+/** Why a chunk's response is not acceptable. */
+export interface CsvChunkProblem {
+  /** German, for the log and the fallback's reason. */
+  message: string;
+  /**
+   * Whether retrying this route can ever help.
+   *
+   * A name the platform does not know, and a body it understood no row of, are
+   * properties of the request: they come back identically however often they
+   * are sent, so the session has to take the id-addressed per-sensor path
+   * instead. Values the platform failed to *insert* are not — that is its own
+   * database having a bad minute, and falling back on it would re-send the
+   * whole session as JSON over the mobile link this route exists to spare.
+   */
+  structural: boolean;
+}
+
 /**
  * Why a chunk's response is not acceptable, or null when it is.
  *
@@ -335,25 +361,58 @@ export interface CsvBatchResponse {
  * makes name-addressing safe here: it names every header it could not match,
  * so a column that silently would have gone nowhere becomes a failure instead,
  * and the caller falls back to the id-addressed per-sensor path.
+ *
+ * This reads a refusal as well as a success, because the endpoint answers both
+ * with the same shape: it sets `success = failed_count === 0 && rows_processed
+ * > 0` and serves a false one as a 422 carrying this very body. The status
+ * therefore says nothing about whether the route is usable, and only the fields
+ * do.
  */
 export function csvChunkProblem(
   chunk: CsvChunk,
   res: CsvBatchResponse | null,
-): string | null {
-  if (!res) return 'Die Plattform hat keine Antwort geliefert.';
+): CsvChunkProblem | null {
+  if (!res) {
+    return { message: 'Die Plattform hat keine Antwort geliefert.', structural: false };
+  }
+
   const unknown = (res.unknown_sensors ?? []).filter((n) => chunk.columns.includes(n));
   if (unknown.length > 0) {
-    return `Die Plattform kennt diese Sensoren nicht: ${unknown.join(', ')}`;
+    return {
+      message: `Die Plattform kennt diese Sensoren nicht: ${unknown.join(', ')}`,
+      structural: true,
+    };
+  }
+  // Rows parsed but values not stored: an insert error on the platform's side,
+  // which is a "not now". Checked before the row counts, because a row whose
+  // insert failed was still parsed and still counted in `rows_processed`.
+  if ((res.failed_count ?? 0) > 0) {
+    return {
+      message: `${res.failed_count} Messwerte konnten nicht gespeichert werden.`,
+      structural: false,
+    };
+  }
+  if (chunk.rows > 0 && (res.rows_processed ?? 0) === 0) {
+    // Not one row was understood. That is the body — an unmatched header, a
+    // timestamp column it could not parse — and not the link.
+    const detail = (res.errors ?? []).slice(0, 2).join('; ');
+    return {
+      message: detail || 'Die Plattform hat keine einzige Zeile verarbeitet.',
+      structural: true,
+    };
   }
   if (res.success === false) {
     const detail = (res.errors ?? []).slice(0, 2).join('; ');
-    return detail || 'Die Plattform hat die Messwerte abgelehnt.';
-  }
-  if ((res.failed_count ?? 0) > 0) {
-    return `${res.failed_count} Messwerte konnten nicht gespeichert werden.`;
+    return {
+      message: detail || 'Die Plattform hat die Messwerte abgelehnt.',
+      structural: false,
+    };
   }
   if ((res.rows_processed ?? 0) < chunk.rows) {
-    return `Nur ${res.rows_processed ?? 0} von ${chunk.rows} Zeilen wurden verarbeitet.`;
+    return {
+      message: `Nur ${res.rows_processed ?? 0} von ${chunk.rows} Zeilen wurden verarbeitet.`,
+      structural: false,
+    };
   }
   return null;
 }

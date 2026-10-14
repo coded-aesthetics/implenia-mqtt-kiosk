@@ -726,13 +726,23 @@ Three things about that batch, none optional:
   whenever the grid is in play. On a retry the chunks that gridded those
   readings are already marked uploaded, so a pending-only lookup would find
   nothing to pin and leave the boundaries pointing at nothing.
+- **It is deduplicated by instant, last value winning.** Two readings share a
+  millisecond at a high ingest rate (replay 60x, fast MQTT), and the platform's
+  multi-row upsert refuses a batch naming one `(sensor_id, date)` twice. This
+  batch is *every* boundary's anchor, so one duplicate fails all of them, and
+  fails identically on every retry. Same rule as the per-sensor loop's own
+  dedup, for the same reason.
 
 `ALIGNMENT_ANCHOR_ROLES` (`depth`) and `ANCHORED_ROLE` (`geology_nr`) name the
 two ends. Both resolve by role from the session's own map, never by name: the
 depth sensor is `Bohrtiefe` for Injektionsbohren and Ankerbohren but `Tiefe` for
-DSV. `EXACT_TIMESTAMP_ROLES` (`geology_nr`, `geology_text`, `is_completed`)
-stays what it was — every reading keeps its instant, per-sensor, in the same
-upload.
+DSV. **First match wins, as in `sensorNameByRole`** — a map carrying one role
+twice is legal and the shipped CSVs do it (`gear`, `torque`), and the two
+resolutions have to agree: `geology.ts` dates its boundaries against the sensor
+`sensorNameByRole` picked, so pinning the other one would thin the series those
+boundaries point at and lose every layer, silently.
+`EXACT_TIMESTAMP_ROLES` (`geology_nr`, `geology_text`, `is_completed`) stays
+what it was — every reading keeps its instant, per-sensor, in the same upload.
 
 The honest long-term fix is for a geology entry to carry its own depth instead
 of borrowing one by timestamp. That is a contract change across all three
@@ -759,13 +769,37 @@ a drifted name into measurements that upload cleanly and land nowhere:
 **The fallback is decided on the first chunk only.** A structural refusal there
 (404/405/415 from a backend deployed before the endpoint existed — kiosks
 self-update hourly while the backend deploys separately, so both versions are
-live in the field at once; 422; unmatched names) switches the whole session to
-the per-sensor route, which is clean because nothing has been written yet. A
-5xx, a timeout or a network error is **not** structural: those mean "not now",
-and falling back on them would re-send the whole session over the mobile link
-this exists to spare. A later chunk failing costs that chunk, which goes to
-`failed` and is retried — the platform upserts on `(sensor_id, date)`, so the
-re-send is a no-op.
+live in the field at once; unmatched names; an element that does not resolve)
+switches the whole session to the per-sensor route, which is clean because
+nothing has been written yet. A 5xx, a timeout or a network error is **not**
+structural: those mean "not now", and falling back on them would re-send the
+whole session over the mobile link this exists to spare. A later chunk failing
+costs that chunk, which goes to `failed` and is retried — the platform upserts
+on `(sensor_id, date)`, so the re-send is a no-op.
+
+Two of those are worth their own line, because the obvious reading of each is
+wrong:
+
+- **A 422 is decided by its body, never by its status.** The endpoint answers a
+  refusal with the *same* JSON result as a success — `success` is
+  `failed_count == 0 && rows_processed > 0`, and a false one is served as a 422
+  carrying that result. So an unmatched header and a Postgres insert error that
+  cost it one chunk of values arrive under one status. Treating the status as
+  structural lets a single statement timeout on the platform abandon the grid
+  and put the whole session back on the link as JSON; treating it as transient
+  strands a body the backend will keep refusing. `csvChunkProblem` reads the
+  fields instead: an unmatched name of ours or `rows_processed == 0` is
+  structural, `failed_count` is not, and a 422 the kiosk cannot parse falls
+  back — an expensive upload that lands beats measurements that never leave the
+  kiosk.
+- **An element that does not resolve is structural**, and this is the one
+  failure where the *other* route is strictly more capable. The CSV endpoint is
+  addressed per element device (`element-device.ts`), so an element the platform
+  answered about and does not know leaves it nothing to post to; the per-sensor
+  route is addressed by sensor id and needs no device at all, which is why such
+  a session uploaded fine before `uploadMode: 'csv'` became the default. A
+  resolve that *failed to answer* is not this — that is a transport failure, and
+  "not now" as usual. `ElementNotResolvableError` is what keeps the two apart.
 
 `grid-reduce.test.ts`, `csv-upload.test.ts`, `reduction-config.test.ts` and
 `csv-upload-session.test.ts` pin all of this.

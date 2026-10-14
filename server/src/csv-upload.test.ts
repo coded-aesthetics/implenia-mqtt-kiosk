@@ -274,6 +274,26 @@ describe('pinAnchorReadings', () => {
     const batch = pinAnchorReadings([T0 + 290, T0 + 123], depth)!;
     expect(batch.readings.map((r) => r.receivedAt)).toEqual([T0 + 290]);
   });
+
+  it('sends one reading per instant when two share a millisecond', () => {
+    // The platform's upsert refuses a batch that names one (sensor_id, date)
+    // twice, and this batch is every boundary's anchor: a duplicate would fail
+    // all of them, identically on every retry. The last value wins, as it does
+    // on the per-sensor path.
+    const doubled = {
+      ...depth,
+      readings: [
+        { receivedAt: T0 + 290, value: 1.29 },
+        { receivedAt: T0 + 290, value: 1.31 },
+        { receivedAt: T0 + 580, value: 1.58 },
+      ],
+    };
+    const batch = pinAnchorReadings([T0 + 290, T0 + 580], doubled)!;
+    expect(batch.readings).toEqual([
+      { receivedAt: T0 + 290, value: 1.31 },
+      { receivedAt: T0 + 580, value: 1.58 },
+    ]);
+  });
 });
 
 // ── reading the platform's answer ───────────────────────────────────────────
@@ -295,7 +315,9 @@ describe('csvChunkProblem', () => {
     const problem = csvChunkProblem(chunk, {
       success: true, rows_processed: 2, unknown_sensors: ['Drehzahl'],
     });
-    expect(problem).toMatch(/Drehzahl/);
+    expect(problem?.message).toMatch(/Drehzahl/);
+    // A name is permanent: no retry of this route resolves it.
+    expect(problem?.structural).toBe(true);
   });
 
   it('ignores an unknown column that is not one of ours', () => {
@@ -304,22 +326,37 @@ describe('csvChunkProblem', () => {
     })).toBeNull();
   });
 
-  it('rejects a response that failed outright', () => {
-    expect(csvChunkProblem(chunk, { success: false, errors: ['insert error'] }))
-      .toMatch(/insert error/);
+  it('rejects a response that understood no row at all, and calls it structural', () => {
+    // No row parsed is the body, not the link — an unmatched header or a
+    // timestamp column it cannot read. The endpoint answers it as a 422
+    // carrying this very shape.
+    const problem = csvChunkProblem(chunk, {
+      success: false, rows_processed: 0, errors: ['no matching sensors found'],
+    });
+    expect(problem?.message).toMatch(/no matching sensors/);
+    expect(problem?.structural).toBe(true);
   });
 
-  it('rejects a response that lost values', () => {
-    expect(csvChunkProblem(chunk, { success: true, rows_processed: 2, failed_count: 3 }))
-      .toMatch(/3/);
+  it('rejects a response that lost values without calling it structural', () => {
+    // `failed_count` is the platform's own insert error — a bad minute in its
+    // database, served as a 422 all the same. Falling back on it would put the
+    // whole session back on the mobile link as JSON.
+    const problem = csvChunkProblem(chunk, {
+      success: false, rows_processed: 2, failed_count: 3, errors: ['insert error'],
+    });
+    expect(problem?.message).toMatch(/3/);
+    expect(problem?.structural).toBe(false);
   });
 
   it('rejects a response that processed fewer rows than were sent', () => {
-    expect(csvChunkProblem(chunk, { success: true, rows_processed: 1 }))
-      .toMatch(/1 von 2/);
+    const problem = csvChunkProblem(chunk, { success: true, rows_processed: 1 });
+    expect(problem?.message).toMatch(/1 von 2/);
+    expect(problem?.structural).toBe(false);
   });
 
-  it('rejects a missing response', () => {
-    expect(csvChunkProblem(chunk, null)).not.toBeNull();
+  it('rejects a missing response as a transport failure, not a structural one', () => {
+    const problem = csvChunkProblem(chunk, null);
+    expect(problem).not.toBeNull();
+    expect(problem?.structural).toBe(false);
   });
 });

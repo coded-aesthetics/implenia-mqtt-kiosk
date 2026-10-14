@@ -3,10 +3,10 @@ import { resolveHerstellenSensors, type SensorDefs } from './herstellen-sensors.
 import { getReductionConfig, holdMsFor } from './reduction-config.js';
 import {
   ALIGNMENT_ANCHOR_ROLES, ANCHORED_ROLE, csvChunkProblem, pinAnchorReadings, planCsvUpload,
-  type CsvBatchResponse, type CsvChunk, type CsvUploadPlan, type PinnedBatch,
-  type UploadSensorMeta,
+  type CsvBatchResponse, type CsvChunk, type CsvChunkProblem, type CsvUploadPlan,
+  type PinnedBatch, type UploadSensorMeta,
 } from './csv-upload.js';
-import { withElementDevice } from './element-device.js';
+import { isElementNotResolvable, withElementDevice } from './element-device.js';
 import { ingestion, isOperatingMode, type OperatingMode, type SensorMapEntry } from './ingestion.js';
 import type { DrillStatus } from './rohrwechsel.js';
 import { createLogger, onLogEntry, type LogEntry } from './logger.js';
@@ -420,14 +420,68 @@ export function uploadSession(
  * Statuses that say the CSV route will not work here, however often it is
  * retried: the endpoint is missing or refuses this content type (a backend
  * deployed before it existed — kiosks self-update hourly while the backend
- * deploys separately, so the field runs both versions at once), the element
- * does not resolve to a device, or the body was rejected outright.
+ * deploys separately, so the field runs both versions at once), or the body was
+ * rejected outright.
  *
  * A network error, a timeout and a 5xx are deliberately *not* in here. Those
  * mean "not now", and falling back on them would send the same measurements
  * twice over the mobile link this whole change exists to spare.
+ *
+ * **422 is not in here either**, because this endpoint uses it for both. It
+ * answers a refusal with the same JSON result as a success — `success` is
+ * `failed_count === 0 && rows_processed > 0` — so a header it could not match
+ * and a Postgres insert error that cost it one chunk of values arrive under the
+ * same status. `csvFailureIsStructural` reads the body instead.
  */
-const CSV_STRUCTURAL_STATUS = new Set([400, 401, 403, 404, 405, 413, 415, 422]);
+const CSV_STRUCTURAL_STATUS = new Set([400, 401, 403, 404, 405, 413, 415]);
+
+/** The status whose body decides, rather than the status itself. */
+const CSV_AMBIGUOUS_STATUS = 422;
+
+/**
+ * Whether a thrown CSV post says this route cannot work for this session.
+ *
+ * Three kinds of answer qualify, and the third is the subtle one:
+ *
+ *   - a status in `CSV_STRUCTURAL_STATUS`;
+ *   - an element the platform answered about and does not know. The CSV
+ *     endpoint is addressed per element *device*, so there is nothing to post
+ *     to; the per-sensor route is addressed by sensor id and needs no device,
+ *     which is why the same session uploaded fine before this route existed.
+ *     A resolve that *failed to answer* is not this — that is an `ApiError`, or
+ *     no status at all, and is handled above;
+ *   - a 422 whose body says the request was at fault. An unmatched name is
+ *     permanent; `failed_count` is the platform's own insert error and must not
+ *     cost the session its grid.
+ *
+ * A 422 the kiosk cannot read is treated as structural: an uninterpretable
+ * refusal is more likely a body this backend will keep refusing than a passing
+ * fault, and an expensive upload that lands beats an element whose measurements
+ * never leave the kiosk.
+ */
+function csvFailureIsStructural(chunk: CsvChunk, err: unknown): boolean {
+  if (isElementNotResolvable(err)) return true;
+
+  const status = (err as ApiError).statusCode;
+  if (status === undefined) return false;
+  if (status === CSV_AMBIGUOUS_STATUS) {
+    const res = csvResponseFromError(err);
+    return res ? csvChunkProblem(chunk, res)?.structural ?? true : true;
+  }
+  return CSV_STRUCTURAL_STATUS.has(status);
+}
+
+/** The CSV result a refusal carried, when it carried one. */
+function csvResponseFromError(err: unknown): CsvBatchResponse | null {
+  const body = (err as ApiError).body;
+  if (!body) return null;
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as CsvBatchResponse) : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Post the CSV chunks, marking each chunk's readings as it goes.
@@ -450,8 +504,7 @@ async function uploadCsvChunks(
     const chunk = chunks[i];
     hooks.report(`Paket ${i + 1}/${chunks.length}`);
 
-    let problem: string | null = null;
-    let structural = false;
+    let problem: CsvChunkProblem | null = null;
     try {
       const res = await withElementDevice(session.element_name, (deviceId) =>
         fetchImplenia<CsvBatchResponse>(
@@ -463,11 +516,11 @@ async function uploadCsvChunks(
       // in the header and reports the ones it could not match instead of
       // failing, so a column that went nowhere would otherwise look uploaded.
       problem = csvChunkProblem(chunk, res);
-      structural = problem !== null;
     } catch (err) {
-      problem = (err as Error).message;
-      const status = (err as ApiError).statusCode;
-      structural = status !== undefined && CSV_STRUCTURAL_STATUS.has(status);
+      problem = {
+        message: (err as Error).message,
+        structural: csvFailureIsStructural(chunk, err),
+      };
     }
 
     if (problem === null) {
@@ -476,13 +529,13 @@ async function uploadCsvChunks(
       continue;
     }
 
-    if (i === 0 && structural) return { fallback: true, reason: problem };
+    if (i === 0 && problem.structural) return { fallback: true, reason: problem.message };
 
     markSessionReadingsFailed(chunk.ids);
     hooks.onChunkDone(false);
     log.error(
       'CSV upload failed for session %d chunk %d/%d (%d rows): %s',
-      session.id, i + 1, chunks.length, chunk.rows, problem,
+      session.id, i + 1, chunks.length, chunk.rows, problem.message,
     );
   }
 
@@ -505,9 +558,15 @@ function anchorBatch(
   let anchorId: string | null = null;
   let depthId: string | null = null;
   let depth: UploadSensorMeta | undefined;
+  // First match wins for each role, which is what `sensorNameByRole` does. A
+  // map carrying one role twice is legal — the shipped CSVs do it for `gear`
+  // and `torque` — and the two have to agree: `geology.ts` dates its boundaries
+  // against the sensor `sensorNameByRole` picked, so pinning the *other* one
+  // would thin the series those boundaries point at and lose every layer.
   for (const [sensorId, meta] of sensorMeta) {
-    if (meta.role === ANCHORED_ROLE) anchorId = sensorId;
-    else if (meta.role && ALIGNMENT_ANCHOR_ROLES.has(meta.role)) {
+    if (meta.role === ANCHORED_ROLE) {
+      anchorId ??= sensorId;
+    } else if (meta.role && ALIGNMENT_ANCHOR_ROLES.has(meta.role) && !depthId) {
       depthId = sensorId;
       depth = meta;
     }
@@ -515,6 +574,12 @@ function anchorBatch(
   if (!anchorId || !depthId || !depth?.name) return null;
 
   const instants = getSessionSensorSeries(sessionId, anchorId).map((p) => p.receivedAt);
+  // Nothing to anchor, so don't read the depth series at all: DSV declares
+  // `GeoDIN` with no consumer today, and on a session that recorded none this
+  // would otherwise load and discard the largest channel in the recording —
+  // 26 699 rows on the captured session, on a 4 GB machine, at upload time.
+  if (instants.length === 0) return null;
+
   return pinAnchorReadings(instants, {
     sensorId: depthId,
     sensorType: depth.type ?? 'float',

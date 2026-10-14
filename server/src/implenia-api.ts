@@ -3,6 +3,15 @@ import { getMeta } from './db.js';
 
 export interface ApiError extends Error {
   statusCode: number;
+  /**
+   * The response body, verbatim.
+   *
+   * The CSV batch endpoint answers a refusal with the *same* JSON result as a
+   * success, and whether that refusal is worth retrying is only visible in it —
+   * a name it could not match is permanent, a value it failed to insert is its
+   * own database having a bad minute. The status alone cannot tell them apart.
+   */
+  body?: string;
 }
 
 export interface ApiConfig {
@@ -80,6 +89,7 @@ export async function fetchImplenia<T = unknown>(
     const text = await res.text();
     const err = new Error(`Implenia API ${res.status}: ${text}`);
     (err as ApiError).statusCode = res.status;
+    (err as ApiError).body = text;
     throw err;
   }
 
