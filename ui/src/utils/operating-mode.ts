@@ -22,12 +22,17 @@ export const PHASE_ORDER: readonly OperatingMode[] = [
 /**
  * The phases after drilling.
  *
- * Grouped because they share every behaviour that matters: all three handle
- * pipes here, and all three retract on the server (`isRetracting` in
- * `ingestion.ts`), so clipping treats them identically. That is also why
- * skipping one costs nothing — stepping through Austausch to reach Einbauen is
- * behaviourally a no-op, and `operating_mode` is a single overwritten column
- * rather than a time series, so it leaves no trace either.
+ * Grouped because all three retract on the server (`isRetracting` in
+ * `ingestion.ts`), which is what decides how depth is tracked. They do *not*
+ * share clipping: only Auffüllen handles pipes, by removing them in
+ * increments the way Bohren adds them. Austausch and Einbauen handle none, so
+ * their clamp rests closed and nothing in them is clipped — see
+ * `hasPipeHandling`.
+ *
+ * Skipping one is still cheap rather than free: stepping through Austausch to
+ * reach Einbauen passes through a phase that clips nothing, so the cost is at
+ * most the readings that arrive between two taps, and `operating_mode` is a
+ * single overwritten column rather than a time series, so it leaves no trace.
  *
  * Named for the DSV term the kiosk shipped with. It is the wrong word for
  * Injektionsbohren — see the note in App.tsx — and survives only as an
@@ -53,6 +58,17 @@ export function isVerpressenMode(mode: OperatingMode | null | undefined): boolea
   return mode === 'austausch' || mode === 'einbauen' || mode === 'auffuellen';
 }
 
+/**
+ * Whether the drive adds or removes pipes in this phase.
+ *
+ * Bohren reaches depth by adding 2 m or 3 m pipes; Auffüllen takes them back
+ * out the same way. Austausch and Einbauen handle no pipes at all, so a closed
+ * clamp there is the resting state and means nothing — which is why the server
+ * clips neither (see `hasPipeHandling` in `ingestion.ts`, and keep the two in
+ * step: this one decides whether the recording bar shows the paused icon, and
+ * a bar claiming a pause while the server records normally is a lie to the
+ * operator).
+ */
 export function hasPipeHandling(mode: OperatingMode): boolean {
-  return mode === 'bohren' || mode === 'austausch' || mode === 'einbauen' || mode === 'auffuellen';
+  return mode === 'bohren' || mode === 'auffuellen';
 }

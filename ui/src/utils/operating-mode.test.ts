@@ -79,20 +79,26 @@ describe('the sequence is traversable end to end', () => {
   });
 });
 
-describe('why skipping a phase is harmless', () => {
+describe('why skipping a phase is cheap', () => {
   it('groups every post-drilling phase together', () => {
-    // Part of what makes "tap forward twice to skip" acceptable. The other
-    // half is server-side, where clipping actually happens — see
-    // ingestion.test.ts.
     for (const m of VERPRESSEN_MODES) {
-      expect(hasPipeHandling(m), m).toBe(true);
       expect(isVerpressenMode(m), m).toBe(true);
     }
   });
 
+  it('matches the server on which phases handle pipes', () => {
+    // This predicate decides whether the recording bar shows the paused icon,
+    // and the server's copy of the same name decides whether readings are
+    // clipped. A bar claiming a pause while the server records normally is a
+    // lie to the operator, so the two must stay in step — see
+    // server/src/operating-mode.test.ts.
+    expect(hasPipeHandling('bohren')).toBe(true);
+    expect(hasPipeHandling('auffuellen')).toBe(true);
+    expect(hasPipeHandling('austausch')).toBe(false);
+    expect(hasPipeHandling('einbauen')).toBe(false);
+  });
+
   it('separates drilling from them', () => {
     expect(isVerpressenMode('bohren')).toBe(false);
-    // Drilling still handles pipes — that is what Rohrverlängerung clips on.
-    expect(hasPipeHandling('bohren')).toBe(true);
   });
 });

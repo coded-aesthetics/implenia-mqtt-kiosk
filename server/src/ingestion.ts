@@ -124,8 +124,37 @@ export function isRetracting(mode: OperatingMode): boolean {
   return mode === 'austausch' || mode === 'einbauen' || mode === 'auffuellen';
 }
 
+/**
+ * Whether the drive handles pipes in this mode, and the clamp closing can
+ * therefore mean a pipe change.
+ *
+ * Only `bohren`, which reaches depth by adding 2 m or 3 m pipes, and
+ * `auffuellen`, which removes them the same way. `austausch` and `einbauen`
+ * handle no pipes at all.
+ *
+ * It read "all four modes" for a while, on the premise that the clamp can
+ * trigger a pipe change in any mode that handles pipes — true, but those two
+ * do not. What it cost is specific and was measured on the G08 rig: in
+ * `austausch` the clamp *rests closed*, holding the string while the slurry is
+ * exchanged (min 1654, max 5256, mean 4250, against a close threshold of
+ * 4000), so the state machine sat in `rohrwechsel` for the entire phase and
+ * clipped it. 3 848 of the phase's 3 886 depth readings were held back —
+ * recorded, tagged, and excluded from the upload — leaving the platform a
+ * one-second sliver of a 0.86 m retraction.
+ *
+ * The inversion is the whole point: in `bohren` and `auffuellen` the clamp is
+ * open while the drive works and closes only to re-grip, which is what makes
+ * "closed ⇒ pipe change" a sound proxy. In the other two its resting state is
+ * closed, so it carries no information about pipes.
+ *
+ * What is given up: a pipe genuinely handled during `austausch` or `einbauen`
+ * is no longer clipped, so its phantom depth would reach the series. Nobody
+ * handles pipes there — and a depth change in those modes is real. The ~1 m
+ * the drill rises before `einbauen` is the denser slurry pushing it up from
+ * below, which is a measurement, not an artefact.
+ */
 export function hasPipeHandling(mode: OperatingMode): boolean {
-  return mode === 'bohren' || mode === 'austausch' || mode === 'einbauen' || mode === 'auffuellen';
+  return mode === 'bohren' || mode === 'auffuellen';
 }
 
 interface ActiveSession {
@@ -393,9 +422,10 @@ export class DataIngestion extends EventEmitter {
   /**
    * Whether a reading taken now must be held back.
    *
-   * Both `bohren` and `auffuellen` clip during rohrwechsel (clamp closed) —
-   * the drive is handling a pipe, and its readings corrupt averages.
-   * `austausch` and `einbauen` never clip.
+   * `bohren` and `auffuellen` clip during rohrwechsel (clamp closed) — the
+   * drive is handling a pipe, and its readings corrupt averages. `austausch`
+   * and `einbauen` never clip, because no pipe is ever handled in them and
+   * their clamp rests closed: see `hasPipeHandling`.
    */
   private clips(state: DrillState): boolean {
     const session = this.activeSession;
