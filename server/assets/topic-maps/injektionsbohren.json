@@ -5,6 +5,8 @@
   "Maschine/Druck_Hammer": "Druck Hammer",
   "Maschine/Druck_Vorschub": "Vorschubdruck",
   "Maschine/Druck_Medium": "Suspensionsdruck",
+  "Maschine/Druck_innen": "IDrehmoment",
+  "Maschine/Druck_aussen": "ADrehmoment",
   "Spuelpumpe/Durchfluss": "DurchflussB",
   "Spuelpumpe/Volumen": "Q_Bohren",
   "Verpresspumpe/Durchfluss": "DurchflussV",
