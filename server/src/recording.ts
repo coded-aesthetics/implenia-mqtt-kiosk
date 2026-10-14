@@ -678,7 +678,17 @@ async function runUpload(
   // than from the pending groups, and sent whenever the grid is in play — on a
   // retry the chunks that gridded them have already been marked uploaded, and
   // the boundary would otherwise be left pointing at nothing.
+  //
+  // Only when the depth series was actually gridded, though: nothing needs
+  // pinning back into a series that was never thinned. A depth sensor the grid
+  // refused — no `source` the session could pin and a name the CSVs do not
+  // know — goes out per sensor at full resolution, and an extra batch of the
+  // same readings would be redundant work that still counts in `sensorsTotal`,
+  // so a transient failure of it alone would hold the element open and offer
+  // the operator a retry for an upload in which every reading had landed.
+  const griddedNames = new Set(plan?.gridded ?? []);
   let pinned: PinnedBatch | null = plan ? anchorBatch(sessionId, sensorMeta) : null;
+  if (pinned && !griddedNames.has(pinned.name)) pinned = null;
   if (pinned) {
     log.info(
       'Session %d: pinning %d %s reading(s) at geology instants alongside the grid',

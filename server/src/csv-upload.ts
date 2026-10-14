@@ -226,6 +226,12 @@ export function isGriddableSensor(
 ): boolean {
   if (group.sensorType === 'string') return false;
   if (!meta?.name) return false;
+  // A name the platform stores with padding cannot be addressed by a CSV
+  // header: the endpoint trims what it reads, so the column matches nothing,
+  // and the mismatch is invisible to `csvChunkProblem` unless it trims too
+  // (it does). Rather than rely on that one check, such a sensor takes the
+  // id-addressed route, where the spelling never has to survive a round trip.
+  if (meta.name !== meta.name.trim()) return false;
   if (!meta.source || !GRIDDABLE_SOURCES.has(meta.source)) return false;
   if (meta.role && EXACT_TIMESTAMP_ROLES.has(meta.role)) return false;
   return true;
@@ -450,7 +456,15 @@ export function csvChunkProblem(
     return { message: 'Die Plattform hat keine Antwort geliefert.', structural: false };
   }
 
-  const unknown = (res.unknown_sensors ?? []).filter((n) => chunk.columns.includes(n));
+  // Compared trimmed on both sides. The platform matches a header cell with
+  // `strings.TrimSpace` and reports the *trimmed* spelling back, so a sensor
+  // whose platform name carries padding — `"Bohrtiefe "` — is written to the
+  // header verbatim, fails to match there, and comes back as `Bohrtiefe`,
+  // which `includes` would not find among our columns. The chunk would then
+  // pass every check, be marked uploaded, and leave that sensor's whole series
+  // nowhere: the exact silent loss this response check exists to catch.
+  const ours = new Set(chunk.columns.map((c) => c.trim()));
+  const unknown = (res.unknown_sensors ?? []).filter((n) => ours.has(n.trim()));
   if (unknown.length > 0) {
     return {
       message: `Die Plattform kennt diese Sensoren nicht: ${unknown.join(', ')}`,

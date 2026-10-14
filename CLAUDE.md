@@ -799,6 +799,15 @@ a volume. The complete fix is to drop a column from the one chunk it is not
 dense in and send those readings per-sensor, which moves reading ids between a
 chunk and the leftovers; worth doing deliberately rather than as a rider.
 
+A **retry of one failed chunk** has the same bounded symptom from a different
+cause, and the same fix. `resetFailedReadings` makes only that chunk's readings
+pending, so the retry's grid starts with an empty carry: a ~3 s channel whose
+last reading sits in the previous, already-uploaded chunk is not carried into
+the first rows of the retried one, which still earn it a column. One to four
+rows per slow channel per retried chunk, written as outages for a channel that
+was alive. Fixing it properly means gridding the whole session and sending only
+the rows that still hold pending ids — again, ids moving between chunks.
+
 **`GeoDIN` may never be gridded.** implenia-web turns it into layers by change
 detection, and `alignBoundaries` deliberately gives every boundary its *own*
 depth reading so the timestamps stay strictly increasing (see "Worker-observed

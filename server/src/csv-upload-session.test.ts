@@ -307,6 +307,42 @@ describe('uploadSession on the CSV route', () => {
     expect(pinnedReadings[0].value).toBeCloseTo(0.3, 10);
   });
 
+  it('pins nothing when the depth series was never gridded', async () => {
+    // A depth sensor the grid refused goes out per sensor at full resolution,
+    // so its geology instants are already there. Sending them again would be
+    // redundant work that still counts in the progress total — and a transient
+    // failure of that one batch would hold the element open and offer a retry
+    // for an upload in which every reading had landed.
+    const elementName = `U-${++element}`;
+    const map = {
+      ...SENSOR_MAP,
+      bohrtiefe: { ...SENSOR_MAP.bohrtiefe, source: 'user' },
+    };
+    const sessionId = db.createSession(elementName, JSON.stringify(map));
+    db.endSession(sessionId);
+    const t0 = Date.parse('2026-05-18T12:00:00.000Z');
+    for (let i = 0; i < 4; i++) {
+      db.insertSessionReading(
+        sessionId, 'rig/Bohrtiefe', 's-tiefe', 'float', i * 0.5, null,
+        { receivedAt: t0 + i * 250 },
+      );
+      db.insertSessionReading(
+        sessionId, 'rig/Drehzahl', 's-rpm', 'float', 60 + i, null,
+        { receivedAt: t0 + i * 250 + 12 },
+      );
+    }
+    db.insertSessionReading(
+      sessionId, 'rig/GeoDIN', 's-geo', 'int', 23, null, { receivedAt: t0 + 750 },
+    );
+
+    apiFn.mockImplementation(fakePlatform());
+    await recording.uploadSession(sessionId);
+
+    // One per-sensor batch for the depth, and no second one pinning the same
+    // readings alongside it.
+    expect(callsTo('/api/v1/sensor-float/s-tiefe/batch')).toHaveLength(1);
+  });
+
   it('pins nothing for a session that recorded no geology', async () => {
     apiFn.mockImplementation(fakePlatform());
 

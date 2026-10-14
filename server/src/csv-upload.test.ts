@@ -122,6 +122,14 @@ describe('isGriddableSensor', () => {
     )).toBe(true);
   });
 
+  it('refuses a name the platform stores with padding', () => {
+    // The endpoint trims what it reads from the header, so such a column
+    // matches nothing there and the mismatch comes back under a spelling we
+    // never sent. It takes the id-addressed route instead.
+    expect(isGriddableSensor({ sensorType: 'float' }, { name: 'Bohrtiefe ', source: 'mqtt' }))
+      .toBe(false);
+  });
+
   it('refuses a sensor the session never recorded a name for', () => {
     // The map is keyed by the lowercased name, so the real spelling is not
     // recoverable — and the CSV header is the only way to address a column.
@@ -367,6 +375,18 @@ describe('csvChunkProblem', () => {
     });
     expect(problem?.message).toMatch(/Drehzahl/);
     // A name is permanent: no retry of this route resolves it.
+    expect(problem?.structural).toBe(true);
+  });
+
+  it('recognises one of ours reported back under its trimmed spelling', () => {
+    // The platform matches header cells with TrimSpace and reports the trimmed
+    // name. Comparing untrimmed let the chunk pass every check and be marked
+    // uploaded with that sensor's whole series nowhere on the platform.
+    const padded: CsvChunk = { csv: '', ids: [1], rows: 2, columns: ['Bohrtiefe '] };
+    const problem = csvChunkProblem(padded, {
+      success: true, rows_processed: 2, unknown_sensors: ['Bohrtiefe'],
+    });
+    expect(problem?.message).toMatch(/Bohrtiefe/);
     expect(problem?.structural).toBe(true);
   });
 
