@@ -813,6 +813,8 @@ That batch claims no reading ids (the chunk that gridded them owns those), still
 
 `sensorsFailed` counts across all three parts, so an element is only completed when nothing was left behind.
 
+**Only the machine's own channels are gridded.** `GRIDDABLE_SOURCES` is `{mqtt, kiosk}`, read from the `source` the session pinned when recording began (falling back to the local sensor CSVs by name for older sessions). The reason is that a CSV cannot say "no value here": a column gets a cell on every row of its chunk and an empty cell *inserts a NULL*, the kiosk's own outage marker. For an `mqtt` channel publishing every ~290 ms that is honest — the channel really did go quiet. For a `user` sensor it is not, because those values are events: Injektionsbohren's `Status` is written four times in a shift, and gridding it uploaded 186 fabricated outages, which cost the Herstellprotokoll its drilling duration, its phase averages and every observed geology layer. `CLAUDE.md` has the full chain. `kiosk` is gridded because those are the volume integrations, derived from every pump reading — DSV declares thirteen.
+
 **Two guards make name-addressing safe.** The CSV endpoint addresses sensors by the names in the header, which the rest of this kiosk deliberately does not do — the Schichtauftrag carries real platform ids precisely because names drift (see `CLAUDE.md`). So:
 
 1. A sensor with no `name` in the session's `sensor_map` is never gridded. The map is keyed by the *lowercased* name and the real spelling is not recoverable from it, so such a sensor takes the id-addressed route instead of being written to a sensor that may not exist. Sessions recorded before names were persisted therefore upload exactly as they always did.

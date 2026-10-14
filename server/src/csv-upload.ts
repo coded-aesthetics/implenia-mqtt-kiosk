@@ -75,6 +75,14 @@ export interface UploadSensorMeta {
   role?: string;
   /** `float` | `int` | `string`, for the per-sensor endpoint's path. */
   type?: string;
+  /**
+   * Where the sensor's values come from — `mqtt`, `kiosk`, `user`, `server`.
+   *
+   * Pinned into the session like the role, and resolved from the local CSVs by
+   * name for sessions recorded before it was. `undefined` means "not known",
+   * which is not the same as "not mqtt": see `GRIDDABLE_SOURCES`.
+   */
+  source?: string;
 }
 
 /**
@@ -138,14 +146,79 @@ export interface CsvUploadPlan {
 }
 
 /**
+ * Sources whose channels a grid may thin — the machine's own telemetry, and
+ * nothing else.
+ *
+ * This is the rule that decides what an *absent* cell means, which a CSV cannot
+ * say. A column gets a cell on every row of its chunk, and an empty cell
+ * inserts a NULL: the kiosk's own marker for "the sensor had nothing to
+ * report".
+ *
+ * For an `mqtt` channel that is honest. It publishes every ~290 ms (every ~3 s
+ * for the pumps), so a 1 s row with no value of its own and nothing inside
+ * `maxHoldMs` behind it means the channel really did go quiet for four
+ * seconds, and a NULL is what the per-sensor path would have written too.
+ *
+ * `kiosk` is in here for the same reason rather than by charity: those are the
+ * volume integrations, and the kiosk derives one from *every* pump reading, so
+ * they arrive on the machine's cadence (2 587 of them in the captured session,
+ * against 26 699 depth readings — the ~3 s pumps). Excluding them would cost
+ * DSV, which declares thirteen, most of its derived channels for nothing.
+ *
+ * `user` is where it is a lie, because those values are *events*.
+ * Injektionsbohren's `Status` (`Quelle=user`, role `mode`) is the case that
+ * cost a whole protocol: the operator steps the phase four times in a shift,
+ * so a 2 h recording holds four readings, the grid gives it a value in 13 rows
+ * of 354 — and the remaining 341 cells uploaded as 341 fabricated outages.
+ * implenia-web forward-fills `Status` (`forwardFillSensors`, engine.ts) and a
+ * present-but-null row *overwrites* the carried value, so from the first
+ * fabricated NULL onwards no row matched `Status === 0`: `detectPhases` kept
+ * one single row, `beginn_bohren` equalled `ende_bohren`, the duration and
+ * every phase average went empty, and the Bohren window collapsed to zero
+ * width — which left `herstellungLayersFromRows` nothing to read and printed
+ * the protocol with its Vorgabe geology and no observed layers at all. Uploaded
+ * cleanly, 186 NULLs on a sensor that was never once unhealthy.
+ *
+ * A `user` sensor is therefore not merely *allowed* to keep its own instants,
+ * it has to: four readings addressed by id is both the smaller upload and the
+ * only one that says what happened. `server` stays out as well — nothing but
+ * `GeoDIN` is recorded under it, and that one is excluded by role.
+ *
+ * An unknown source is treated as not griddable. The per-sensor route always
+ * works and costs bandwidth; this one silently rewrites history.
+ *
+ * **What this still does not catch.** The question the grid really wants
+ * answered is "does this channel produce a value on every machine reading, or
+ * only on an event", and a `Quelle` answers it only by proxy. A phase-limited
+ * `kiosk` channel — DSV's `Volumen Vorschnitt` and friends — is dense inside
+ * its phase and absent outside it, so the chunk that straddles the transition
+ * writes a handful of fabricated NULLs. That is bounded and cosmetic where
+ * `Status` was unbounded and fatal (nothing in web forward-fills a volume), so
+ * it is left as it is. The complete fix is to drop a column from the one chunk
+ * it is not dense in and send those readings per-sensor, which means moving
+ * reading ids between a chunk and the leftovers — worth doing deliberately,
+ * not as a rider on a bug fix.
+ */
+export const GRIDDABLE_SOURCES = new Set(['mqtt', 'kiosk']);
+
+/**
  * Whether a sensor's readings may be put on a grid and addressed by name.
  *
- * A sensor with no name in the session map is excluded for a different reason
- * than the rest: the CSV header is the only way to address a column, and the
- * map is keyed by the *lowercased* name, from which the real spelling is not
- * recoverable (see CLAUDE.md, "Sensor roles are pinned to the session"). Rather
- * than write to `ausführungsdatum` and hope, such a sensor takes the per-sensor
- * path, which addresses it by id.
+ * Two of the three exclusions are about what a grid *merges*, and one is about
+ * how the CSV addresses a column:
+ *
+ *   - a source that is not the machine's own telemetry — see
+ *     `GRIDDABLE_SOURCES`, which is also why `GeoDIN` (`server`) and the
+ *     string sensors (`user`) would fall out even without their own rules;
+ *   - a role whose every reading has to keep its instant
+ *     (`EXACT_TIMESTAMP_ROLES`), kept explicit because it is the *documented*
+ *     reason and `RECORDABLE_ROLES` deliberately overrides the source for
+ *     `GeoDIN` elsewhere;
+ *   - a sensor with no name in the session map. The CSV header is the only way
+ *     to address a column, and the map is keyed by the *lowercased* name, from
+ *     which the real spelling is not recoverable (see CLAUDE.md, "Sensor roles
+ *     are pinned to the session"). Rather than write to `ausführungsdatum` and
+ *     hope, such a sensor takes the per-sensor path, which addresses it by id.
  */
 export function isGriddableSensor(
   group: Pick<SessionUploadGroup, 'sensorType'>,
@@ -153,6 +226,7 @@ export function isGriddableSensor(
 ): boolean {
   if (group.sensorType === 'string') return false;
   if (!meta?.name) return false;
+  if (!meta.source || !GRIDDABLE_SOURCES.has(meta.source)) return false;
   if (meta.role && EXACT_TIMESTAMP_ROLES.has(meta.role)) return false;
   return true;
 }

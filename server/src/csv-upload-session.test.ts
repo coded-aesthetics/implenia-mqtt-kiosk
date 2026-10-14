@@ -90,13 +90,29 @@ beforeEach(() => {
 });
 
 const SENSOR_MAP = {
-  bohrtiefe: { sensorId: 's-tiefe', sensorType: 'float', name: 'Bohrtiefe', role: 'depth' },
-  drehzahl: { sensorId: 's-rpm', sensorType: 'float', name: 'Drehzahl', role: 'rpm' },
-  vorschubdruck: { sensorId: 's-druck', sensorType: 'float', name: 'Vorschubdruck' },
-  geodin: { sensorId: 's-geo', sensorType: 'int', name: 'GeoDIN', role: 'geology_nr' },
-  kommentar: { sensorId: 's-kom', sensorType: 'string', name: 'Kommentar' },
+  bohrtiefe: {
+    sensorId: 's-tiefe', sensorType: 'float', name: 'Bohrtiefe', role: 'depth', source: 'mqtt',
+  },
+  drehzahl: {
+    sensorId: 's-rpm', sensorType: 'float', name: 'Drehzahl', role: 'rpm', source: 'mqtt',
+  },
+  vorschubdruck: {
+    sensorId: 's-druck', sensorType: 'float', name: 'Vorschubdruck', source: 'mqtt',
+  },
+  geodin: {
+    sensorId: 's-geo', sensorType: 'int', name: 'GeoDIN', role: 'geology_nr', source: 'server',
+  },
+  kommentar: {
+    sensorId: 's-kom', sensorType: 'string', name: 'Kommentar', source: 'user',
+  },
+  // The operator's phase flag: four readings in a whole shift, and the one
+  // sensor whose fabricated NULLs cost implenia-web a protocol.
+  status: {
+    sensorId: 's-status', sensorType: 'int', name: 'Status', role: 'mode', source: 'user',
+  },
   'ausführungsdatum': {
-    sensorId: 's-fertig', sensorType: 'string', name: 'Ausführungsdatum', role: 'is_completed',
+    sensorId: 's-fertig', sensorType: 'string', name: 'Ausführungsdatum',
+    role: 'is_completed', source: 'user',
   },
 };
 
@@ -129,6 +145,14 @@ function seedSession(): { sessionId: number; elementName: string } {
   db.insertSessionReading(
     sessionId, 'rig/Kommentar', 's-kom', 'string', null, 'Hindernis',
     { receivedAt: t0 + 900 },
+  );
+  // Two phase steps, as an operator produces them: one value each, seconds
+  // apart, standing for every row in between.
+  db.insertSessionReading(
+    sessionId, 'kiosk/status', 's-status', 'int', 0, null, { receivedAt: t0 + 20 },
+  );
+  db.insertSessionReading(
+    sessionId, 'kiosk/status', 's-status', 'int', 1, null, { receivedAt: t0 + 1500 },
   );
 
   return { sessionId, elementName };
@@ -193,6 +217,25 @@ describe('uploadSession on the CSV route', () => {
     expect(csv.rows[0].get('Drehzahl')).toBe('63');
     expect(csv.rows[1].at).toBe('2026-05-18T12:00:01.774Z');
     expect(csv.rows[1].get('Drehzahl')).toBe('67');
+  });
+
+  it('never puts an operator-entered sensor in the CSV', async () => {
+    // The regression that cost a real protocol. `Status` has two readings in
+    // this session, so a CSV column for it would carry one value and an empty
+    // cell on every other row — and an empty cell inserts a NULL, which
+    // implenia-web's forward-fill reads as "the mode is now unknown". It goes
+    // the id-addressed way, both readings at their own instants.
+    apiFn.mockImplementation(fakePlatform());
+
+    const { sessionId } = seedSession();
+    await recording.uploadSession(sessionId);
+
+    for (const [, opts] of callsTo('/readings/batch/csv')) {
+      expect(readCsv(opts.rawBody as string).header).not.toContain('Status');
+    }
+    const batch = callsTo('/api/v1/sensor-int/s-status/batch');
+    expect(batch).toHaveLength(1);
+    expect(batch[0][1].body.readings.map((r: { value: number }) => r.value)).toEqual([0, 1]);
   });
 
   it('sends GeoDIN and the comment per sensor, at their own instants', async () => {

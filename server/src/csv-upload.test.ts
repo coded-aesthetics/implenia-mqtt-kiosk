@@ -25,8 +25,15 @@ function group(
   };
 }
 
+/**
+ * Sensor metadata as a session pins it. `source` defaults to `mqtt` because
+ * that is what the machine's telemetry carries and what most of these fixtures
+ * are; the cases that turn on the source say so explicitly.
+ */
 const meta = (entries: Record<string, UploadSensorMeta>) =>
-  new Map(Object.entries(entries));
+  new Map(Object.entries(entries).map(
+    ([id, m]) => [id, { source: 'mqtt', ...m }] as const,
+  ));
 
 const GRID = { bucketMs: 1000, maxHoldMs: 4000 };
 
@@ -42,26 +49,67 @@ function parse(csv: string): { header: string[]; rows: string[][] } {
 
 describe('isGriddableSensor', () => {
   it('accepts a named numeric telemetry sensor', () => {
-    expect(isGriddableSensor({ sensorType: 'float' }, { name: 'Bohrtiefe' })).toBe(true);
-    expect(isGriddableSensor({ sensorType: 'int' }, { name: 'Status' })).toBe(true);
+    expect(isGriddableSensor({ sensorType: 'float' }, { name: 'Bohrtiefe', source: 'mqtt' }))
+      .toBe(true);
   });
 
   it('refuses a string sensor — an empty cell there writes an empty string', () => {
-    expect(isGriddableSensor({ sensorType: 'string' }, { name: 'Kommentar' })).toBe(false);
+    expect(isGriddableSensor({ sensorType: 'string' }, { name: 'Kommentar', source: 'user' }))
+      .toBe(false);
+  });
+
+  it('refuses an operator-entered sensor, however numeric it is', () => {
+    // `Status` is the case that cost a protocol. Four readings in a 2 h
+    // recording, so the grid left 341 of 354 cells empty — and an empty cell
+    // inserts a NULL. implenia-web forward-fills Status and a present-but-null
+    // row overwrites the carry, so its phase detection kept a single row: no
+    // duration, no phase averages, and a zero-width Bohren window that left
+    // the protocol with no observed geology at all.
+    expect(isGriddableSensor({ sensorType: 'int' }, { name: 'Status', source: 'user', role: 'mode' }))
+      .toBe(false);
+  });
+
+  it('accepts a kiosk-derived volume — one per pump reading, not per event', () => {
+    // The kiosk integrates a volume from every pump reading, so these arrive
+    // on the machine's cadence. DSV declares thirteen of them.
+    expect(isGriddableSensor({ sensorType: 'float' }, { name: 'Q_verpressen', source: 'kiosk' }))
+      .toBe(true);
+  });
+
+  it('refuses a platform-computed sensor', () => {
+    expect(isGriddableSensor({ sensorType: 'float' }, { name: 'Fusspunkt X Ist', source: 'server' }))
+      .toBe(false);
+  });
+
+  it('refuses a sensor whose source the session never pinned', () => {
+    // Not knowing is not the same as knowing it is telemetry. The per-sensor
+    // route costs bandwidth; the grid would cost the truth.
+    expect(isGriddableSensor({ sensorType: 'float' }, { name: 'Bohrtiefe' })).toBe(false);
   });
 
   it('refuses GeoDIN: a grid merges boundaries, and one row is one layer', () => {
     expect(
-      isGriddableSensor({ sensorType: 'int' }, { name: 'GeoDIN', role: 'geology_nr' }),
+      isGriddableSensor({ sensorType: 'int' }, { name: 'GeoDIN', source: 'server', role: 'geology_nr' }),
+    ).toBe(false);
+    // Still refused if its CSV `Quelle` is ever corrected to `kiosk`, which is
+    // what RECORDABLE_ROLES exists to anticipate.
+    expect(
+      isGriddableSensor({ sensorType: 'int' }, { name: 'GeoDIN', source: 'mqtt', role: 'geology_nr' }),
     ).toBe(false);
   });
 
   it('refuses the completion stamp and the geology text', () => {
     expect(
-      isGriddableSensor({ sensorType: 'string' }, { name: 'Ausführungsdatum', role: 'is_completed' }),
+      isGriddableSensor(
+        { sensorType: 'string' },
+        { name: 'Ausführungsdatum', source: 'user', role: 'is_completed' },
+      ),
     ).toBe(false);
     expect(
-      isGriddableSensor({ sensorType: 'string' }, { name: 'Geologie', role: 'geology_text' }),
+      isGriddableSensor(
+        { sensorType: 'string' },
+        { name: 'Geologie', source: 'user', role: 'geology_text' },
+      ),
     ).toBe(false);
   });
 
@@ -69,14 +117,16 @@ describe('isGriddableSensor', () => {
     // It carries the biggest channel of the session; leaving it ungridded to
     // protect the geology join costs more than pinning the handful of readings
     // that join actually needs. See pinAnchorReadings.
-    expect(isGriddableSensor({ sensorType: 'float' }, { name: 'Bohrtiefe', role: 'depth' }))
-      .toBe(true);
+    expect(isGriddableSensor(
+      { sensorType: 'float' }, { name: 'Bohrtiefe', source: 'mqtt', role: 'depth' },
+    )).toBe(true);
   });
 
   it('refuses a sensor the session never recorded a name for', () => {
     // The map is keyed by the lowercased name, so the real spelling is not
     // recoverable — and the CSV header is the only way to address a column.
-    expect(isGriddableSensor({ sensorType: 'float' }, { role: 'depth' })).toBe(false);
+    expect(isGriddableSensor({ sensorType: 'float' }, { role: 'depth', source: 'mqtt' }))
+      .toBe(false);
     expect(isGriddableSensor({ sensorType: 'float' }, undefined)).toBe(false);
   });
 });

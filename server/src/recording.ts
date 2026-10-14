@@ -12,7 +12,7 @@ import type { DrillStatus } from './rohrwechsel.js';
 import { createLogger, onLogEntry, type LogEntry } from './logger.js';
 import { config } from './config.js';
 import { connectivity } from './connectivity.js';
-import { findSensorNameByRole } from './sensor-meta.js';
+import { findSensorNameByRole, getSensorMetaLookup } from './sensor-meta.js';
 import {
   completionStamp,
   writeElementCompletion,
@@ -160,7 +160,10 @@ export async function beginRecording(elementName: string): Promise<{ sessionId: 
   const sensorMap = new Map<string, SensorMapEntry>();
   const sensorMapJson: Record<
     string,
-    { sensorId: string; sensorType: string; unit: string; role?: string; name?: string }
+    {
+      sensorId: string; sensorType: string; unit: string;
+      role?: string; name?: string; source?: string;
+    }
   > = {};
 
   for (const [key, type] of Object.entries(SENSOR_TYPE_MAP)) {
@@ -169,11 +172,18 @@ export async function beginRecording(elementName: string): Promise<{ sessionId: 
     for (const s of sensors) {
       const suffix = s.name.toLowerCase();
       const role = s.meta?.role || undefined;
+      // The source decides whether this sensor's readings may be gridded on
+      // the way out, so it is pinned alongside the role rather than resolved
+      // at upload time — a recording keeps behaving the way it did when it
+      // started, and `resolveHerstellenSensors` has already enriched it from
+      // the local CSVs where the platform did not carry one.
+      const source = s.meta?.source || undefined;
       const entry: SensorMapEntry = {
         sensorId: s.id,
         sensorType: type,
         name: s.name,
         ...(role ? { role } : {}),
+        ...(source ? { source } : {}),
       };
       sensorMap.set(suffix, entry);
       sensorMapJson[suffix] = { ...entry, unit: s.unit ?? '' };
@@ -611,12 +621,26 @@ async function runUpload(
   if (session.sensor_map) {
     try {
       const map = JSON.parse(session.sensor_map) as Record<
-        string, { sensorId?: string; sensorType?: string; name?: string; role?: string }
+        string,
+        {
+          sensorId?: string; sensorType?: string; name?: string;
+          role?: string; source?: string;
+        }
       >;
+      // Sessions recorded before the source was pinned fall back to the local
+      // CSVs, by the platform's spelling of the name. That is the enrichment
+      // role the CSVs already have, and the question is element-independent:
+      // a `Quelle` says how a channel behaves, not what this element means by
+      // it. A name the CSVs do not know stays undefined, which keeps the
+      // sensor off the grid — the per-sensor route costs bandwidth, the grid
+      // would cost the truth.
+      const csvMeta = getSensorMetaLookup();
       for (const [key, entry] of Object.entries(map)) {
         if (!entry?.sensorId) continue;
+        const source = entry.source
+          ?? (entry.name ? csvMeta.get(entry.name)?.source : undefined);
         sensorMeta.set(entry.sensorId, {
-          name: entry.name, role: entry.role, type: entry.sensorType,
+          name: entry.name, role: entry.role, type: entry.sensorType, source,
         });
         sensorKeys.set(entry.sensorId, key);
       }

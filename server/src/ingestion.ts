@@ -72,6 +72,17 @@ export interface SensorMapEntry {
    */
   role?: string;
   /**
+   * Where the sensor's values come from — `mqtt`, `kiosk`, `user`, `server` —
+   * as it stood when the session started, or undefined for a session recorded
+   * before this was persisted.
+   *
+   * Pinned for the same reason as the role, and it decides something just as
+   * consequential: only the machine's own telemetry may be reduced onto a grid
+   * on the way out, because only there does an empty cell honestly mean "the
+   * sensor had nothing to report". See `GRIDDABLE_SOURCES` in csv-upload.ts.
+   */
+  source?: string;
+  /**
    * The sensor's name as the platform spells it.
    *
    * The map is keyed by the *lowercased* name, because that is what a resolved

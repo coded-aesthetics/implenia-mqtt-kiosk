@@ -257,6 +257,16 @@ roles were persisted. Same reasoning as the ids, which have always been pinned
 there rather than re-fetched: a recording keeps behaving the way it did when it
 started.
 
+- **The `source` is persisted alongside the role**, for the same reason and
+  with just as much riding on it: it decides whether a sensor's readings may be
+  reduced onto a grid on the way out (`GRIDDABLE_SOURCES`), and a session that
+  re-resolved it after an auto-update could grid a channel it had not been
+  gridding an hour earlier. Sessions recorded before it was pinned fall back to
+  the local CSVs *by the platform's spelling of the name* — the question is
+  element-independent, a `Quelle` says how a channel behaves rather than what
+  this element means by it. A name the CSVs do not know stays unresolved, which
+  keeps the sensor **off** the grid: the per-sensor route costs bandwidth, the
+  grid would cost the truth.
 - **`name` is persisted with the role, and it is not optional.** The map is
   keyed by the *lowercased* sensor name, because that is all a resolved topic
   gives, and the real spelling is not recoverable from it. A completion write
@@ -672,7 +682,7 @@ What follows from the shape of the data, and must not be broken:
 captured session from 13.9 MB in 64 requests to 0.99 MB in 9.
 
 **An empty cell in that endpoint is a written NULL** (`sensors.go`, the float
-branch adds the nil), and a NULL is this kiosk's outage marker. Three
+branch adds the nil), and a NULL is this kiosk's outage marker. Four
 consequences, none of them optional:
 
 - **A CSV upload with no grid is refused.** Ungridded, each row carries one
@@ -680,12 +690,67 @@ consequences, none of them optional:
   measurements and 3 566 722 fabricated outages. `validateReduction` rejects the
   combination and `runUpload` re-checks it, because a settings row written before
   that check must not produce one either.
+- **Only the machine's own channels may be gridded** — `GRIDDABLE_SOURCES`,
+  `{mqtt, kiosk}`, read from the `source` the session pinned. This is the rule
+  that decides what an *absent* cell means, which a CSV cannot say. An `mqtt`
+  channel publishes every ~290 ms (every ~3 s for the pumps), so a row with no
+  value of its own and nothing inside `maxHoldMs` behind it means the channel
+  really went quiet, and a NULL is what the per-sensor route would have written
+  too. `kiosk` is in for the same reason, not by charity: the volume
+  integrations are derived from *every* pump reading, and DSV declares thirteen
+  of them. `user` is where the same cell is a lie, because those values are
+  events — see "The Status outage flood" below.
 - **Each chunk carries only the columns it has values for.** A sensor that
   records only during Verpressen is simply absent from the Bohren chunks instead
-  of contributing an empty cell to every one of their rows.
+  of contributing an empty cell to every one of their rows. Note what this does
+  *not* do: it works per chunk, not per row, so a sensor with one value
+  anywhere in a chunk gets a column — and an empty cell — in all 1000 of its
+  rows.
 - **String sensors never go this way at all** — an empty cell there writes an
   empty *string*, and for `Ausführungsdatum` an empty string un-completes an
   element.
+
+#### The Status outage flood
+
+The first version of this gridded by type and role alone, and that cost a real
+Herstellprotokoll. Worth keeping, because every step of it looked like a
+success:
+
+Injektionsbohren's `Status` (`Quelle=user`, role `mode`) is the operator's phase
+flag. It is written *on change* — four readings in a 2 h recording — and that is
+all implenia-web needs, because its computation profile declares
+`forwardFillSensors: ["Status"]`. The grid gave it a value in 13 rows of 354;
+the column was in the chunk's header because it had *a* value there, so the
+other 341 rows carried an empty cell and uploaded as 341 fabricated outages. On
+the pillar that was 5 real values and 186 NULLs, against 4 real values and no
+NULLs for the same session uploaded the per-sensor way.
+
+Then, in web (`app/helpers/computed-values/engine.ts`):
+
+1. `forwardFill` does `if (name in row.values) last.set(name, row.values[name])`
+   — a present-but-**null** row *overwrites* the carried value. From the first
+   fabricated NULL onward, every row's `Status` was null.
+2. `detectPhases` filters `row.values["Status"] === 0`, so `phaseData.bohren`
+   held exactly **one** row: the single real `Status = 0`.
+3. `beginn_bohren` and `ende_bohren` are that row's instant, so they were
+   equal; `dauer_bohren` needs two rows and went null; every phase average was
+   taken over one row.
+4. `loadPhaseDepthChart` is called with that zero-width window, so no `GeoDIN`
+   row fell inside it, `herstellungLayersFromRows` returned `[]`, and
+   `fillInitialGap` drew the Vorgabe prefix alone.
+
+The protocol therefore printed **Vorgabe geology and no observed layers at
+all**, with the pillar's drilling duration and pressures blank — from an upload
+that reported success, for a session whose `GeoDIN` readings were all present
+and all correctly anchored. The geology machinery above was never the problem.
+
+What this leaves: a `Quelle` answers "is this channel periodic" only by proxy. A
+phase-limited `kiosk` channel (DSV's `Volumen Vorschnitt`) is dense inside its
+phase and absent outside it, so the chunk straddling the transition still writes
+a few fabricated NULLs — bounded and cosmetic, since nothing in web forward-fills
+a volume. The complete fix is to drop a column from the one chunk it is not
+dense in and send those readings per-sensor, which moves reading ids between a
+chunk and the leftovers; worth doing deliberately rather than as a rider.
 
 **`GeoDIN` may never be gridded.** implenia-web turns it into layers by change
 detection, and `alignBoundaries` deliberately gives every boundary its *own*
