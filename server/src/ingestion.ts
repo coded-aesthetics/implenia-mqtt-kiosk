@@ -647,6 +647,24 @@ export class DataIngestion extends EventEmitter {
       this.activeSession.drill = initialDrillState();
       this.activeSession.volumeTracker.reset();
       this.lastReadings.clear();
+      // The session's opening `Status` reading went with everything else, and
+      // nothing re-states it: a mode is recorded when it *changes*
+      // (`setOperatingMode` returns early otherwise), so a session that goes
+      // on to drill in the mode it already had uploads with no `Status = 0`
+      // row anywhere.
+      //
+      // implenia-web segments every Injektionsbohren KPI on that value
+      // (`detectPhases`, filter `Status === 0`), so its absence empties the
+      // entire Bohren phase: no duration, no pressure or flow averages, a
+      // zero-width window for the depth chart, and therefore not one observed
+      // geology layer — from a recording whose depth series is complete and
+      // whose upload reported success.
+      //
+      // Only a replay seeks, so only a replay hits this, which is precisely
+      // what makes it worth a line of code: it is the path every QA run of the
+      // upload goes through, and it was quietly invalidating what the run was
+      // meant to verify.
+      this.recordStatusReading(this.activeSession);
     }
   }
 
