@@ -16,6 +16,7 @@ import { clearVerfahrenCache } from '../sensor-meta.js';
 import { createLogger } from '../logger.js';
 import { registerMqttConfigRoutes } from './config-mqtt.js';
 import { registerRohrwechselConfigRoutes } from './config-rohrwechsel.js';
+import { registerReductionConfigRoutes } from './config-reduction.js';
 import { registerCalibrationRoutes } from './config-calibration.js';
 import { registerTopicOverrideRoutes } from './config-topics.js';
 
@@ -229,6 +230,7 @@ export function registerConfigRoutes(app: FastifyInstance): void {
 
   registerMqttConfigRoutes(app);
   registerRohrwechselConfigRoutes(app);
+  registerReductionConfigRoutes(app);
   registerCalibrationRoutes(app);
   registerTopicOverrideRoutes(app);
 }

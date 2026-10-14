@@ -60,6 +60,12 @@ export interface UploadProgress {
   sensorsCompleted: number;
   sensorsFailed: number;
   currentSensor: string | null;
+  /**
+   * What the counters count: sensors on the per-sensor upload, chunks ("Pakete")
+   * on the CSV one. Defaulted rather than required, because a browser tab can
+   * outlive a server restart onto a build that does not send it.
+   */
+  unit: 'sensor' | 'paket';
 }
 
 export type UpdateSource = 'github' | 'usb';
@@ -240,6 +246,7 @@ export function useWebSocket() {
                 sensorsCompleted: msg.sensorsCompleted,
                 sensorsFailed: msg.sensorsFailed,
                 currentSensor: msg.currentSensor,
+                unit: msg.unit === 'paket' ? 'paket' : 'sensor',
               },
             }));
             break;

@@ -72,6 +72,17 @@ export interface SensorMapEntry {
    */
   role?: string;
   /**
+   * Where the sensor's values come from — `mqtt`, `kiosk`, `user`, `server` —
+   * as it stood when the session started, or undefined for a session recorded
+   * before this was persisted.
+   *
+   * Pinned for the same reason as the role, and it decides something just as
+   * consequential: only the machine's own telemetry may be reduced onto a grid
+   * on the way out, because only there does an empty cell honestly mean "the
+   * sensor had nothing to report". See `GRIDDABLE_SOURCES` in csv-upload.ts.
+   */
+  source?: string;
+  /**
    * The sensor's name as the platform spells it.
    *
    * The map is keyed by the *lowercased* name, because that is what a resolved
@@ -113,8 +124,37 @@ export function isRetracting(mode: OperatingMode): boolean {
   return mode === 'austausch' || mode === 'einbauen' || mode === 'auffuellen';
 }
 
+/**
+ * Whether the drive handles pipes in this mode, and the clamp closing can
+ * therefore mean a pipe change.
+ *
+ * Only `bohren`, which reaches depth by adding 2 m or 3 m pipes, and
+ * `auffuellen`, which removes them the same way. `austausch` and `einbauen`
+ * handle no pipes at all.
+ *
+ * It read "all four modes" for a while, on the premise that the clamp can
+ * trigger a pipe change in any mode that handles pipes — true, but those two
+ * do not. What it cost is specific and was measured on the G08 rig: in
+ * `austausch` the clamp *rests closed*, holding the string while the slurry is
+ * exchanged (min 1654, max 5256, mean 4250, against a close threshold of
+ * 4000), so the state machine sat in `rohrwechsel` for the entire phase and
+ * clipped it. 3 848 of the phase's 3 886 depth readings were held back —
+ * recorded, tagged, and excluded from the upload — leaving the platform a
+ * one-second sliver of a 0.86 m retraction.
+ *
+ * The inversion is the whole point: in `bohren` and `auffuellen` the clamp is
+ * open while the drive works and closes only to re-grip, which is what makes
+ * "closed ⇒ pipe change" a sound proxy. In the other two its resting state is
+ * closed, so it carries no information about pipes.
+ *
+ * What is given up: a pipe genuinely handled during `austausch` or `einbauen`
+ * is no longer clipped, so its phantom depth would reach the series. Nobody
+ * handles pipes there — and a depth change in those modes is real. The ~1 m
+ * the drill rises before `einbauen` is the denser slurry pushing it up from
+ * below, which is a measurement, not an artefact.
+ */
 export function hasPipeHandling(mode: OperatingMode): boolean {
-  return mode === 'bohren' || mode === 'austausch' || mode === 'einbauen' || mode === 'auffuellen';
+  return mode === 'bohren' || mode === 'auffuellen';
 }
 
 interface ActiveSession {
@@ -382,9 +422,10 @@ export class DataIngestion extends EventEmitter {
   /**
    * Whether a reading taken now must be held back.
    *
-   * Both `bohren` and `auffuellen` clip during rohrwechsel (clamp closed) —
-   * the drive is handling a pipe, and its readings corrupt averages.
-   * `austausch` and `einbauen` never clip.
+   * `bohren` and `auffuellen` clip during rohrwechsel (clamp closed) — the
+   * drive is handling a pipe, and its readings corrupt averages. `austausch`
+   * and `einbauen` never clip, because no pipe is ever handled in them and
+   * their clamp rests closed: see `hasPipeHandling`.
    */
   private clips(state: DrillState): boolean {
     const session = this.activeSession;
@@ -470,18 +511,33 @@ export class DataIngestion extends EventEmitter {
   /**
    * Record the current operating mode as a `Status` sensor reading.
    *
-   * The Injektionsbohren protocol in implenia-web segments all KPIs by
-   * phase using Status == 0 (bohren) / Status == 1 (verpressen). Without
-   * these readings the protocol has no phase data and returns hasData: false.
+   * implenia-web's Injektionsbohren Herstellprotokoll segments every KPI by
+   * this value, and that protocol is the authority on what the numbers mean —
+   * it is signed, archived and read by people who never see this code. Without
+   * these readings it has no phase data at all.
+   *
+   * **0 is drilling and 1 is filling, and that cannot be renegotiated.** It is
+   * what the two-mode kiosk wrote (`bohren` / `verpressen`), so every pillar
+   * recorded before the four phases existed means exactly that, and it is what
+   * web's reader has always matched on. Giving 1 to Austausch — as the
+   * four-mode renumbering did — silently repointed the protocol's second
+   * column at the slurry exchange: same label, same shape, wrong phase. The
+   * two phases web does not report take the free numbers, and their order
+   * between themselves is arbitrary.
+   *
+   * Keep in step with `AUFFUELLEN_STATUS` in implenia-web
+   * (`app/models/injektionsbohren-protocol.server.ts`) and the phase filters in
+   * its computation profile. The kiosk is the only writer of this sensor; web
+   * is the only reader.
    */
   private recordStatusReading(session: ActiveSession): void {
     const mapping = session.sensorMap.get('status');
     if (!mapping) return;
     const STATUS_MAP: Record<OperatingMode, number> = {
       bohren: 0,
-      austausch: 1,
-      einbauen: 2,
-      auffuellen: 3,
+      auffuellen: 1,
+      austausch: 2,
+      einbauen: 3,
     };
     const statusValue = STATUS_MAP[session.operatingMode];
     insertSessionReading(
@@ -636,6 +692,24 @@ export class DataIngestion extends EventEmitter {
       this.activeSession.drill = initialDrillState();
       this.activeSession.volumeTracker.reset();
       this.lastReadings.clear();
+      // The session's opening `Status` reading went with everything else, and
+      // nothing re-states it: a mode is recorded when it *changes*
+      // (`setOperatingMode` returns early otherwise), so a session that goes
+      // on to drill in the mode it already had uploads with no `Status = 0`
+      // row anywhere.
+      //
+      // implenia-web segments every Injektionsbohren KPI on that value
+      // (`detectPhases`, filter `Status === 0`), so its absence empties the
+      // entire Bohren phase: no duration, no pressure or flow averages, a
+      // zero-width window for the depth chart, and therefore not one observed
+      // geology layer — from a recording whose depth series is complete and
+      // whose upload reported success.
+      //
+      // Only a replay seeks, so only a replay hits this, which is precisely
+      // what makes it worth a line of code: it is the path every QA run of the
+      // upload goes through, and it was quietly invalidating what the run was
+      // meant to verify.
+      this.recordStatusReading(this.activeSession);
     }
   }
 

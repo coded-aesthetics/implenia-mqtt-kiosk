@@ -257,6 +257,16 @@ roles were persisted. Same reasoning as the ids, which have always been pinned
 there rather than re-fetched: a recording keeps behaving the way it did when it
 started.
 
+- **The `source` is persisted alongside the role**, for the same reason and
+  with just as much riding on it: it decides whether a sensor's readings may be
+  reduced onto a grid on the way out (`GRIDDABLE_SOURCES`), and a session that
+  re-resolved it after an auto-update could grid a channel it had not been
+  gridding an hour earlier. Sessions recorded before it was pinned fall back to
+  the local CSVs *by the platform's spelling of the name* — the question is
+  element-independent, a `Quelle` says how a channel behaves rather than what
+  this element means by it. A name the CSVs do not know stays unresolved, which
+  keeps the sensor **off** the grid: the per-sensor route costs bandwidth, the
+  grid would cost the truth.
 - **`name` is persisted with the role, and it is not optional.** The map is
   keyed by the *lowercased* sensor name, because that is all a resolved topic
   gives, and the real spelling is not recoverable from it. A completion write
@@ -624,6 +634,296 @@ only parser on the correctness-critical path — if the two ever disagree, a dra
 picture is slightly wrong and nothing is miscommitted.
 
 Keep both projects in sync when this contract changes.
+
+## `Status` numbering — shared convention across two projects
+
+The kiosk writes the operator's phase into the **`Status`** integer sensor
+(CSV role `mode`, `Quelle=user`) on every mode change and at the start of a
+recording. implenia-web's Injektionsbohren Herstellprotokoll segments every KPI
+by it, and **that protocol is the authority on what the numbers mean** — it is
+signed, archived, and read by people who never see either codebase.
+
+```
+0 = Bohren      1 = Auffüllen      2 = Austausch      3 = Einbauen
+```
+
+**0 and 1 are fixed and 2 and 3 are free.** The two-mode kiosk wrote `bohren` /
+`verpressen` as 0 / 1, so every pillar recorded before the four phases existed
+means exactly that, and web has always matched on it. The protocol reports those
+two phases — what was drilled, and what was filled. Austausch and Einbauen are
+neither, appear nowhere on it, and therefore take the numbers nothing matches
+on; their order between themselves carries no meaning.
+
+**The numbering is not the phase order**, which is the trap. The stepper runs
+Bohren → Austausch → Einbauen → Auffüllen, so numbering them in sequence is the
+obvious thing to do and was done once: it gave 1 to Austausch, and web's second
+column went on reporting under the heading "Verpressen" with the same shape and
+plausible numbers — the slurry exchange's Beginn, Ende, Dauer, depths and
+averages, for a column everybody read as the filling phase. Nothing failed.
+
+What follows, and must not be broken:
+
+- **`recordStatusReading` (`ingestion.ts`) is the only writer**, and
+  `AUFFUELLEN_STATUS` plus the computation profile's phase filters
+  (`app/models/injektionsbohren-protocol.server.ts`,
+  `app/helpers/computed-values/profiles/injektionsbohren.ts`) are the only
+  readers. Four constants, two repositories, one meaning.
+- **A session's opening value is written at `startRecording`**, because a mode
+  is otherwise only recorded when it *changes* — see `resetForSeek`, which has
+  to re-state it after clearing a session.
+- **It is never gridded.** Four readings in a shift, so the CSV route would
+  write a fabricated outage into every row it has no value for; web
+  forward-fills this sensor and reads a NULL as "mode unknown from here on".
+  See "What the CSV upload may not be given".
+- **Renaming the derived values is not on the table.** web's computed
+  `beginn_verpressen`, `dauer_verpressen`, `q_verpressen` and friends are
+  materialized onto pillars, so they keep the old word while the screens say
+  Auffüllen.
+
+Keep both projects in sync when this contract changes.
+
+## Reduction happens on the way out, and only there
+
+A recording leaves the kiosk twice — the xlsx on a USB stick, the batch upload
+to the platform — and both used to carry one row per *reading*. On the only rig
+that has been captured that is 275 935 readings on 274 475 distinct
+milliseconds (every MQTT message is stamped with its own `Date.now()`), so the
+sheet was 92.8 % empty cells, 12.4 MB, and 28 s and 2.0 GB of heap to build on a
+machine that has 4 GB. `grid-reduce.ts` is the one implementation that reduces
+both, configured per kiosk on the Datenübertragung screen
+(`reduction-config.ts`, defaults: 1 s for both, `uploadMode: 'csv'`).
+
+**`session_readings` is never reduced.** Everything here applies on the way out,
+so a granularity chosen wrong costs resolution on the platform and is undone by
+re-uploading or re-exporting the same session. Nothing in this area may start
+deleting or rewriting recorded rows.
+
+What follows from the shape of the data, and must not be broken:
+
+- **Last value in the interval, never a mean.** The readings are mostly
+  duplicates — 58 % to 90 % per channel are exact repeats of the previous value,
+  because the rig re-publishes rather than re-measures — so the interval almost
+  always holds one distinct value. Where it does not, a mean *invents a number
+  the machine never reported*: `Klemmdruck` is bimodal at ~1650 open / ~4200
+  closed and its 1 s mean falls in the impossible band between them in 35
+  intervals of that capture; `Tiefe` steps by a Bohrrohr during a
+  Rohrverlängerung and its 1 s mean sits up to 1.0 m from every sample in the
+  interval; the volume channels are monotonic counters. Any aggregation that is
+  not "a value that was actually recorded" is wrong here, not merely imprecise.
+- **A row is dated at a real reading's instant**, the newest in the interval —
+  never at the interval boundary. Downstream never has to trust a timestamp no
+  sensor produced.
+- **Forward-fill is bounded, and a `null` is not carried.** `holdMsFor` gives
+  four intervals and never less than 4 s, which is what lets the ~3 s pump
+  channels fill a 1 s grid while a dead sensor still reads as dead. A recorded
+  `null` is the kiosk's outage marker: it is emitted in its own interval and
+  stops the fill, so a pre-outage value can never reappear after it.
+- **An interval nobody recorded in produces no row.** A stalled rig must not
+  come out looking like a running one.
+
+### What the CSV upload may not be given
+
+`uploadMode: 'csv'` posts to
+`POST /api/v1/measuring-device/<device_id>/readings/batch/csv` in chunks of
+`CHUNK_ROWS` rows, device id resolved by `element-device.ts`. It cuts the
+captured session from 13.9 MB in 64 requests to 0.99 MB in 9.
+
+**An empty cell in that endpoint is a written NULL** (`sensors.go`, the float
+branch adds the nil), and a NULL is this kiosk's outage marker. Four
+consequences, none of them optional:
+
+- **A CSV upload with no grid is refused.** Ungridded, each row carries one
+  value and thirteen empty cells, so the captured session would upload 275 935
+  measurements and 3 566 722 fabricated outages. `validateReduction` rejects the
+  combination and `runUpload` re-checks it, because a settings row written before
+  that check must not produce one either.
+- **Only the machine's own channels may be gridded** — `GRIDDABLE_SOURCES`,
+  `{mqtt, kiosk}`, read from the `source` the session pinned. This is the rule
+  that decides what an *absent* cell means, which a CSV cannot say. An `mqtt`
+  channel publishes every ~290 ms (every ~3 s for the pumps), so a row with no
+  value of its own and nothing inside `maxHoldMs` behind it means the channel
+  really went quiet, and a NULL is what the per-sensor route would have written
+  too. `kiosk` is in for the same reason, not by charity: the volume
+  integrations are derived from *every* pump reading, and DSV declares thirteen
+  of them. `user` is where the same cell is a lie, because those values are
+  events — see "The Status outage flood" below.
+- **Each chunk carries only the columns it has values for.** A sensor that
+  records only during Verpressen is simply absent from the Bohren chunks instead
+  of contributing an empty cell to every one of their rows. Note what this does
+  *not* do: it works per chunk, not per row, so a sensor with one value
+  anywhere in a chunk gets a column — and an empty cell — in all 1000 of its
+  rows.
+- **String sensors never go this way at all** — an empty cell there writes an
+  empty *string*, and for `Ausführungsdatum` an empty string un-completes an
+  element.
+
+#### The Status outage flood
+
+The first version of this gridded by type and role alone, and that cost a real
+Herstellprotokoll. Worth keeping, because every step of it looked like a
+success:
+
+Injektionsbohren's `Status` (`Quelle=user`, role `mode`) is the operator's phase
+flag. It is written *on change* — four readings in a 2 h recording — and that is
+all implenia-web needs, because its computation profile declares
+`forwardFillSensors: ["Status"]`. The grid gave it a value in 13 rows of 354;
+the column was in the chunk's header because it had *a* value there, so the
+other 341 rows carried an empty cell and uploaded as 341 fabricated outages. On
+the pillar that was 5 real values and 186 NULLs, against 4 real values and no
+NULLs for the same session uploaded the per-sensor way.
+
+Then, in web (`app/helpers/computed-values/engine.ts`):
+
+1. `forwardFill` does `if (name in row.values) last.set(name, row.values[name])`
+   — a present-but-**null** row *overwrites* the carried value. From the first
+   fabricated NULL onward, every row's `Status` was null.
+2. `detectPhases` filters `row.values["Status"] === 0`, so `phaseData.bohren`
+   held exactly **one** row: the single real `Status = 0`.
+3. `beginn_bohren` and `ende_bohren` are that row's instant, so they were
+   equal; `dauer_bohren` needs two rows and went null; every phase average was
+   taken over one row.
+4. `loadPhaseDepthChart` is called with that zero-width window, so no `GeoDIN`
+   row fell inside it, `herstellungLayersFromRows` returned `[]`, and
+   `fillInitialGap` drew the Vorgabe prefix alone.
+
+The protocol therefore printed **Vorgabe geology and no observed layers at
+all**, with the pillar's drilling duration and pressures blank — from an upload
+that reported success, for a session whose `GeoDIN` readings were all present
+and all correctly anchored. The geology machinery above was never the problem.
+
+What this leaves: a `Quelle` answers "is this channel periodic" only by proxy. A
+phase-limited `kiosk` channel (DSV's `Volumen Vorschnitt`) is dense inside its
+phase and absent outside it, so the chunk straddling the transition still writes
+a few fabricated NULLs — bounded and cosmetic, since nothing in web forward-fills
+a volume. The complete fix is to drop a column from the one chunk it is not
+dense in and send those readings per-sensor, which moves reading ids between a
+chunk and the leftovers; worth doing deliberately rather than as a rider.
+
+A **retry of one failed chunk** has the same bounded symptom from a different
+cause, and the same fix. `resetFailedReadings` makes only that chunk's readings
+pending, so the retry's grid starts with an empty carry: a ~3 s channel whose
+last reading sits in the previous, already-uploaded chunk is not carried into
+the first rows of the retried one, which still earn it a column. One to four
+rows per slow channel per retried chunk, written as outages for a channel that
+was alive. Fixing it properly means gridding the whole session and sending only
+the rows that still hold pending ids — again, ids moving between chunks.
+
+**`GeoDIN` may never be gridded.** implenia-web turns it into layers by change
+detection, and `alignBoundaries` deliberately gives every boundary its *own*
+depth reading so the timestamps stay strictly increasing (see "Worker-observed
+geology"). Two boundaries 290 ms apart share a 1 s interval, and one row is one
+layer, so a grid drops layers from a profile that uploads cleanly and shows
+nothing.
+
+**Protecting only `GeoDIN` achieves nothing, which is the trap.** A `GeoDIN`
+entry carries no depth of its own: `geology.ts` writes it at the exact
+`received_at` of a **depth** reading, and web recovers the layer's depth by
+pairing the two on millisecond equality, dropping any row whose `bohrtiefe` is
+null. The timestamp is the entire mechanism. Grid the depth series and the
+reading the boundary points at stops existing on the platform — it looks for a
+depth at 580 ms, the platform has one at 870 ms, and the layer is gone. The
+first version of this change guarded one end of that link and cut the other.
+
+**The depth series is gridded anyway, and the anchors are pinned back in.**
+Leaving it ungridded costs the largest single channel its reduction — 26 699 of
+G08's 275 935 readings, 14x down to 6.2x — and it is not necessary. The value at
+the boundary's instant is not something to interpolate: it is a reading that
+exists, because the boundary was dated at it in the first place.
+`pinAnchorReadings` (`csv-upload.ts`) selects exactly those readings and
+`runUpload` sends them as one extra per-sensor batch beside the chunks. The
+platform upserts on `(sensor_id, date)`, so they join the thinned series as
+extra points. On G08 with 18 boundaries that is **18 readings, about 1 KB**, and
+all 18 stay joinable.
+
+Three things about that batch, none optional:
+
+- **It claims no reading ids.** They belong to the CSV chunk that gridded them;
+  marking them twice would have two halves of one upload fighting over the same
+  rows.
+- **It still counts in `sensorsFailed`.** A profile the platform cannot
+  reassemble is the same loss as one that never uploaded, so a failure holds the
+  element open and the recording bar's retry runs it again.
+- **It is built from the session, not from the pending groups**, and runs
+  whenever the grid is in play. On a retry the chunks that gridded those
+  readings are already marked uploaded, so a pending-only lookup would find
+  nothing to pin and leave the boundaries pointing at nothing.
+- **It is deduplicated by instant, last value winning.** Two readings share a
+  millisecond at a high ingest rate (replay 60x, fast MQTT), and the platform's
+  multi-row upsert refuses a batch naming one `(sensor_id, date)` twice. This
+  batch is *every* boundary's anchor, so one duplicate fails all of them, and
+  fails identically on every retry. Same rule as the per-sensor loop's own
+  dedup, for the same reason.
+
+`ALIGNMENT_ANCHOR_ROLES` (`depth`) and `ANCHORED_ROLE` (`geology_nr`) name the
+two ends. Both resolve by role from the session's own map, never by name: the
+depth sensor is `Bohrtiefe` for Injektionsbohren and Ankerbohren but `Tiefe` for
+DSV. **First match wins, as in `sensorNameByRole`** — a map carrying one role
+twice is legal and the shipped CSVs do it (`gear`, `torque`), and the two
+resolutions have to agree: `geology.ts` dates its boundaries against the sensor
+`sensorNameByRole` picked, so pinning the other one would thin the series those
+boundaries point at and lose every layer, silently.
+`EXACT_TIMESTAMP_ROLES` (`geology_nr`, `geology_text`, `is_completed`) stays
+what it was — every reading keeps its instant, per-sensor, in the same upload.
+
+The honest long-term fix is for a geology entry to carry its own depth instead
+of borrowing one by timestamp. That is a contract change across all three
+projects, not something to slip into a compression change.
+
+### Addressing by name is only safe because it is checked
+
+The CSV endpoint matches columns to sensors **by name**, which is the opposite
+of how the rest of this kiosk works — the Schichtauftrag carries real platform
+ids precisely because a name can drift (see "Schichtauftrag export carries
+sensor ids"). Two checks are what make it acceptable, and removing either turns
+a drifted name into measurements that upload cleanly and land nowhere:
+
+- **A sensor with no `name` in the session's `sensor_map` is never gridded.** The
+  map is keyed by the lowercased name and the real spelling is not recoverable
+  from it, so it takes the id-addressed route rather than being written to
+  `bohrtiefe`. Sessions recorded before names were persisted therefore upload
+  exactly as they always did.
+- **A `200` is not a success.** The endpoint reports headers it could not match
+  in `unknown_sensors` rather than failing, so `csvChunkProblem` fails the chunk
+  when any of *our* columns appear there — or when `rows_processed` falls short
+  of what was sent.
+
+**The fallback is decided on the first chunk only.** A structural refusal there
+(404/405/415 from a backend deployed before the endpoint existed — kiosks
+self-update hourly while the backend deploys separately, so both versions are
+live in the field at once; unmatched names; an element that does not resolve)
+switches the whole session to the per-sensor route, which is clean because
+nothing has been written yet. A 5xx, a timeout or a network error is **not**
+structural: those mean "not now", and falling back on them would re-send the
+whole session over the mobile link this exists to spare. A later chunk failing
+costs that chunk, which goes to `failed` and is retried — the platform upserts
+on `(sensor_id, date)`, so the re-send is a no-op.
+
+Two of those are worth their own line, because the obvious reading of each is
+wrong:
+
+- **A 422 is decided by its body, never by its status.** The endpoint answers a
+  refusal with the *same* JSON result as a success — `success` is
+  `failed_count == 0 && rows_processed > 0`, and a false one is served as a 422
+  carrying that result. So an unmatched header and a Postgres insert error that
+  cost it one chunk of values arrive under one status. Treating the status as
+  structural lets a single statement timeout on the platform abandon the grid
+  and put the whole session back on the link as JSON; treating it as transient
+  strands a body the backend will keep refusing. `csvChunkProblem` reads the
+  fields instead: an unmatched name of ours or `rows_processed == 0` is
+  structural, `failed_count` is not, and a 422 the kiosk cannot parse falls
+  back — an expensive upload that lands beats measurements that never leave the
+  kiosk.
+- **An element that does not resolve is structural**, and this is the one
+  failure where the *other* route is strictly more capable. The CSV endpoint is
+  addressed per element device (`element-device.ts`), so an element the platform
+  answered about and does not know leaves it nothing to post to; the per-sensor
+  route is addressed by sensor id and needs no device at all, which is why such
+  a session uploaded fine before `uploadMode: 'csv'` became the default. A
+  resolve that *failed to answer* is not this — that is a transport failure, and
+  "not now" as usual. `ElementNotResolvableError` is what keeps the two apart.
+
+`grid-reduce.test.ts`, `csv-upload.test.ts`, `reduction-config.test.ts` and
+`csv-upload-session.test.ts` pin all of this.
 
 ## Testing
 

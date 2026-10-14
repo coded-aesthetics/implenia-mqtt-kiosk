@@ -101,6 +101,7 @@ The settings page (`#/config`) provides:
 - **Server address** — Production / Development preset selector, plus free-text for local development
 - **Devices** — add/edit/remove Elvis (serial) and simulator devices
 - **Sensor mapping** — assign serial channel indices to named sensors per Verfahren (machine type)
+- **Datenübertragung** — how much of a recording leaves the kiosk and by which route (see "Data Reduction" below)
 - **Software update** — manual `.tar.gz` upload for offline environments
 
 ## Sensor Schema
@@ -315,7 +316,9 @@ It is persisted on the session, so a restart mid-element does not silently resum
 
 Two thresholds with a dead band between them, because the clamp is hydraulic and a single threshold would flap on sensor noise — clipping half the drilling data. **The unit is whatever the box publishes:** some send bar, the G08 box sends a raw four-digit number, so neither the UI nor the error messages claim one. The config card shows the live value, and the thresholds are set by watching the clamp open and close once.
 
-The operating mode reaches the state machine itself, not just the clipping decision at the end: during Verpressen the phase is still tracked — so clipping resumes correctly the moment the worker switches back — but no pipe is counted, no depth is frozen and no offset is rebuilt. Each of those would otherwise be *uploaded*, since nothing is clipped while grouting.
+**The clamp is only read where pipes are handled.** Bohren reaches depth by adding 2 m or 3 m pipes and Auffüllen takes them back out the same way, so in those two a closed clamp means a pipe change. Austausch and Einbauen handle no pipes: their clamp rests *closed*, holding the string while the slurry is exchanged, so it says nothing about the drive and the state machine does not look at it. A mode change resets the phase and the per-pipe baseline, so switching back to Bohren starts clean and the next close clips again.
+
+Getting that wrong was expensive and entirely invisible. With all four modes treated as pipe-handling, the captured rig's Klemmdruck during Austausch (min 1609, max 5256, mean 4250, against a close threshold of 4000) held the state machine in `rohrwechsel` for the whole phase: **3 848 of its 3 886 depth readings were clipped**, so the platform received a one-second sliver of a 0.86 m movement. The depth does change in those phases — the drill rises about a metre before Einbauen, pushed up by the denser slurry replacing the water — and that is a measurement, not an artefact of a pipe being swapped.
 
 **Nothing is discarded.** Clipped readings are stored with `phase = 'rohrwechsel'` and `upload_status = 'clipped'` — a status the upload query and the export both skip, so implenia-web receives only drilling data, matching how clipping has always been done machine-side. Values are never rewritten; the phase records what a reading is *worth*, not what it says. Clipped rows do not block the reset guard, which would otherwise refuse forever on any rig that changes pipes; the reset screen reports them instead, because the reset deletes them.
 
@@ -510,7 +513,7 @@ Auffüllen    [ ‹ Einbauen ][ Auffüllen ]
 
 The past phase stays tappable but subdued — an operator who stepped forward too early needs a way back, and the phase's name says where that goes in a way a bare `‹` would not. Three slots at most, at a fixed 424px so the element name beside it never shifts as phases advance; four worded segments would have come to ~617px of a 624px header centre, which works for `P-01` and breaks for a longer name.
 
-**Skipping a phase means stepping through it**, and that is deliberate rather than a compromise. All three post-drilling phases are indistinguishable to Rohrverlängerung clipping (`isRetracting`, `hasPipeHandling`), and `operating_mode` is a single overwritten column rather than a time series — so a moment spent in Austausch on the way to Einbauen changes no behaviour and leaves no trace. `operating-mode.test.ts`, on both the server and the UI side, pins that. If one of those phases ever needs different clipping, the stepper needs a way to skip without entering.
+**Skipping a phase means stepping through it**, and the cost of that is bounded rather than zero. All three post-drilling phases track depth identically (`isRetracting`), and `operating_mode` is a single overwritten column rather than a time series, so a moment spent in Austausch leaves no trace. They do differ in clipping — only Auffüllen handles pipes (`hasPipeHandling`) — so a pipe change spanning the two taps that pass through Austausch could leak a phantom reading or two. That is the better trade by a wide margin: clipping all three instead cost the entire Austausch depth series. `operating-mode.test.ts`, on both the server and the UI side, pins which phases handle pipes, and the two copies of the predicate have to agree — the UI's decides whether the recording bar shows the paused icon, and a bar claiming a pause while the server records normally is a lie to the operator.
 
 Phase changes live only here. The post-drilling screen used to carry its own three-button sidebar for the same transitions, which put the control in one place and the indicator in another; the chart has that width now.
 
@@ -736,12 +739,92 @@ GET /api/recording/:id/export?stream=hdi     → .xlsx download (attachment)
 
 Two stream formats are produced, mirroring implenia-web's own export (`stream-csv.server.ts`) so files round-trip through its importer (bulk-insert path):
 
-- **HDI** (machine telemetry, time-series): first column is a single ISO 8601 instant named **`Zeitpunkt`** (e.g. `2024-05-31T06:15:03.000Z`) — the DST-safe convention shared with implenia-web and implenia-machine-backend (see "CSV timestamp format" in `CLAUDE.md`). One column per HDI sensor; one row per distinct reading timestamp; empty cells for gaps.
+- **HDI** (machine telemetry, time-series): first column is a single ISO 8601 instant named **`Zeitpunkt`** (e.g. `2024-05-31T06:15:03.000Z`) — the DST-safe convention shared with implenia-web and implenia-machine-backend (see "CSV timestamp format" in `CLAUDE.md`). One column per HDI sensor; one row per grid interval (see "Data Reduction"); empty cells for gaps.
 - **IVL** (inclination, indexed): first column is a sequential 0-based sample **`Index`**. The kiosk emits plain integers; implenia-web maps each index to its own sentinel timestamp on import, so the kiosk never touches the sentinel scheme.
 
 Column headers match `dsv-sensors-herstellen.csv` sensor names exactly. In the UI, one export button per available stream appears in the recording bar next to **Daten hochladen** once a session ends.
 
 `result`/Ergebnisdaten is not exported — those KPIs are computed server-side in implenia-web.
+
+## Data Reduction
+
+The rigs publish far faster than they measure, and both routes out of the kiosk paid for it. Over the 2 h 10 m G08 capture (`assets/bohrung_g8.txt`) the ten drilling channels arrive every ~290 ms and the four pump channels every ~3 s — **275 935 readings on 274 475 distinct milliseconds**, because every MQTT message is stamped with its own `Date.now()`. Laid out as one row per instant and one column per sensor, 92.8 % of the cells are empty.
+
+Measured on that capture, with the current implementation:
+
+| | rows | cells filled | size | build |
+|---|---|---|---|---|
+| **USB export, Voll** | 274 475 | 7.2 % | 12.4 MB | 28 s, 2.0 GB RSS |
+| **USB export, 1 s** | 7 799 | 100 % | 0.58 MB | 0.8 s |
+| **Upload, per sensor (JSON)** | — | — | 13.9 MB in 64 requests | — |
+| **Upload, CSV @ 1 s** | 7 799 | — | **0.99 MB in 9 requests** | 0.2 s |
+
+The ungridded export is the sharper problem: the stock kiosk has 4 GB of RAM and Node's default old-space ceiling sits near 2 GB, so a worker exporting a full shift to USB waits minutes or watches it fail. That is a blocked worker, which this software must never produce.
+
+### Why a time grid, and why the last value
+
+Between **58 % and 90 %** of readings per channel are *exact repeats* of the previous value: this is a high publish rate, not a high sampling rate, and a grid costs almost nothing. "Almost" is what the rules are for.
+
+- **Last value in the interval, never a mean.** A mean invents numbers the rig never sent. `Klemmdruck` is bimodal at ~1650 open / ~4200 closed, and its 1 s mean lands in the physically impossible band between them in 35 intervals of that capture. `Tiefe` steps by a whole Bohrrohr during a Rohrverlängerung, and its 1 s mean sits up to **1.0 m** away from every sample in the interval. The volume channels are monotonic counters, where a mean is simply wrong. Taking the last value means every exported cell is a value the machine actually reported.
+- **Each row is dated at a real reading's instant** — the newest one in the interval — not at the synthetic interval boundary.
+- **Forward-fill is bounded** by `holdMsFor(bucketMs)` = four intervals, never under 4 s. The ~3 s pumps fill into every 1 s row (which is what takes the export from 81 % to 100 % filled); a dead sensor leaves the cell empty rather than frozen; a mode flag the operator set once is not stamped onto thousands of rows.
+- **A recorded `null` is a gap**, reported in its own interval and never carried — so the value from before an outage cannot reappear after it.
+- **An interval with no readings produces no row.** A quiet minute is absent from the file rather than filled with carried values.
+
+`grid-reduce.ts` is pure and unit-tested; it is the single implementation behind both routes.
+
+### Settings
+
+`#/config/datenuebertragung`, reached from **Messwerte → Datenübertragung**. Per-kiosk and stored in `meta`, like the Rohrverlängerung and calibration settings — a release image is identical across sites, but how fast a given rig publishes is not.
+
+```
+GET  /api/config/datenuebertragung  → { exportBucketMs, uploadBucketMs, uploadMode,
+                                        holdMs, rowsPerChunk, granularities, uploadModes }
+POST /api/config/datenuebertragung  → same three fields; validated, German errors
+```
+
+| setting | default | choices |
+|---|---|---|
+| `exportBucketMs` | `1000` | Voll (0), 1 s, 2 s, 5 s, 10 s |
+| `uploadBucketMs` | `1000` | the same, but not Voll on the CSV route |
+| `uploadMode` | `csv` | `csv` (gesammelt) or `sensor` (einzeln je Sensor) |
+
+**Nothing here deletes anything.** `session_readings` keeps every reading at full resolution whatever is configured; reduction happens on the way out, so a setting chosen wrong costs resolution on the platform and is undone by re-uploading or exporting the same session.
+
+### The CSV upload
+
+`uploadMode: 'csv'` posts the telemetry to `POST /api/v1/measuring-device/<device_id>/readings/batch/csv` — one `Zeitpunkt` per row instead of one per value — with the device id resolved from the element name by `element-device.ts`. Semicolon-separated, ISO 8601 with an explicit `Z`, column headers matching the platform's sensor names. The platform upserts on `(sensor_id, date)`, so a re-sent chunk is a no-op.
+
+**Chunked by rows** (`CHUNK_ROWS = 1000`, ~140 KB each). The endpoint takes 50 MB and the whole session would fit in one request, but one request is also one failure: a dropped link would cost the entire upload and leave the progress bar with nothing to report in between. Per chunk, the recording bar advances and a failure costs only that chunk's readings, which go to `failed` and are retried. Progress counts **Pakete** rather than Sensoren on this route (`UploadProgress.unit`).
+
+**Not every sensor can go this way.** A CSV is one table, so a column gets a cell on every row of its chunk — and an empty cell *inserts a NULL*, which is this kiosk's own marker for a sensor outage. Three kinds of sensor therefore keep the per-sensor path, in the same upload:
+
+- **String sensors** (`Kommentar`, `Geologie`, `logs`, `Ausführungsdatum`) — an empty cell there writes an empty *string*, and for `Ausführungsdatum` an empty string is the documented way to *un-complete* an element.
+- **`GeoDIN`** (role `geology_nr`) — implenia-web turns it into layers by change detection, and `alignBoundaries` deliberately gives every boundary its own depth reading. Two boundaries 290 ms apart share a 1 s interval, and one row is one layer, so gridding this series would silently drop layers.
+- **`Ausführungsdatum`** (role `is_completed`) — a single overwritable slot at a sentinel date, not session data at all.
+
+### Pinning the geology anchors
+
+A `GeoDIN` entry carries **no depth of its own**. `geology.ts` writes it at the exact `received_at` of a depth reading, and implenia-web recovers the layer's depth by pairing the two series on millisecond equality, dropping any row whose `Bohrtiefe` is null. The timestamp is the entire mechanism.
+
+Keeping `GeoDIN` off the grid guards one end of that link. Gridding the depth series cuts the other: the boundary looks for a depth at 580 ms, the platform has one at 870 ms, and the layer is gone — uploaded cleanly, invisible. (The first version of this change had exactly that bug.)
+
+The depth series is gridded anyway — leaving it out costs the largest single channel its reduction, 14× down to 6.2× — and the readings the boundaries point at are **pinned back in**: `pinAnchorReadings` selects exactly those readings and `runUpload` sends them as one extra per-sensor batch beside the chunks. Nothing is interpolated; the value at that instant is a reading that already exists. On G08 with 18 boundaries that is 18 readings, ~1 KB, and all 18 stay joinable.
+
+That batch claims no reading ids (the chunk that gridded them owns those), still counts in `sensorsFailed` (a profile the platform cannot reassemble is the same loss as one that never uploaded), and is built from the session rather than the pending groups so a retry still finds the anchors after the chunks have been marked uploaded.
+
+`sensorsFailed` counts across all three parts, so an element is only completed when nothing was left behind.
+
+**Only the machine's own channels are gridded.** `GRIDDABLE_SOURCES` is `{mqtt, kiosk}`, read from the `source` the session pinned when recording began (falling back to the local sensor CSVs by name for older sessions). The reason is that a CSV cannot say "no value here": a column gets a cell on every row of its chunk and an empty cell *inserts a NULL*, the kiosk's own outage marker. For an `mqtt` channel publishing every ~290 ms that is honest — the channel really did go quiet. For a `user` sensor it is not, because those values are events: Injektionsbohren's `Status` is written four times in a shift, and gridding it uploaded 186 fabricated outages, which cost the Herstellprotokoll its drilling duration, its phase averages and every observed geology layer. `CLAUDE.md` has the full chain. `kiosk` is gridded because those are the volume integrations, derived from every pump reading — DSV declares thirteen.
+
+**Two guards make name-addressing safe.** The CSV endpoint addresses sensors by the names in the header, which the rest of this kiosk deliberately does not do — the Schichtauftrag carries real platform ids precisely because names drift (see `CLAUDE.md`). So:
+
+1. A sensor with no `name` in the session's `sensor_map` is never gridded. The map is keyed by the *lowercased* name and the real spelling is not recoverable from it, so such a sensor takes the id-addressed route instead of being written to a sensor that may not exist. Sessions recorded before names were persisted therefore upload exactly as they always did.
+2. A `200` is not yet a success. The endpoint reports headers it could not match in `unknown_sensors` instead of failing, so `csvChunkProblem` treats any of *our* columns appearing there — and any shortfall in `rows_processed`, `failed_count` or `success` — as a failure.
+
+**Falling back.** If the *first* chunk fails structurally — 404/405/415 (a backend deployed before the endpoint existed; kiosks self-update hourly while the backend deploys separately, so the field runs both versions at once), unmatched column names, or an element the platform does not know — the whole session switches to the per-sensor route. Only the first chunk: nothing has been written at that point, so the switch is clean. A 5xx, a timeout or a network error is *not* structural; those mean "not now", and falling back on them would put the whole session back on the mobile link this change exists to spare.
+
+A **422 is classified by its body, not by its status**, because the endpoint answers a refusal with the same JSON result as a success (`success` is `failed_count == 0 && rows_processed > 0`). An unmatched header and a statement timeout on the platform's own inserts therefore share one status: an unmatched name of ours or `rows_processed == 0` is structural, `failed_count` is a "not now", and a 422 the kiosk cannot parse falls back. An **element that does not resolve** is structural too, and is the one case where the per-sensor route is strictly more capable — the CSV endpoint is addressed per element device, while the per-sensor route is addressed by sensor id and needs no device at all. A resolve request that *failed to answer* is an ordinary transport failure, not this.
 
 ## Building for Production
 
@@ -833,11 +916,15 @@ server/src/
   element-device.ts     — Element name → platform device id (resolve + cache)
   herstellen-sensors.ts — Element sensor defs: fetch, filter, offline cache
   session-export.ts   — Stream-driven .xlsx export (HDI/IVL) for implenia-web import
+  grid-reduce.ts      — Readings → one row per interval, last value per sensor (pure)
+  csv-upload.ts       — Session → chunked CSV for the measuring-device batch endpoint
+  reduction-config.ts — Per-kiosk export/upload granularity and upload route
   connectivity.ts     — Online/offline watchdog
   updater.ts          — Self-update from GitHub Releases
   device-manager.ts   — Device lifecycle management
   routes/
     config.ts         — /api/config (API key, URL, validation)
+    config-reduction.ts — /api/config/datenuebertragung (granularity + upload route)
     data.ts           — /api/readings, /api/stats
     devices.ts        — /api/config/devices + mappings
     verfahren.ts      — /api/verfahren (sensor definitions)

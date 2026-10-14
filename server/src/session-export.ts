@@ -4,6 +4,8 @@ import {
   markStreamExported, getExportedStreams, type SessionReadingRow,
 } from './db.js';
 import { getStreamSensors, getAvailableStreams, STREAM_LABELS } from './sensor-meta.js';
+import { reduceToGrid, type GridReading } from './grid-reduce.js';
+import { getReductionConfig, holdMsFor, GRID_OFF } from './reduction-config.js';
 
 /**
  * Session-data export for the implenia-web DSV widget import.
@@ -40,81 +42,121 @@ export function isExportableStream(s: string): s is ExportableStream {
   return (EXPORTABLE_STREAMS as readonly string[]).includes(s);
 }
 
-function readingValue(r: SessionReadingRow): number | string {
+function readingValue(r: SessionReadingRow): number | string | null {
   if (r.valueNumeric !== null) return r.valueNumeric;
   if (r.valueText !== null) return r.valueText;
-  return '';
+  return null;
 }
 
 /**
- * Group readings into columns (one per stream sensor) and a sorted set of
- * distinct timestamps. Readings are matched to a column by their topic's
- * trailing sensor name — endsWith (not a last-segment split) so names that
- * themselves contain a slash — e.g. "Bohren/Düsen", "W/Z-Wert" — still match.
- * Readings for sensors outside the stream are ignored.
+ * One row of the exported sheet, before the first column is prepended.
+ *
+ * `at` is the instant the row stands for: a real reading's instant, both
+ * ungridded and gridded (see grid-reduce.ts).
  */
-function buildMatrix(sensorNames: string[], readings: SessionReadingRow[]) {
-  const columns = sensorNames.map((name) => ({
-    name,
-    lower: name.toLowerCase(),
-    byTs: new Map<number, number | string>(),
-  }));
-  const timestamps = new Set<number>();
+interface MatrixRow {
+  at: number;
+  values: Map<string, number | string | null>;
+}
 
+/**
+ * Resolve readings to their stream columns, and lay them out as rows.
+ *
+ * Readings are matched to a column by their topic's trailing sensor name —
+ * endsWith (not a last-segment split) so names that themselves contain a
+ * slash — e.g. "Bohren/Düsen", "W/Z-Wert" — still match. Readings for sensors
+ * outside the stream are ignored.
+ *
+ * With `bucketMs > 0` the rows come from `reduceToGrid`: one per bucket,
+ * carrying each sensor's last value in it. Without it, every reading keeps its
+ * own instant and nothing is filled in — which is the shape this export always
+ * had, kept because a reduction nobody can switch off is a reduction nobody can
+ * audit. It is also, on a real session, a 274 475-row workbook that a kiosk
+ * cannot build; see grid-reduce.ts for the measurements.
+ */
+function buildMatrix(
+  sensorNames: string[],
+  readings: SessionReadingRow[],
+  bucketMs: number,
+): { names: string[]; rows: MatrixRow[] } {
+  const columns = sensorNames.map((name) => ({ name, lower: name.toLowerCase() }));
+
+  const resolved: GridReading<string>[] = [];
   for (const r of readings) {
     const topicLower = r.topic.toLowerCase();
     const col = columns.find(
       (c) => topicLower === c.lower || topicLower.endsWith('/' + c.lower),
     );
     if (!col) continue;
-    col.byTs.set(r.receivedAt, readingValue(r));
-    timestamps.add(r.receivedAt);
+    resolved.push({ key: col.name, receivedAt: r.receivedAt, value: readingValue(r) });
   }
 
-  return { columns, sortedTimestamps: Array.from(timestamps).sort((a, b) => a - b) };
+  if (bucketMs > 0) {
+    const rows = reduceToGrid(resolved, { bucketMs, maxHoldMs: holdMsFor(bucketMs) });
+    return { names: sensorNames, rows };
+  }
+
+  const byTs = new Map<number, Map<string, number | string | null>>();
+  for (const r of resolved) {
+    let row = byTs.get(r.receivedAt);
+    if (!row) { row = new Map(); byTs.set(r.receivedAt, row); }
+    row.set(r.key, r.value);
+  }
+  const rows = Array.from(byTs, ([at, values]) => ({ at, values }))
+    .sort((a, b) => a.at - b.at);
+  return { names: sensorNames, rows };
 }
 
 /**
- * Time-series rows (HDI): one row per distinct timestamp, first column is an
- * ISO 8601 `Zeitpunkt`, empty cells where a sensor has no reading at that ts.
+ * Render the rows, keeping the column order the stream's CSV defines.
+ *
+ * A column with nothing for a row — never recorded, or a recorded gap — is an
+ * empty cell. implenia-web's importer reads those as "no value", which is what
+ * they are.
+ */
+function renderRows(
+  firstHeader: string,
+  names: string[],
+  rows: MatrixRow[],
+  firstCell: (row: MatrixRow, index: number) => string | number,
+): (string | number)[][] {
+  const out: (string | number)[][] = [[firstHeader, ...names]];
+  rows.forEach((row, index) => {
+    const cells: (string | number)[] = [firstCell(row, index)];
+    for (const name of names) {
+      const v = row.values.get(name);
+      cells.push(v === undefined || v === null ? '' : v);
+    }
+    out.push(cells);
+  });
+  return out;
+}
+
+/**
+ * Time-series rows (HDI): one row per instant, first column is an ISO 8601
+ * `Zeitpunkt`.
  */
 export function buildTimeSeriesRows(
   sensorNames: string[],
   readings: SessionReadingRow[],
+  bucketMs = GRID_OFF,
 ): (string | number)[][] {
-  const { columns, sortedTimestamps } = buildMatrix(sensorNames, readings);
-  const rows: (string | number)[][] = [[TIMESTAMP_COLUMN, ...columns.map((c) => c.name)]];
-  for (const ts of sortedTimestamps) {
-    const row: (string | number)[] = [new Date(ts).toISOString()];
-    for (const col of columns) {
-      const v = col.byTs.get(ts);
-      row.push(v === undefined ? '' : v);
-    }
-    rows.push(row);
-  }
-  return rows;
+  const { names, rows } = buildMatrix(sensorNames, readings, bucketMs);
+  return renderRows(TIMESTAMP_COLUMN, names, rows, (row) => new Date(row.at).toISOString());
 }
 
 /**
- * Indexed rows (IVL): one row per distinct timestamp in chronological order,
- * first column is a sequential 0-based sample `Index`. implenia-web maps the
- * index to its own sentinel timestamp on import.
+ * Indexed rows (IVL): one row per instant in chronological order, first column
+ * is a sequential 0-based sample `Index`. implenia-web maps the index to its own
+ * sentinel timestamp on import.
  */
 export function buildIndexRows(
   sensorNames: string[],
   readings: SessionReadingRow[],
+  bucketMs = GRID_OFF,
 ): (string | number)[][] {
-  const { columns, sortedTimestamps } = buildMatrix(sensorNames, readings);
-  const rows: (string | number)[][] = [[INDEX_COLUMN, ...columns.map((c) => c.name)]];
-  sortedTimestamps.forEach((ts, index) => {
-    const row: (string | number)[] = [index];
-    for (const col of columns) {
-      const v = col.byTs.get(ts);
-      row.push(v === undefined ? '' : v);
-    }
-    rows.push(row);
-  });
-  return rows;
+  const { names, rows } = buildMatrix(sensorNames, readings, bucketMs);
+  return renderRows(INDEX_COLUMN, names, rows, (_row, index) => index);
 }
 
 /** Build the rows for a stream using its format (time-series vs indexed). */
@@ -122,10 +164,11 @@ export function buildStreamRows(
   stream: ExportableStream,
   sensorNames: string[],
   readings: SessionReadingRow[],
+  bucketMs = GRID_OFF,
 ): (string | number)[][] {
   return stream === 'ivl'
-    ? buildIndexRows(sensorNames, readings)
-    : buildTimeSeriesRows(sensorNames, readings);
+    ? buildIndexRows(sensorNames, readings, bucketMs)
+    : buildTimeSeriesRows(sensorNames, readings, bucketMs);
 }
 
 /** Sanitize an element name and stream into a safe filename. */
@@ -212,7 +255,8 @@ export async function buildSessionExport(
 
   const sensors = getStreamSensors(stream).map((s) => s.name);
   const readings = getAllSessionReadings(sessionId);
-  const rows = buildStreamRows(stream, sensors, readings);
+  const { exportBucketMs } = getReductionConfig();
+  const rows = buildStreamRows(stream, sensors, readings, exportBucketMs);
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Implenia Kiosk';

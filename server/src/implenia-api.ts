@@ -3,6 +3,15 @@ import { getMeta } from './db.js';
 
 export interface ApiError extends Error {
   statusCode: number;
+  /**
+   * The response body, verbatim.
+   *
+   * The CSV batch endpoint answers a refusal with the *same* JSON result as a
+   * success, and whether that refusal is worth retrying is only visible in it —
+   * a name it could not match is permanent, a value it failed to insert is its
+   * own database having a bad minute. The status alone cannot tell them apart.
+   */
+  body?: string;
 }
 
 export interface ApiConfig {
@@ -34,7 +43,18 @@ export function getApiConfig(): ApiConfig | null {
  */
 export async function fetchImplenia<T = unknown>(
   path: string,
-  options?: { method?: string; body?: unknown; timeoutMs?: number },
+  options?: {
+    method?: string;
+    body?: unknown;
+    /**
+     * A body to send verbatim, with `contentType`, instead of JSON. The CSV
+     * batch endpoint reads the raw request body as a file, so it cannot be
+     * handed a JSON envelope.
+     */
+    rawBody?: string;
+    contentType?: string;
+    timeoutMs?: number;
+  },
 ): Promise<T> {
   const cfg = getApiConfig();
   if (!cfg) throw new Error('Implenia API not configured');
@@ -51,7 +71,10 @@ export async function fetchImplenia<T = unknown>(
     headers,
   };
 
-  if (options?.body) {
+  if (options?.rawBody !== undefined) {
+    headers['Content-Type'] = options.contentType ?? 'text/plain; charset=utf-8';
+    init.body = options.rawBody;
+  } else if (options?.body) {
     headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(options.body);
   }
@@ -66,6 +89,7 @@ export async function fetchImplenia<T = unknown>(
     const text = await res.text();
     const err = new Error(`Implenia API ${res.status}: ${text}`);
     (err as ApiError).statusCode = res.status;
+    (err as ApiError).body = text;
     throw err;
   }
 

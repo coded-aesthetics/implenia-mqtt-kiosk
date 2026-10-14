@@ -56,6 +56,12 @@ describe('the Injektionsbohren map against the rig it came from', () => {
     'Maschine/Druck_Hammer': 'druck hammer',
     'Maschine/Druck_Vorschub': 'vorschubdruck',
     'Maschine/Druck_Medium': 'suspensionsdruck',
+    // The rig has no torque transducer: the inner and outer rotary pressures
+    // are what drive the rotation, and the I/A in the sensor names is
+    // innen/aussen. Unbound, these were two channels of every upload thrown
+    // away — see assets/topic-maps/README.md for the unit caveat.
+    'Maschine/Druck_innen': 'idrehmoment',
+    'Maschine/Druck_aussen': 'adrehmoment',
     'Spuelpumpe/Durchfluss': 'durchflussb',
     'Verpresspumpe/Durchfluss': 'durchflussv',
   };
@@ -70,6 +76,23 @@ describe('the Injektionsbohren map against the rig it came from', () => {
     // They share a last segment, which is why the map is keyed by full topic.
     expect(resolveSensorKey('Spuelpumpe/Durchfluss', ctx))
       .not.toBe(resolveSensorKey('Verpresspumpe/Durchfluss', ctx));
+  });
+
+  it('binds every topic the reference capture publishes but the Klemmbacke and the Winkel', () => {
+    // An unbound topic is recorded, shown live and silently never uploaded, so
+    // the ones left out are a decision and belong in the README rather than in
+    // whatever the map happens to contain.
+    const published = [
+      'Bohrgeraet/Winkel', 'Bohrgeraet/Klemmdruck', 'Bohrgeraet/Ziehgeschwindigkeit',
+      'Bohrgeraet/Tiefe', 'Bohrgeraet/Drehzahl', 'Maschine/Druck_Hammer',
+      'Maschine/Druck_aussen', 'Maschine/Druck_Vorschub', 'Maschine/Druck_Medium',
+      'Maschine/Druck_innen', 'Verpresspumpe/Volumen', 'Spuelpumpe/Volumen',
+      'Verpresspumpe/Durchfluss', 'Spuelpumpe/Durchfluss',
+    ];
+    const names = new Set((loadSensorCsv('injektionsbohren') ?? [])
+      .map((r) => r.name.toLowerCase()));
+    const unbound = published.filter((t) => !names.has(resolveSensorKey(t, ctx) ?? ''));
+    expect(unbound).toEqual(['Bohrgeraet/Winkel', 'Bohrgeraet/Klemmdruck']);
   });
 
   it('leaves the Klemmbacke unbound', () => {

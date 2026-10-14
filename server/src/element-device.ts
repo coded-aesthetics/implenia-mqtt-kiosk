@@ -35,6 +35,26 @@ const log = createLogger('element-device');
 
 const deviceIds = new Map<string, string>();
 
+/**
+ * The platform answered, and knows no device for this element.
+ *
+ * Deliberately distinct from a transport failure on the same request: this one
+ * *is* an answer, and no amount of retrying changes it until the Schichtauftrag
+ * does. The CSV upload needs the distinction. Its endpoint is addressed per
+ * element device, so an element that does not resolve leaves it with nothing to
+ * post to at all, while the per-sensor route is addressed by sensor id and
+ * needs no device — which makes this a reason to hand the whole session to that
+ * route, not a reason to mark every chunk failed on every attempt forever.
+ */
+export class ElementNotResolvableError extends Error {
+  readonly elementUnresolved = true;
+}
+
+/** Whether a thrown error is `ElementNotResolvableError`. */
+export function isElementNotResolvable(err: unknown): boolean {
+  return (err as { elementUnresolved?: boolean } | null)?.elementUnresolved === true;
+}
+
 /** Status codes that can mean "the id we cached is no longer this element's". */
 const STALE_ID_STATUS = new Set([401, 403, 404]);
 
@@ -48,7 +68,7 @@ async function resolveElementDeviceId(elementName: string): Promise<string> {
   );
   const deviceId = res?.device_id;
   if (!deviceId) {
-    throw new Error(
+    throw new ElementNotResolvableError(
       `Element „${elementName}" ist in der Implenia-Plattform nicht auffindbar. ` +
       'Bitte den Schichtauftrag prüfen.',
     );
