@@ -511,18 +511,33 @@ export class DataIngestion extends EventEmitter {
   /**
    * Record the current operating mode as a `Status` sensor reading.
    *
-   * The Injektionsbohren protocol in implenia-web segments all KPIs by
-   * phase using Status == 0 (bohren) / Status == 1 (verpressen). Without
-   * these readings the protocol has no phase data and returns hasData: false.
+   * implenia-web's Injektionsbohren Herstellprotokoll segments every KPI by
+   * this value, and that protocol is the authority on what the numbers mean —
+   * it is signed, archived and read by people who never see this code. Without
+   * these readings it has no phase data at all.
+   *
+   * **0 is drilling and 1 is filling, and that cannot be renegotiated.** It is
+   * what the two-mode kiosk wrote (`bohren` / `verpressen`), so every pillar
+   * recorded before the four phases existed means exactly that, and it is what
+   * web's reader has always matched on. Giving 1 to Austausch — as the
+   * four-mode renumbering did — silently repointed the protocol's second
+   * column at the slurry exchange: same label, same shape, wrong phase. The
+   * two phases web does not report take the free numbers, and their order
+   * between themselves is arbitrary.
+   *
+   * Keep in step with `AUFFUELLEN_STATUS` in implenia-web
+   * (`app/models/injektionsbohren-protocol.server.ts`) and the phase filters in
+   * its computation profile. The kiosk is the only writer of this sensor; web
+   * is the only reader.
    */
   private recordStatusReading(session: ActiveSession): void {
     const mapping = session.sensorMap.get('status');
     if (!mapping) return;
     const STATUS_MAP: Record<OperatingMode, number> = {
       bohren: 0,
-      austausch: 1,
-      einbauen: 2,
-      auffuellen: 3,
+      auffuellen: 1,
+      austausch: 2,
+      einbauen: 3,
     };
     const statusValue = STATUS_MAP[session.operatingMode];
     insertSessionReading(

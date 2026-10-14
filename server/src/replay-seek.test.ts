@@ -106,7 +106,9 @@ describe('a session a replay has seeked', () => {
     publish(DEPTH_TOPIC, '2.0');
     publish('kiosk/operating-mode', 'austausch');
 
-    expect(statusValues(sessionId)).toEqual([0, 1]);
+    // 0 is drilling, 2 is Austausch — 1 belongs to Auffüllen, which is what
+    // the protocol's second column reports. See `recordStatusReading`.
+    expect(statusValues(sessionId)).toEqual([0, 2]);
 
     ingestion.stopRecording();
     db.endSession(sessionId);

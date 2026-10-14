@@ -635,6 +635,53 @@ picture is slightly wrong and nothing is miscommitted.
 
 Keep both projects in sync when this contract changes.
 
+## `Status` numbering — shared convention across two projects
+
+The kiosk writes the operator's phase into the **`Status`** integer sensor
+(CSV role `mode`, `Quelle=user`) on every mode change and at the start of a
+recording. implenia-web's Injektionsbohren Herstellprotokoll segments every KPI
+by it, and **that protocol is the authority on what the numbers mean** — it is
+signed, archived, and read by people who never see either codebase.
+
+```
+0 = Bohren      1 = Auffüllen      2 = Austausch      3 = Einbauen
+```
+
+**0 and 1 are fixed and 2 and 3 are free.** The two-mode kiosk wrote `bohren` /
+`verpressen` as 0 / 1, so every pillar recorded before the four phases existed
+means exactly that, and web has always matched on it. The protocol reports those
+two phases — what was drilled, and what was filled. Austausch and Einbauen are
+neither, appear nowhere on it, and therefore take the numbers nothing matches
+on; their order between themselves carries no meaning.
+
+**The numbering is not the phase order**, which is the trap. The stepper runs
+Bohren → Austausch → Einbauen → Auffüllen, so numbering them in sequence is the
+obvious thing to do and was done once: it gave 1 to Austausch, and web's second
+column went on reporting under the heading "Verpressen" with the same shape and
+plausible numbers — the slurry exchange's Beginn, Ende, Dauer, depths and
+averages, for a column everybody read as the filling phase. Nothing failed.
+
+What follows, and must not be broken:
+
+- **`recordStatusReading` (`ingestion.ts`) is the only writer**, and
+  `AUFFUELLEN_STATUS` plus the computation profile's phase filters
+  (`app/models/injektionsbohren-protocol.server.ts`,
+  `app/helpers/computed-values/profiles/injektionsbohren.ts`) are the only
+  readers. Four constants, two repositories, one meaning.
+- **A session's opening value is written at `startRecording`**, because a mode
+  is otherwise only recorded when it *changes* — see `resetForSeek`, which has
+  to re-state it after clearing a session.
+- **It is never gridded.** Four readings in a shift, so the CSV route would
+  write a fabricated outage into every row it has no value for; web
+  forward-fills this sensor and reads a NULL as "mode unknown from here on".
+  See "What the CSV upload may not be given".
+- **Renaming the derived values is not on the table.** web's computed
+  `beginn_verpressen`, `dauer_verpressen`, `q_verpressen` and friends are
+  materialized onto pillars, so they keep the old word while the screens say
+  Auffüllen.
+
+Keep both projects in sync when this contract changes.
+
 ## Reduction happens on the way out, and only there
 
 A recording leaves the kiosk twice — the xlsx on a USB stick, the batch upload
