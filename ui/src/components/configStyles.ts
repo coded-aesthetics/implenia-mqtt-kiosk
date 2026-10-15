@@ -20,6 +20,17 @@ export const configStyles: Record<string, CSSProperties> = {
   cardWrapper: {
     position: 'relative',
   },
+  /**
+   * A stack of cards that together occupy one grid column. Without it, a short
+   * card beside a tall one leaves the next card to start a whole grid row
+   * below the tall one — a screen-high gap at 1024x768.
+   */
+  column: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: 'var(--space-lg)',
+    minWidth: 0,
+  },
   card: {
     backgroundColor: 'var(--surface-2)',
     borderRadius: 'var(--radius-lg)',
