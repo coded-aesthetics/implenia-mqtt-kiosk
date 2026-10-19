@@ -4,7 +4,6 @@ import { useHashRouter, navigate } from './hooks/useHashRouter';
 import { useConfig, useShiftAssignment, useActiveVerfahren, useElementVorgaben, useVerfahrenSensors } from './hooks/useImplenia';
 import { useVoiceCommands } from './hooks/useVoiceCommands';
 import { Header } from './components/Header';
-import { UpdateBanner } from './components/UpdateBanner';
 import { RecordingBar } from './components/RecordingBar';
 import { ConfigPage } from './components/ConfigPage';
 import { ShiftAssignment } from './components/ShiftAssignment';
@@ -624,14 +623,11 @@ export function App() {
         onModeChange={setOperatingMode}
         hidePhaseStepper={route.page === 'geologie' && route.query.beenden === '1'}
         ausrichten={ausrichtenSlot}
+        updateAvailable={updateAvailable}
+        updateApplying={updateApplying}
+        updateSource={updateSource}
       />
       <VoiceFeedbackOverlay feedback={voice.feedback} />
-      <UpdateBanner
-        version={updateAvailable}
-        source={updateSource}
-        applying={updateApplying}
-        recordingActive={recordingState.active}
-      />
       {replaySeeking && (
         <div style={styles.seekingOverlay}>
           <div style={styles.seekingText}>Spule vor…</div>

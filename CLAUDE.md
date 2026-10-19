@@ -69,7 +69,7 @@ git push origin v0.1.0
 
 GitHub Actions builds, stamps the tag version into package.json, bundles `server/dist/` + `ui/dist/` into a `.tar.gz`, generates a SHA256 checksum, and publishes both as a GitHub Release.
 
-The self-updater on the kiosk polls GitHub Releases hourly, compares semver against the root `package.json` version, and applies updates automatically via PM2 restart.
+The self-updater polls GitHub Releases every five minutes (`UPDATE_CHECK_INTERVAL_MS`), comparing semver against the root `package.json` version. **It only detects.** An update is announced by the version indicator in the header — two lines, `vX installiert` over `vY verfügbar` — and applying it takes two taps there, the second confirming "Wirklich updaten?". There is no banner: an update is never urgent, since the kiosk keeps recording and uploading on the version it has, and installing one restarts the app. `POST /api/update` refuses while a recording is running.
 
 ## CI Quirks
 
@@ -236,7 +236,7 @@ What follows from this, and must not be broken:
   memory, retry once if the id turns out stale). It resolves rather than passing
   `name:<element>` as the device_id even though the backend now accepts that
   reference form — the support landed after this kiosk shipped, and kiosks
-  self-update hourly while the backend deploys separately, so both versions are
+  self-update on their own schedule while the backend deploys separately, so both versions are
   live in the field at once. Resolve-then-write works against either.
   `element-completion.test.ts` and `element-device.test.ts` pin both halves.
 - **implenia-machine-backend** — `GetUnfinishedElements` excludes elements whose
@@ -275,8 +275,7 @@ situations:
 
 - an element created before a role moved to a different sensor,
 - an element created before a sensor was renamed,
-- any session that outlives an auto-update — kiosks take one hourly and a
-  recording can run for a day, so the role can resolve differently at sign-off
+- any session that outlives an auto-update — a recording can run for a day, so the role can resolve differently at sign-off
   than it did at start.
 
 `beginRecording` therefore writes each sensor's `role` into the session's
@@ -383,7 +382,7 @@ What follows from this, and must not be broken:
 - **The field is additive and its absence is legal.** A file exported before
   this existed is still a valid Schichtauftrag — it just leaves the offline
   start to whatever the kiosk has already seen online. Kiosks self-update
-  hourly and implenia-web deploys separately, so both shapes are live in the
+  on their own schedule and implenia-web deploys separately, so both shapes are live in the
   field at once.
 - **The local sensor CSVs are not an alternative source.** They carry name,
   type, unit, source and role — everything but the ids — which makes them look
@@ -918,7 +917,7 @@ a drifted name into measurements that upload cleanly and land nowhere:
 
 **The fallback is decided on the first chunk only.** A structural refusal there
 (404/405/415 from a backend deployed before the endpoint existed — kiosks
-self-update hourly while the backend deploys separately, so both versions are
+self-update on their own schedule while the backend deploys separately, so both versions are
 live in the field at once; unmatched names; an element that does not resolve)
 switches the whole session to the per-sensor route, which is clean because
 nothing has been written yet. A 5xx, a timeout or a network error is **not**

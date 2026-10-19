@@ -60,7 +60,7 @@ describe('environment parsing', () => {
     expect(cfg.LOG_SENSOR_LEVEL).toBe('warn');
     expect(cfg.LOG_SENSOR_UPLOAD).toBe(false);
     expect(cfg.CONNECTIVITY_POLL_INTERVAL_MS).toBe(30_000);
-    expect(cfg.UPDATE_CHECK_INTERVAL_MS).toBe(3_500_000);
+    expect(cfg.UPDATE_CHECK_INTERVAL_MS).toBe(300_000);
   });
 
   it('treats a blank optional as absent, not as an empty string', () => {

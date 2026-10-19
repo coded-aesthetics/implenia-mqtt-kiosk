@@ -46,7 +46,11 @@ DEPS=""
 VOSK=""
 NEW_HOSTNAME=""
 WITH_ZRAM=1
-WITH_VOSK=1
+# Off for the MVP. Voice control is opt-in at runtime anyway (the engine only
+# loads once somebody enables it), so the only thing it costs an install is the
+# 46 MB speech model — which is most of the stick's payload and most of the
+# time a machine spends provisioning. --with-vosk puts it back.
+WITH_VOSK=0
 WITH_ANYDESK=1
 ANYDESK_PASSWORD=""
 ANYDESK_ID=""
@@ -75,7 +79,9 @@ Usage: ./provision-kiosk.sh [options]
   --port N            Server port (default 3000)
   --node-major N      Node.js major version to install (default 22)
   --no-zram           Skip compressed swap
-  --no-vosk           Skip the speech model (voice commands stay off)
+  --with-vosk         Install the 46 MB speech model. Off by default: voice
+                      control is out of scope for the MVP, and the model is the
+                      bulk of both the payload and the install time
   --anydesk-password PW
                       Password for unattended remote access. Without one, a
                       remote session has to be accepted on the touchscreen.
@@ -99,7 +105,8 @@ while [[ $# -gt 0 ]]; do
     --port)        PORT="$2"; shift 2 ;;
     --node-major)  NODE_MAJOR="$2"; shift 2 ;;
     --no-zram)     WITH_ZRAM=0; shift ;;
-    --no-vosk)     WITH_VOSK=0; shift ;;
+    --with-vosk)   WITH_VOSK=1; shift ;;
+    --no-vosk)     WITH_VOSK=0; shift ;;   # accepted, already the default
     --anydesk-password) ANYDESK_PASSWORD="$2"; shift 2 ;;
     --no-anydesk)  WITH_ANYDESK=0; shift ;;
     --export-deps) EXPORT_DEPS="$2"; shift 2 ;;
@@ -111,11 +118,43 @@ done
 
 NEEDS_REBOOT=0
 
+# Every warning is collected as well as printed. A provisioning run scrolls
+# twenty screens of apt output past the operator, and the two things that
+# actually needed a human — a refused AnyDesk password, a release that could not
+# be fetched — went by in one dim line each. They are repeated at the end,
+# directly above the reboot prompt, where the decision to let the machine leave
+# is made.
+WARNINGS=()
+
 log()  { printf '\n\033[1;34m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '    \033[32m✓\033[0m %s\n' "$*"; }
 skip() { printf '    \033[2m·\033[0m %s\n' "$*"; }
-warn() { printf '    \033[33m!\033[0m %s\n' "$*" >&2; }
-die()  { printf '\n\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+warn() { WARNINGS+=("$*"); printf '    \033[1;33m! WARNING\033[0m %s\n' "$*" >&2; }
+
+show_warnings() {
+  local rule='════════════════════════════════════════════════════════════'
+  if [[ ${#WARNINGS[@]} -eq 0 ]]; then
+    printf '\n\033[1;32m%s\n  No warnings. Nothing needs a human.\n%s\033[0m\n' "$rule" "$rule"
+    return
+  fi
+  # A rule rather than a box: a box's border has to match the text's width, and
+  # the text here is whatever a step had to say.
+  printf '\n\033[1;33m%s\n  %d WARNING(S) — read these before the machine leaves\n%s\033[0m\n\n' \
+    "$rule" "${#WARNINGS[@]}" "$rule"
+  local i=1 w
+  for w in "${WARNINGS[@]}"; do
+    printf '\033[1;33m  %d.\033[0m %s\n\n' "$i" "$w"
+    i=$((i + 1))
+  done
+}
+
+die()  {
+  # The failure is louder than the warnings, but the warnings explain it often
+  # enough to be worth repeating here too.
+  [[ ${#WARNINGS[@]} -gt 0 ]] && show_warnings
+  printf '\n\033[1;31m✗ FAILED: %s\033[0m\n' "$*" >&2
+  exit 1
+}
 
 # --- 0. preflight ---------------------------------------------------------
 
@@ -128,6 +167,20 @@ preflight() {
   [[ -f /etc/debian_version ]] || warn "Not a Debian system — proceeding, but nothing here is tested elsewhere."
   [[ "$(uname -m)" == "x86_64" ]] || warn "Not x86_64 ($(uname -m)) — the prebuilt native modules will not match."
   ok "Running as $USER, sudo available, Debian $(cat /etc/debian_version 2>/dev/null || echo '?')"
+
+  # The mistake that cost a provisioning run: /media/prov is an ordinary
+  # directory when the stick is not mounted, and a script copied into it runs
+  # perfectly well with no kiosk.conf, no token and no payload beside it.
+  if [[ ! -f "$SCRIPT_DIR/kiosk.conf" ]] && ! ls "$SCRIPT_DIR"/app-v*.tar.gz >/dev/null 2>&1; then
+    warn "No kiosk.conf and no release archive next to this script ($SCRIPT_DIR) — if this should be the provisioning stick, it is probably not mounted. Carrying on; credentials must then come from the command line."
+  fi
+
+  # AnyDesk refuses short or patterned passwords, and it refuses them at the
+  # very end of the run — fifteen minutes after the only moment anybody could
+  # have done something about it. Said here instead.
+  if [[ $WITH_ANYDESK -eq 1 && -n "$ANYDESK_PASSWORD" && ${#ANYDESK_PASSWORD} -lt 12 ]]; then
+    warn "The AnyDesk password is ${#ANYDESK_PASSWORD} characters. AnyDesk requires at least 8 and rejects simple patterns; under 12 it is usually refused. Remote access will stay interactive unless you pass a longer --anydesk-password."
+  fi
 }
 
 # --- 1. system ------------------------------------------------------------
@@ -172,13 +225,29 @@ system_basics() {
   # kiosk: without it a service tech SSHing in from kitty, alacritty, wezterm or
   # foot gets `Error opening terminal: xterm-kitty` from anything curses-based —
   # top, nano, htop — on the machine they were sent to fix.
+  #
+  # The audio stack stays even with voice out of scope, because AnyDesk needs
+  # it: its backend does not degrade without a PulseAudio server, it crashes,
+  # and the session dies with `desk_rt_ipc_error` — a message naming the
+  # screen-sharing component. The browser also reaches the microphone through
+  # PulseAudio, so this is what voice will need when it returns.
+  #
+  # rtkit and pulseaudio-utils are Recommends that --no-install-recommends
+  # drops, and both earn their place. Without rtkit, pipewire cannot get
+  # realtime scheduling and logs `RTKit error` on every start — on a J1900
+  # already running Chromium, capture glitches are exactly what would make
+  # speech recognition unreliable in a way nobody could diagnose.
+  # pulseaudio-utils brings `pactl`, which is how anybody answers "does this
+  # machine have a microphone" — the same argument as xinput for touch.
   sudo apt-get install -y -qq --no-install-recommends \
     xserver-xorg xserver-xorg-core xinit x11-xserver-utils \
     xserver-xorg-input-libinput xserver-xorg-video-intel \
+    lightdm lightdm-gtk-greeter \
     openbox chromium unclutter fonts-dejavu-core \
     curl ca-certificates unzip sqlite3 ncurses-term xinput \
+    pipewire pipewire-pulse wireplumber rtkit pulseaudio-utils \
     dbus dbus-user-session udisks2 udiskie avahi-daemon
-  ok "X, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo for modern terminals"
+  ok "X, lightdm, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo, audio (AnyDesk crashes without it, and the microphone needs it)"
 }
 
 # --- 2. kernel ------------------------------------------------------------
@@ -409,7 +478,25 @@ app_payload() {
     fi
   fi
 
-  [[ -n "$BUNDLE" && -f "$BUNDLE" ]] || die "No release to install: GitHub could not be reached (or no token is set) and there is no app-vX.Y.Z.tar.gz next to this script. Pass --bundle, or --version once connectivity is back."
+  #
+  # Keep going with what is installed rather than dying here.
+  #
+  # Dying left a machine half-provisioned on the first real repair run: the
+  # packages step had already installed lightdm, and the session was never
+  # configured because the script exited two steps earlier — so the machine
+  # booted to a greeter and then a black screen. Re-running provisioning is the
+  # documented way to repair a machine, and a repair tool that refuses to
+  # configure anything because it could not reach GitHub is worse than useless;
+  # the app on disk is usually exactly the one wanted anyway.
+  #
+  if [[ -z "$BUNDLE" || ! -f "$BUNDLE" ]]; then
+    if [[ -f "$APP_DIR/package.json" ]]; then
+      warn "No release available (GitHub unreachable or no token, and none on the stick) — keeping the installed version $(node -p "require('$APP_DIR/package.json').version" 2>/dev/null || echo '?') and carrying on with the rest of the setup."
+      [[ -n "$dl" ]] && rm -rf "$dl"
+      return 0
+    fi
+    die "No release to install, and nothing installed yet: GitHub could not be reached (or no token is set) and there is no app-vX.Y.Z.tar.gz next to this script. Is the stick mounted? Otherwise pass --bundle or --version."
+  fi
 
   # Verify the checksum the release ships, if it came along.
   local sum="${BUNDLE%.tar.gz}.sha256"
@@ -501,7 +588,7 @@ app_env() {
 }
 
 vosk_model() {
-  [[ $WITH_VOSK -eq 1 ]] || { skip "Speech model skipped — voice commands stay off"; return; }
+  [[ $WITH_VOSK -eq 1 ]] || { skip "Speech model skipped (voice is out of MVP scope) — add --with-vosk when it comes back"; return; }
   log "Speech model"
   local target="$APP_DIR/ui/dist/vosk-model-de.tar.gz"
   # No release bundle contains the model (it is gitignored and CI never fetches
@@ -560,56 +647,82 @@ pm2_service() {
 
 kiosk_session() {
   log "Kiosk session"
-  # No display manager: autologin on tty1 and startx. One less service, ~150 MB
-  # less RAM than a desktop environment, and the recovery path is a login.
-  sudo install -d /etc/systemd/system/getty@tty1.service.d
-  sudo tee /etc/systemd/system/getty@tty1.service.d/override.conf >/dev/null <<OVERRIDE
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin $USER --noclear %I \$TERM
-OVERRIDE
-  sudo systemctl daemon-reload
-  ok "Autologin for $USER on tty1"
+  #
+  # lightdm with autologin, not `startx` from a tty.
+  #
+  # The first machine ran the session from an agetty autologin, which saves a
+  # service and a few megabytes and looked like the right trade for a 4 GB
+  # machine. It is not: `startx` from a tty never registers a *graphical*
+  # session with logind, so `loginctl` reports `Type=tty` with no `Display`,
+  # and every tool that asks logind what display server is running concludes
+  # there is none. AnyDesk reports exactly that — "display server not supported
+  # (e.g. Wayland)" — on an X11 machine, which cost an evening to track down.
+  #
+  # The original reasoning confused a display manager with a desktop
+  # environment. GNOME is 1.2 GB; lightdm is single-digit megabytes, shows no
+  # greeter when autologin works, and brings the thing that was actually
+  # missing: a session logind calls `x11`, with the X cookie published where
+  # root can find it.
+  #
+  # The greeter is installed on purpose even though it is never shown. If
+  # autologin ever fails, a greeter is a login prompt a service tech can use;
+  # without one it is a black screen.
+  #
+  sudo install -d /usr/share/xsessions
+  sudo tee /usr/share/xsessions/kiosk.desktop >/dev/null <<SESSION
+[Desktop Entry]
+Name=Implenia Kiosk
+Comment=Chromium kiosk under Openbox
+Exec=$HOME/.xsession
+Type=Application
+SESSION
 
-  if ! grep -q 'exec startx' "$HOME/.bash_profile" 2>/dev/null; then
-    # bash reads .bash_profile *instead of* .profile, and Debian's .profile is
-    # what sources .bashrc — so creating this file without it would hand every
-    # service SSH session a bare shell.
-    [[ -f "$HOME/.bash_profile" ]] || cat > "$HOME/.bash_profile" <<'KEEPPROFILE'
-# shellcheck source=/dev/null
-[ -f "$HOME/.profile" ] && . "$HOME/.profile"
-KEEPPROFILE
-    cat >> "$HOME/.bash_profile" <<'PROFILE'
+  sudo install -d /etc/lightdm/lightdm.conf.d
+  sudo tee /etc/lightdm/lightdm.conf.d/50-kiosk.conf >/dev/null <<LIGHTDM
+[Seat:*]
+autologin-user=$USER
+autologin-user-timeout=0
+user-session=kiosk
+autologin-session=kiosk
+LIGHTDM
+  ok "lightdm autologin for $USER into the kiosk session"
 
-# Start the kiosk session on the console login, and only there, so an SSH
-# session from a service laptop still gets a plain shell.
-if [ "$(tty)" = "/dev/tty1" ] && [ -z "$DISPLAY" ]; then
-  exec startx
-fi
-PROFILE
-    ok "startx on console login"
-  else
-    skip "startx already in .bash_profile"
+  # Migration: a machine provisioned the old way starts X twice otherwise, once
+  # from the tty autologin and once from lightdm.
+  if [[ -f /etc/systemd/system/getty@tty1.service.d/override.conf ]]; then
+    sudo rm -f /etc/systemd/system/getty@tty1.service.d/override.conf
+    sudo systemctl daemon-reload
+    ok "Removed the old tty1 autologin override"
+  fi
+  if [[ -f "$HOME/.bash_profile" ]] && grep -q 'exec startx' "$HOME/.bash_profile"; then
+    sed -i '/# Start the kiosk session on the console login/,/^fi$/d' "$HOME/.bash_profile"
+    ok "Removed 'exec startx' from .bash_profile"
   fi
 
   local chromium_bin
   chromium_bin="$(command -v chromium || command -v chromium-browser)" \
     || die "No chromium binary found."
 
-  [[ -f "$HOME/.xinitrc" ]] && cp "$HOME/.xinitrc" "$HOME/.xinitrc.bak"
-  cat > "$HOME/.xinitrc" <<XINITRC
+  [[ -f "$HOME/.xsession" ]] && cp "$HOME/.xsession" "$HOME/.xsession.bak"
+  cat > "$HOME/.xsession" <<XSESSION
 #!/bin/sh
-# Kiosk session — written by provision-kiosk.sh (previous version: ~/.xinitrc.bak).
+# Kiosk session — written by provision-kiosk.sh (previous version: ~/.xsession.bak).
 #
-# X exits when this script exits, and agetty logs the kiosk user straight back
-# in, so the loop below is the whole recovery story: Chromium killed by the OOM
-# killer is back in two seconds, and a dead X server gets a fresh session.
+# Started by lightdm, which registers it with logind as a real x11 session and
+# publishes the X cookie where root can find it. lightdm restarts the session
+# if it exits, which is the recovery story; the Chromium loop below covers the
+# browser dying on its own.
 
 xset s off -dpms s noblank          # a blanked screen reads as a dead kiosk
 setxkbmap de 2>/dev/null || true
 unclutter -idle 0 &                 # no mouse pointer on a touchscreen
 udiskie --no-notify 2>/dev/null &   # mounts USB sticks under /media for USB updates
 openbox &
+
+# AnyDesk wants a client inside the session. The service usually starts one
+# itself once there is a session to attach to; this makes it certain. Before
+# Chromium, so the fullscreen kiosk window ends up on top.
+command -v anydesk >/dev/null && anydesk >/dev/null 2>&1 &
 
 # Chromium does not retry a failed load, so starting it before PM2 has the port
 # open would leave a permanent error page on a screen nobody can navigate.
@@ -619,25 +732,29 @@ while : ; do
   # Power loss is routine on site, and Chromium greets an unclean shutdown with
   # a "Restore pages?" bubble on top of the UI.
   if [ -f "$HOME/.config/chromium/Default/Preferences" ]; then
-    sed -i 's/"exited_cleanly":false/"exited_cleanly":true/; s/"exit_type":"[^"]*"/"exit_type":"Normal"/' \\
+    sed -i 's/"exited_cleanly":false/"exited_cleanly":true/; s/"exit_type":"[^"]*"/"exit_type":"Normal"/' \
       "$HOME/.config/chromium/Default/Preferences"
   fi
-  $chromium_bin --kiosk --app=http://localhost:$PORT \\
-    --no-first-run --no-default-browser-check \\
-    --disable-infobars --noerrdialogs --disable-session-crashed-bubble \\
-    --disable-features=Translate,TranslateUI \\
-    --password-store=basic \\
-    --overscroll-history-navigation=0 \\
-    --disable-pinch \\
-    --use-fake-ui-for-media-stream \\
-    --autoplay-policy=no-user-gesture-required \\
-    --check-for-update-interval=31536000 \\
+  $chromium_bin --kiosk --app=http://localhost:$PORT \
+    --no-first-run --no-default-browser-check \
+    --disable-infobars --noerrdialogs --disable-session-crashed-bubble \
+    --disable-features=Translate,TranslateUI \
+    --password-store=basic \
+    --overscroll-history-navigation=0 \
+    --disable-pinch \
+    --use-fake-ui-for-media-stream \
+    --autoplay-policy=no-user-gesture-required \
+    --check-for-update-interval=31536000 \
     --disable-component-update || true
   sleep 2
 done
-XINITRC
-  chmod +x "$HOME/.xinitrc"
-  ok "Chromium kiosk session written to ~/.xinitrc"
+XSESSION
+  chmod +x "$HOME/.xsession"
+  ok "Chromium kiosk session written to ~/.xsession"
+
+  sudo systemctl set-default graphical.target >/dev/null 2>&1 || true
+  sudo systemctl enable lightdm >/dev/null 2>&1 || true
+  ok "lightdm enabled at boot"
   skip "--overscroll-history-navigation=0 and --disable-pinch: a gloved swipe must not navigate back or zoom the 1024x768 layout"
   skip "--use-fake-ui-for-media-stream: grants the microphone without a prompt nobody could answer (voice commands)"
 }
@@ -732,20 +849,35 @@ remote_access() {
   if [[ -n "$ANYDESK_PASSWORD" ]]; then
     # Unattended access is the point: a worker cannot be talked through
     # accepting a session, and nobody is driving to the site to click Accept.
-    if printf '%s\n' "$ANYDESK_PASSWORD" | sudo anydesk --set-password >/dev/null 2>&1; then
+    # -H matters: Debian's sudo keeps the *invoking* user's HOME, so a plain
+    # `sudo anydesk` writes AnyDesk's config into /home/kiosk/.anydesk owned by
+    # root with mode 700. The user-level client then cannot open its own config
+    # directory and aborts instantly — no output, and no trace file, because
+    # the trace lives in that directory. Nothing in the session exposes the
+    # display after that, and the service reports display_server_not_supported,
+    # which sounds like anything but a permissions problem.
+    if printf '%s\n' "$ANYDESK_PASSWORD" | sudo -H anydesk --set-password >/dev/null 2>&1; then
       ok "Unattended access password set"
     else
-      warn "AnyDesk refused the password — it rejects weak ones. Set it by hand: printf '%s\\n' '<password>' | sudo anydesk --set-password"
+      warn "AnyDesk refused the ${#ANYDESK_PASSWORD}-character password — it wants at least 8, recommends over 12, and rejects simple patterns. Unattended access is NOT active. Set it by hand (the -H matters, or root takes ~/.anydesk back): printf '%s\\n' '<longer password>' | sudo -H anydesk --set-password"
     fi
   else
     warn "No password set, so a remote session must be accepted on the touchscreen. Pass --anydesk-password or put ANYDESK_PASSWORD in kiosk.conf."
+  fi
+
+  # Repair a home directory an earlier provisioning run poisoned: a root-owned
+  # ~/.anydesk is what makes the client abort, and re-running this script is how
+  # somebody would reasonably expect that to be fixed.
+  if [[ -d "$HOME/.anydesk" && ! -w "$HOME/.anydesk" ]]; then
+    sudo chown -R "$USER:$USER" "$HOME/.anydesk"
+    ok "Took back ~/.anydesk from root (an earlier run left it unusable for the client)"
   fi
 
   # The id only exists once the service has registered with AnyDesk's servers,
   # which needs internet — hence the wait rather than one hopeful call.
   local id="" tries=0
   while [[ $tries -lt 10 ]]; do
-    id="$(sudo anydesk --get-id 2>/dev/null | tr -dc '0-9' || true)"
+    id="$(sudo -H anydesk --get-id 2>/dev/null | tr -dc '0-9' || true)"
     [[ ${#id} -ge 6 ]] && break
     id=""
     tries=$((tries + 1))
@@ -794,6 +926,8 @@ summary() {
               MQTT settings. Nothing else needs typing on this machine.
 
 SUMMARY
+  show_warnings
+
   if [[ $NEEDS_REBOOT -eq 1 ]]; then
     warn "A reboot is needed for the kernel parameter, and it is also the test that matters: the machine must come up into the kiosk on its own."
     if [[ $ASSUME_YES -eq 0 ]]; then

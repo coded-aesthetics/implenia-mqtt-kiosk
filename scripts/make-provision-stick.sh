@@ -30,6 +30,7 @@ DEPS=""
 OUT=""
 PAYLOAD_PART_SIZE="8G"
 FILESYSTEM=""
+WITH_VOSK=0
 ASSUME_YES=0
 REPO="coded-aesthetics/implenia-mqtt-kiosk"
 ISO_BASE="https://cdimage.debian.org/debian-cd/current/amd64/iso-cd"
@@ -58,6 +59,8 @@ Usage: ./scripts/make-provision-stick.sh [options]
                       internet during setup
   --out DIR           Where to assemble the payload (default: a temp dir, or
                       ./provision-stick when no --device is given)
+  --with-vosk         Include the 46 MB speech model (voice is out of MVP
+                      scope, so it is left off by default)
   --filesystem FS     vfat or ext4 for the payload partition. The default is
                       vfat when mkfs.vfat is installed, ext4 otherwise — see
                       the note it prints.
@@ -76,6 +79,7 @@ while [[ $# -gt 0 ]]; do
     --anydesk-password) ANYDESK_PASSWORD="$2"; shift 2 ;;
     --deps)    DEPS="$2"; shift 2 ;;
     --out)     OUT="$2"; shift 2 ;;
+    --with-vosk) WITH_VOSK=1; shift ;;
     --filesystem) FILESYSTEM="$2"; shift 2 ;;
     --yes|-y)  ASSUME_YES=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -119,10 +123,13 @@ else
     || skip "No release archive — provisioning will fetch the newest release itself. Pass --latest to pin one onto the stick instead."
 fi
 
-# The speech model ships with no release (gitignored, and CI never fetches it),
-# and adding ~45 MB to every hourly self-update over a mobile link would be the
-# wrong fix. It goes on the stick and is provisioned once per machine.
-if [[ -s "$OUT/vosk-model-de.tar.gz" ]]; then
+# The speech model is left off the stick for the MVP: voice control is out of
+# scope, provisioning skips it unless asked, and it is 46 MB of a payload that
+# is otherwise about 5 MB — which matters most to the colleague copying it onto
+# a stick under Windows. --with-vosk puts it back for both.
+if [[ $WITH_VOSK -eq 0 ]]; then
+  skip "Speech model not included (voice is out of MVP scope) — pass --with-vosk when it returns"
+elif [[ -s "$OUT/vosk-model-de.tar.gz" ]]; then
   ok "Speech model already in the payload"
 elif [[ -s "$REPO_ROOT/ui/public/vosk-model-de.tar.gz" ]]; then
   cp "$REPO_ROOT/ui/public/vosk-model-de.tar.gz" "$OUT/"
