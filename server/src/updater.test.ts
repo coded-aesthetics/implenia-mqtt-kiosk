@@ -3,7 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
-import { parseVersionFromTarName, findUsbUpdates, verifyChecksum } from './updater.js';
+import { config } from './config.js';
+import {
+  updater,
+  parseVersionFromTarName,
+  findUsbUpdates,
+  verifyChecksum,
+  githubApiHeaders,
+  githubAssetHeaders,
+} from './updater.js';
 
 describe('parseVersionFromTarName', () => {
   it('extracts version from standard release filename', () => {
@@ -104,5 +112,91 @@ describe('verifyChecksum', () => {
     fs.writeFileSync(checksumPath, 'deadbeef00000000000000000000000000000000000000000000000000000000  app-v1.0.0.tar.gz\n');
 
     expect(verifyChecksum(tarPath, checksumPath)).toBe(false);
+  });
+});
+
+/**
+ * The distinction that cost every GitHub update.
+ *
+ * `/releases/assets/<id>` serves the asset's JSON metadata under the API's
+ * Accept and its bytes only under octet-stream, so downloading with the wrong
+ * one writes a JSON document into `app-vX.tar.gz` — 200, a body, a plausible
+ * size, and a checksum comparison between two blobs of metadata. The failure
+ * is invisible without the checksum and impossible to tell from a corrupt
+ * download with it.
+ */
+describe('GitHub request headers', () => {
+  it('asks for the bytes when downloading an asset', () => {
+    expect(githubAssetHeaders().Accept).toBe('application/octet-stream');
+  });
+
+  it('asks for JSON when reading the API', () => {
+    expect(githubApiHeaders().Accept).toBe('application/vnd.github.v3+json');
+  });
+
+  it('authenticates both, since the repo is private', () => {
+    expect(githubApiHeaders('t0ken').Authorization).toBe('token t0ken');
+    expect(githubAssetHeaders('t0ken').Authorization).toBe('token t0ken');
+  });
+
+  it('omits Authorization entirely without a token', () => {
+    expect('Authorization' in githubAssetHeaders()).toBe(false);
+    expect('Authorization' in githubApiHeaders(undefined)).toBe(false);
+  });
+
+  it('identifies itself, which the GitHub API requires', () => {
+    expect(githubAssetHeaders()['User-Agent']).toBe('implenia-kiosk-updater');
+  });
+});
+
+/**
+ * A failed apply has to say so.
+ *
+ * `update-applying` is emitted before the work starts and used to be a one-way
+ * latch — nothing cleared it — so any failure left the header announcing a
+ * restart that was never coming, with no way back but a page reload. On a
+ * construction site that is the dead end the resilience rules forbid, and
+ * until the asset-header fix above it was what *every* GitHub update did.
+ */
+describe('a failed apply reports itself', () => {
+  let tmpDir: string;
+  let originalPaths: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'updater-fail-'));
+    originalPaths = config.USB_UPDATE_PATHS;
+    (config as { USB_UPDATE_PATHS: string }).USB_UPDATE_PATHS = tmpDir;
+  });
+
+  afterEach(() => {
+    (config as { USB_UPDATE_PATHS: string }).USB_UPDATE_PATHS = originalPaths;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('emits update-failed with a German reason when the stick is gone', async () => {
+    const tarPath = path.join(tmpDir, 'app-v99.0.0.tar.gz');
+    fs.writeFileSync(tarPath, 'payload');
+    expect(updater.checkUsb()).toBe('99.0.0');
+
+    // The drive is pulled between the offer and the tap — the ordinary way this
+    // fails in the field.
+    fs.unlinkSync(tarPath);
+
+    const events: string[] = [];
+    const onApplying = () => events.push('applying');
+    const onFailed = (reason: string) => events.push(`failed:${reason}`);
+    updater.on('update-applying', onApplying);
+    updater.on('update-failed', onFailed);
+    try {
+      await updater.downloadAndApply();
+    } finally {
+      updater.off('update-applying', onApplying);
+      updater.off('update-failed', onFailed);
+    }
+
+    expect(events[0]).toBe('applying');
+    expect(events[1]).toMatch(/^failed:/);
+    // German and actionable: whoever tapped is standing at the machine.
+    expect(events[1]).toContain('USB-Stick');
   });
 });

@@ -85,6 +85,8 @@ interface WebSocketState {
   updateAvailable: string | null;
   updateSource: UpdateSource | null;
   updateApplying: boolean;
+  /** Why the last apply gave up, in German. Null while none has. */
+  updateFailure: string | null;
   replaySeeking: boolean;
 }
 
@@ -109,6 +111,7 @@ export function useWebSocket() {
     updateAvailable: null,
     updateSource: null,
     updateApplying: false,
+    updateFailure: null,
     replaySeeking: false,
   });
 
@@ -261,7 +264,20 @@ export function useWebSocket() {
 
           case 'update-applying':
             wasApplyingUpdate.current = true;
-            setState((prev) => ({ ...prev, updateApplying: true }));
+            setState((prev) => ({ ...prev, updateApplying: true, updateFailure: null }));
+            break;
+
+          // The apply gave up, so the app is not restarting after all. Clearing
+          // `wasApplyingUpdate` matters: left set, the next reconnect — a server
+          // restart hours later, for any reason — would reload the page as if
+          // the update had landed.
+          case 'update-failed':
+            wasApplyingUpdate.current = false;
+            setState((prev) => ({
+              ...prev,
+              updateApplying: false,
+              updateFailure: typeof msg.reason === 'string' ? msg.reason : 'Update fehlgeschlagen',
+            }));
             break;
 
           case 'replay-seeking':
