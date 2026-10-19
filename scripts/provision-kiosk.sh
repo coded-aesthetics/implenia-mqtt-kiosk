@@ -182,10 +182,11 @@ system_basics() {
   sudo apt-get install -y -qq --no-install-recommends \
     xserver-xorg xserver-xorg-core xinit x11-xserver-utils \
     xserver-xorg-input-libinput xserver-xorg-video-intel \
+    lightdm lightdm-gtk-greeter \
     openbox chromium unclutter fonts-dejavu-core \
     curl ca-certificates unzip sqlite3 ncurses-term xinput \
     dbus dbus-user-session udisks2 udiskie avahi-daemon
-  ok "X, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo for modern terminals"
+  ok "X, lightdm, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo for modern terminals"
 }
 
 # --- 2. kernel ------------------------------------------------------------
@@ -567,72 +568,81 @@ pm2_service() {
 
 kiosk_session() {
   log "Kiosk session"
-  # No display manager: autologin on tty1 and startx. One less service, ~150 MB
-  # less RAM than a desktop environment, and the recovery path is a login.
-  sudo install -d /etc/systemd/system/getty@tty1.service.d
-  sudo tee /etc/systemd/system/getty@tty1.service.d/override.conf >/dev/null <<OVERRIDE
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin $USER --noclear %I \$TERM
-OVERRIDE
-  sudo systemctl daemon-reload
-  ok "Autologin for $USER on tty1"
+  #
+  # lightdm with autologin, not `startx` from a tty.
+  #
+  # The first machine ran the session from an agetty autologin, which saves a
+  # service and a few megabytes and looked like the right trade for a 4 GB
+  # machine. It is not: `startx` from a tty never registers a *graphical*
+  # session with logind, so `loginctl` reports `Type=tty` with no `Display`,
+  # and every tool that asks logind what display server is running concludes
+  # there is none. AnyDesk reports exactly that — "display server not supported
+  # (e.g. Wayland)" — on an X11 machine, which cost an evening to track down.
+  #
+  # The original reasoning confused a display manager with a desktop
+  # environment. GNOME is 1.2 GB; lightdm is single-digit megabytes, shows no
+  # greeter when autologin works, and brings the thing that was actually
+  # missing: a session logind calls `x11`, with the X cookie published where
+  # root can find it.
+  #
+  # The greeter is installed on purpose even though it is never shown. If
+  # autologin ever fails, a greeter is a login prompt a service tech can use;
+  # without one it is a black screen.
+  #
+  sudo install -d /usr/share/xsessions
+  sudo tee /usr/share/xsessions/kiosk.desktop >/dev/null <<SESSION
+[Desktop Entry]
+Name=Implenia Kiosk
+Comment=Chromium kiosk under Openbox
+Exec=$HOME/.xsession
+Type=Application
+SESSION
 
-  if ! grep -q 'exec startx' "$HOME/.bash_profile" 2>/dev/null; then
-    # bash reads .bash_profile *instead of* .profile, and Debian's .profile is
-    # what sources .bashrc — so creating this file without it would hand every
-    # service SSH session a bare shell.
-    [[ -f "$HOME/.bash_profile" ]] || cat > "$HOME/.bash_profile" <<'KEEPPROFILE'
-# shellcheck source=/dev/null
-[ -f "$HOME/.profile" ] && . "$HOME/.profile"
-KEEPPROFILE
-    cat >> "$HOME/.bash_profile" <<'PROFILE'
+  sudo install -d /etc/lightdm/lightdm.conf.d
+  sudo tee /etc/lightdm/lightdm.conf.d/50-kiosk.conf >/dev/null <<LIGHTDM
+[Seat:*]
+autologin-user=$USER
+autologin-user-timeout=0
+user-session=kiosk
+autologin-session=kiosk
+LIGHTDM
+  ok "lightdm autologin for $USER into the kiosk session"
 
-# Start the kiosk session on the console login, and only there, so an SSH
-# session from a service laptop still gets a plain shell.
-if [ "$(tty)" = "/dev/tty1" ] && [ -z "$DISPLAY" ]; then
-  exec startx
-fi
-PROFILE
-    ok "startx on console login"
-  else
-    skip "startx already in .bash_profile"
+  # Migration: a machine provisioned the old way starts X twice otherwise, once
+  # from the tty autologin and once from lightdm.
+  if [[ -f /etc/systemd/system/getty@tty1.service.d/override.conf ]]; then
+    sudo rm -f /etc/systemd/system/getty@tty1.service.d/override.conf
+    sudo systemctl daemon-reload
+    ok "Removed the old tty1 autologin override"
+  fi
+  if [[ -f "$HOME/.bash_profile" ]] && grep -q 'exec startx' "$HOME/.bash_profile"; then
+    sed -i '/# Start the kiosk session on the console login/,/^fi$/d' "$HOME/.bash_profile"
+    ok "Removed 'exec startx' from .bash_profile"
   fi
 
   local chromium_bin
   chromium_bin="$(command -v chromium || command -v chromium-browser)" \
     || die "No chromium binary found."
 
-  [[ -f "$HOME/.xinitrc" ]] && cp "$HOME/.xinitrc" "$HOME/.xinitrc.bak"
-  cat > "$HOME/.xinitrc" <<XINITRC
+  [[ -f "$HOME/.xsession" ]] && cp "$HOME/.xsession" "$HOME/.xsession.bak"
+  cat > "$HOME/.xsession" <<XSESSION
 #!/bin/sh
-# Kiosk session — written by provision-kiosk.sh (previous version: ~/.xinitrc.bak).
+# Kiosk session — written by provision-kiosk.sh (previous version: ~/.xsession.bak).
 #
-# X exits when this script exits, and agetty logs the kiosk user straight back
-# in, so the loop below is the whole recovery story: Chromium killed by the OOM
-# killer is back in two seconds, and a dead X server gets a fresh session.
+# Started by lightdm, which registers it with logind as a real x11 session and
+# publishes the X cookie where root can find it. lightdm restarts the session
+# if it exits, which is the recovery story; the Chromium loop below covers the
+# browser dying on its own.
 
 xset s off -dpms s noblank          # a blanked screen reads as a dead kiosk
 setxkbmap de 2>/dev/null || true
-
-# AnyDesk's service runs as root, and this session's X cookie is a random file
-# in /tmp that root has no way to find — a display manager would publish it in
-# a known place, and there is deliberately no display manager here. Without
-# this, a remote session connects and ends immediately with
-# `display_server_not_supported`.
-#
-# Granting root specifically, rather than `xhost +local:`, which would admit
-# every local account. It concedes nothing in practice: root can already read
-# this machine's memory. Access control stays enabled for everyone else.
-xhost +si:localuser:root >/dev/null 2>&1 || true
 unclutter -idle 0 &                 # no mouse pointer on a touchscreen
 udiskie --no-notify 2>/dev/null &   # mounts USB sticks under /media for USB updates
 openbox &
 
-# AnyDesk needs a client *inside* the session: the root service alone captures
-# nothing without a display manager to hand it a session, and the package ships
-# no autostart entry of its own. Started before Chromium so the fullscreen
-# kiosk window ends up on top of it.
+# AnyDesk wants a client inside the session. The service usually starts one
+# itself once there is a session to attach to; this makes it certain. Before
+# Chromium, so the fullscreen kiosk window ends up on top.
 command -v anydesk >/dev/null && anydesk >/dev/null 2>&1 &
 
 # Chromium does not retry a failed load, so starting it before PM2 has the port
@@ -643,25 +653,29 @@ while : ; do
   # Power loss is routine on site, and Chromium greets an unclean shutdown with
   # a "Restore pages?" bubble on top of the UI.
   if [ -f "$HOME/.config/chromium/Default/Preferences" ]; then
-    sed -i 's/"exited_cleanly":false/"exited_cleanly":true/; s/"exit_type":"[^"]*"/"exit_type":"Normal"/' \\
+    sed -i 's/"exited_cleanly":false/"exited_cleanly":true/; s/"exit_type":"[^"]*"/"exit_type":"Normal"/' \
       "$HOME/.config/chromium/Default/Preferences"
   fi
-  $chromium_bin --kiosk --app=http://localhost:$PORT \\
-    --no-first-run --no-default-browser-check \\
-    --disable-infobars --noerrdialogs --disable-session-crashed-bubble \\
-    --disable-features=Translate,TranslateUI \\
-    --password-store=basic \\
-    --overscroll-history-navigation=0 \\
-    --disable-pinch \\
-    --use-fake-ui-for-media-stream \\
-    --autoplay-policy=no-user-gesture-required \\
-    --check-for-update-interval=31536000 \\
+  $chromium_bin --kiosk --app=http://localhost:$PORT \
+    --no-first-run --no-default-browser-check \
+    --disable-infobars --noerrdialogs --disable-session-crashed-bubble \
+    --disable-features=Translate,TranslateUI \
+    --password-store=basic \
+    --overscroll-history-navigation=0 \
+    --disable-pinch \
+    --use-fake-ui-for-media-stream \
+    --autoplay-policy=no-user-gesture-required \
+    --check-for-update-interval=31536000 \
     --disable-component-update || true
   sleep 2
 done
-XINITRC
-  chmod +x "$HOME/.xinitrc"
-  ok "Chromium kiosk session written to ~/.xinitrc"
+XSESSION
+  chmod +x "$HOME/.xsession"
+  ok "Chromium kiosk session written to ~/.xsession"
+
+  sudo systemctl set-default graphical.target >/dev/null 2>&1 || true
+  sudo systemctl enable lightdm >/dev/null 2>&1 || true
+  ok "lightdm enabled at boot"
   skip "--overscroll-history-navigation=0 and --disable-pinch: a gloved swipe must not navigate back or zoom the 1024x768 layout"
   skip "--use-fake-ui-for-media-stream: grants the microphone without a prompt nobody could answer (voice commands)"
 }

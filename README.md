@@ -956,7 +956,7 @@ things it handles that are easy to miss when installing by hand:
 ```
 
 With a desktop environment that honours `/etc/xdg/autostart`, the kiosk browser
-can go there instead of the provisioned `~/.xinitrc` session:
+can go there instead of the provisioned lightdm + `~/.xsession` session:
 
 ```bash
 sudo cp scripts/kiosk.desktop /etc/xdg/autostart/

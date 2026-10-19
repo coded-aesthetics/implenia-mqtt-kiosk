@@ -201,12 +201,12 @@ worth knowing are `--bundle` (install a specific release archive), `--no-vosk`
 | Config | `.env` from `.env.example`, sets `PORT`, `NODE_ENV`, `GITHUB_OWNER/REPO/TOKEN`, `chmod 600` | Everything else — broker, Verfahren, API credentials — is site configuration and belongs in the wizard, not on a stick |
 | Speech model | `ui/dist/vosk-model-de.tar.gz` from the stick, or downloaded | **No release contains it**: it is gitignored and CI never runs `download-vosk-model.sh`, so voice commands are silently off on a kiosk installed from a release. Shipping it in the bundle would add ~45 MB to every hourly update check's download over a mobile link, so it is provisioned once and survives updates |
 | Service | PM2, `kiosk-server`, systemd startup, `pm2 save` | The updater restarts by exiting and letting PM2 bring it back. Then waits for `/status` to answer before declaring success |
-| Session | agetty autologin on tty1 → `startx` → `~/.xinitrc` | No display manager: one less service, ~150 MB less RAM, and the recovery path is a login |
+| Session | **lightdm autologin** → `~/.xsession` → Openbox + Chromium | A display manager *is* needed, which the first version of this got wrong by confusing it with a desktop environment. `startx` from a tty autologin never registers a graphical session, so `loginctl` reports `Type=tty` with no `Display`, and anything that asks logind what display server is running — AnyDesk, portals, screen sharing — concludes there is none. GNOME is 1.2 GB; lightdm is single-digit megabytes and shows no greeter when autologin works |
 | Remote access | AnyDesk from its own apt repo, service enabled, unattended password set, id recorded | See [Remote access](#remote-access-anydesk). Never fatal: a kiosk that records and uploads but cannot be reached is still a kiosk |
 
 ### The kiosk session
 
-`~/.xinitrc` is the whole front end, and four things in it are load-bearing:
+`~/.xsession` is the whole front end, and four things in it are load-bearing:
 
 - **Chromium runs in a loop, and X exits with the script.** Chromium killed by
   the OOM killer is back in two seconds; a dead X server ends the session and
@@ -223,7 +223,7 @@ worth knowing are `--bundle` (install a specific release archive), `--no-vosk`
   permission prompt nobody could answer (voice commands)
 
 Edit it by hand if you must — the script keeps the previous version as
-`~/.xinitrc.bak` — but remember that re-running provisioning overwrites it.
+`~/.xsession.bak` — but remember that re-running provisioning overwrites it.
 
 ## Remote access (AnyDesk)
 
@@ -341,14 +341,19 @@ prebuild of its own.
 - **No unattended-upgrades.** It downloads packages, and the link on site is
   metered mobile — the same link the data reduction exists to spare. OS updates
   are a service task, done deliberately with a wired connection
-- **No desktop environment, no display manager, no file manager.** Every one of
-  them is RAM this machine does not have and a surface a worker could land in
+- **No desktop environment and no file manager.** Both are RAM this machine does
+  not have and a surface a worker could land in. A **display manager is
+  installed**, which is not the same thing and was the mistake in the first
+  version: lightdm costs single-digit megabytes and is what makes logind
+  register a real `x11` session. Its greeter is installed but never shown — if
+  autologin ever fails, a greeter is a login prompt, and no greeter is a black
+  screen
 - **`--max-restarts` is not capped** for `kiosk-server`, unlike
   `scripts/install-service.sh`. A kiosk that gives up needs a site visit; one
   that keeps retrying every 5 s recovers by itself when a transient cause clears
 - **`scripts/kiosk.desktop` is not used.** It belongs to an install that has a
   desktop environment honouring `/etc/xdg/autostart`; a provisioned kiosk
-  launches Chromium from `~/.xinitrc`
+  launches Chromium from `~/.xsession`, started by lightdm
 
 ## Troubleshooting
 
@@ -356,19 +361,19 @@ Reach a shell with `Ctrl+Alt+F2` (the kiosk session is on tty1), or over SSH.
 
 | Symptom | Cause and fix |
 |---|---|
-| Black screen after boot | X failed to start. `Ctrl+Alt+F2`, `startx` by hand and read the error. Missing `~/.xinitrc` → re-run provisioning |
+| Black screen after boot | `systemctl status lightdm` and `journalctl -u lightdm -b`. A missing or non-executable `~/.xsession` is the usual cause → re-run provisioning. If autologin failed you get lightdm's greeter, which is a login prompt rather than a dead machine |
 | Chromium shows "site cannot be reached" | The server is down: `pm2 logs kiosk-server`. The session waits for `/status`, so this means it answered once and stopped |
-| Screen goes blank after minutes | `xset` line missing from `~/.xinitrc` — re-run provisioning |
+| Screen goes blank after minutes | `xset` line missing from `~/.xsession` — re-run provisioning |
 | Random freezes, no logs | `cat /proc/cmdline | grep max_cstate`. If empty, the GRUB step did not take effect — re-run provisioning and reboot |
 | **Touch does nothing at all, mouse works** | udev mis-classified the controller, which is the normal state on this panel. Its eGalax/D-WAV SAW controller (`0eef:0001`) claims pen *and* finger tools, so libinput rejects the interface named "Touchscreen" (`missing tablet capabilities: resolution`) and adds another as a touchpad with pointer acceleration — the kernel sees every touch, X maps none to a coordinate. Provisioning installs `/etc/udev/rules.d/99-egalax-touchscreen.rules` to force the class; on a machine provisioned before that, re-run provisioning and reboot. Confirm with `DISPLAY=:0 xinput list`, and `~/.local/share/xorg/Xorg.0.log` is where the rejection is visible |
-| Touch taps land in the wrong place | `DISPLAY=:0 xinput list` for the id, then a calibration matrix: `xinput set-prop <id> "libinput Calibration Matrix" <9 floats>`. eGalax panels commonly need an inverted or swapped axis. Put the working command in `~/.xinitrc` so it survives a reboot |
+| Touch taps land in the wrong place | `DISPLAY=:0 xinput list` for the id, then a calibration matrix: `xinput set-prop <id> "libinput Calibration Matrix" <9 floats>`. eGalax panels commonly need an inverted or swapped axis. Put the working command in `~/.xsession` so it survives a reboot |
 | Voice commands do nothing | `ls -l /opt/kiosk/ui/dist/vosk-model-de.tar.gz`. Missing → provision it: that file is in no release |
-| A USB update stick is not detected | `findmnt /media/*` — nothing there means `udiskie` is not running (check `~/.xinitrc`). `USB_UPDATE_PATHS` defaults to `/media` |
+| A USB update stick is not detected | `findmnt /media/*` — nothing there means `udiskie` is not running (check `~/.xsession`). `USB_UPDATE_PATHS` defaults to `/media` |
 | No update banner ever | Private repo without a token: `grep GITHUB /opt/kiosk/.env`. Also `curl localhost:3000/api/logs?module=updater` |
-| "Restore pages?" bubble after power loss | The `Preferences` rewrite in `~/.xinitrc` is missing — re-run provisioning |
+| "Restore pages?" bubble after power loss | The `Preferences` rewrite in `~/.xsession` is missing — re-run provisioning |
 | No AnyDesk ID on the settings screen | `cat /opt/kiosk/anydesk-id.txt`. Empty or missing → the service had not registered when provisioning ran: `sudo anydesk --get-id`, write it into that file, no restart needed |
-| **AnyDesk ends the session with `display_server_not_supported`** | Almost certainly `~/.anydesk` owned by root, which makes the user-level client abort instantly — and without a client in the session there is nothing for the service to capture. Check with `ls -ld ~/.anydesk`; repair with `sudo chown -R kiosk:kiosk ~/.anydesk`, then re-run provisioning (which also starts the client in the session) and reboot. Provisioning before 2026-10-19 caused this itself, by calling `sudo anydesk` without `-H`: Debian's sudo keeps the invoking user's `HOME`, so root wrote the config into the kiosk user's home at mode 700. The message names a display problem and is a permissions problem |
-| AnyDesk connects, then the picture is black | If the grant above is in place and it is still black, the service is finding the display but not capturing it. Then add `anydesk &` to `~/.xinitrc` before the Chromium loop and reboot — not the default, because the AnyDesk window would sit over the kiosk |
+| **AnyDesk says "display server not supported (e.g. Wayland)"** on an X11 machine | logind does not know about the session. `loginctl show-session <id> -p Type` must say `x11`; `tty` means the session was started by `startx` rather than a display manager, and every tool that asks logind concludes there is no display server. Fixed by lightdm — re-run provisioning on a machine set up before that. The message's parenthetical is a guess and sends people hunting Wayland for hours |
+| AnyDesk connects, then the picture is black | The service sees the session but is not capturing it. `~/.xsession` starts a client in the session for this reason; check it is running with `pgrep -a -u kiosk anydesk` |
 | `apt install anydesk` fails on unmet dependencies | `libgcc1` — re-run provisioning, which builds the shim package, or install it by hand (see [Remote access](#remote-access-anydesk)) |
 | `anydesk --set-password` fails silently | It rejects weak passwords. Use a longer one |
 | The on-screen keyboard never appears | A production build enables it unconditionally, so if it is missing you are looking at a dev build or `localStorage.touchKeyboard` is `'off'`. Builds before 2026-10-19 gated it on `(any-pointer: coarse)` and so hid it whenever the touchscreen was not registered with X — i.e. exactly when it was needed |
