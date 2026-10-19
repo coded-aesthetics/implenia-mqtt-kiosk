@@ -41,6 +41,7 @@ GITHUB_TOKEN=""
 TIMEZONE="Europe/Berlin"
 SYS_LOCALE="de_DE.UTF-8"
 BUNDLE=""
+RELEASE_VERSION=""
 DEPS=""
 VOSK=""
 NEW_HOSTNAME=""
@@ -59,8 +60,10 @@ usage() {
 Usage: ./provision-kiosk.sh [options]
 
   --hostname NAME     Set the machine's hostname (e.g. kiosk-g08)
-  --bundle PATH       Release archive app-vX.Y.Z.tar.gz
-                      (default: newest one next to this script)
+  --bundle PATH       Install this release archive instead of fetching one
+  --version vX.Y.Z    Fetch this release instead of the newest. Without either,
+                      the newest GitHub release is fetched, and an archive next
+                      to this script is the fallback if that fails
   --deps PATH         Offline dependency archive (server/node_modules).
                       Without one, dependencies are installed from the network,
                       which needs --token.
@@ -88,6 +91,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --hostname)    NEW_HOSTNAME="$2"; shift 2 ;;
     --bundle)      BUNDLE="$2"; shift 2 ;;
+    --version)     RELEASE_VERSION="$2"; shift 2 ;;
     --deps)        DEPS="$2"; shift 2 ;;
     --vosk)        VOSK="$2"; shift 2 ;;
     --token)       GITHUB_TOKEN="$2"; shift 2 ;;
@@ -317,10 +321,95 @@ find_payload() {
   printf '%s\n' "${matches[@]}" | sort -V | tail -1
 }
 
+#
+# Fetch the release from GitHub rather than carrying it on the stick.
+#
+# A stick that holds app-v*.tar.gz ages, silently: provision a machine six
+# weeks later and it installs six-week-old code with nothing on screen saying
+# so, and the person who then reports the bugs is the one least able to know
+# they were fixed. The offline argument for bundling does not survive the rest
+# of this script either — apt, NodeSource and npm all need the network a few
+# steps earlier, so the archive was the one offline-capable part of an
+# otherwise online process.
+#
+# A private repo's assets cannot be fetched by browser_download_url; the API's
+# asset endpoint with `Accept: application/octet-stream` can. Node is installed
+# by the time this runs, which is what parses the release JSON — no hand-rolled
+# sed over someone else's API.
+#
+download_release() {
+  local tag="$1" outdir="$2"
+  [[ -n "$GITHUB_TOKEN" ]] || return 1
+  command -v node >/dev/null || return 1
+
+  local api="https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases"
+  local url="$api/latest"
+  [[ "$tag" == "latest" ]] || url="$api/tags/$tag"
+
+  local json
+  json="$(curl -fsSL --max-time 60 \
+    -H "Authorization: Bearer $GITHUB_TOKEN" \
+    -H "Accept: application/vnd.github+json" "$url")" || return 1
+
+  local lines
+  lines="$(printf '%s' "$json" | node -e '
+    let s = "";
+    process.stdin.on("data", (d) => { s += d; }).on("end", () => {
+      const r = JSON.parse(s);
+      console.log("tag	" + (r.tag_name || ""));
+      for (const a of r.assets || []) {
+        if (/^app-v.+\.tar\.gz$/.test(a.name) || a.name === "checksum.sha256") {
+          console.log("asset	" + a.id + "	" + a.name);
+        }
+      }
+    });
+  ')" || return 1
+
+  RELEASE_TAG="$(printf '%s\n' "$lines" | awk -F"\t" '$1=="tag" {print $2}')"
+  local got=0 id name
+  while IFS=$'\t' read -r kind id name; do
+    [[ "$kind" == "asset" ]] || continue
+    curl -fsSL --max-time 300 \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -H "Accept: application/octet-stream" \
+      -o "$outdir/$name" "$api/assets/$id" || return 1
+    [[ "$name" == app-v* ]] && got=1
+  done < <(printf '%s\n' "$lines")
+  [[ $got -eq 1 ]] || return 1
+  return 0
+}
+
 app_payload() {
   log "Application"
-  [[ -n "$BUNDLE" ]] || BUNDLE="$(find_payload 'app-v*.tar.gz')"
-  [[ -n "$BUNDLE" && -f "$BUNDLE" ]] || die "No release archive found. Put app-vX.Y.Z.tar.gz next to this script or pass --bundle."
+
+  local source="" dl=""
+  if [[ -n "$BUNDLE" ]]; then
+    source="von --bundle"
+  else
+    local want="latest"
+    if [[ -n "$RELEASE_VERSION" ]]; then
+      # Tags carry the v; accept it either way rather than failing on a typo.
+      want="$RELEASE_VERSION"
+      [[ "$want" == v* ]] || want="v$want"
+    fi
+    dl="$(mktemp -d)"
+    if download_release "$want" "$dl"; then
+      BUNDLE="$(ls -1 "$dl"/app-v*.tar.gz 2>/dev/null | head -1)"
+      source="aus GitHub Release ${RELEASE_TAG:-$want}"
+      ok "Fetched $(basename "$BUNDLE") from GitHub"
+    else
+      rm -rf "$dl"; dl=""
+      BUNDLE="$(find_payload 'app-v*.tar.gz')"
+      source="vom Stick"
+      if [[ -n "$BUNDLE" ]]; then
+        # Not fatal, but it must be said out loud: this is how a machine ends
+        # up on an old version without anybody choosing that.
+        warn "Could not fetch the release from GitHub — falling back to $(basename "$BUNDLE") on the stick, which may be older than the current release."
+      fi
+    fi
+  fi
+
+  [[ -n "$BUNDLE" && -f "$BUNDLE" ]] || die "No release to install: GitHub could not be reached (or no token is set) and there is no app-vX.Y.Z.tar.gz next to this script. Pass --bundle, or --version once connectivity is back."
 
   # Verify the checksum the release ships, if it came along.
   local sum="${BUNDLE%.tar.gz}.sha256"
@@ -338,7 +427,8 @@ app_payload() {
   # Untarring over the tree is exactly what the self-updater does, so this
   # leaves kiosk.db, .env, node_modules and the speech model in place.
   tar -xzf "$BUNDLE" -C "$APP_DIR"
-  ok "$(basename "$BUNDLE") extracted to $APP_DIR (version $(node -p "require('$APP_DIR/package.json').version" 2>/dev/null || echo '?'))"
+  ok "$(basename "$BUNDLE") extracted to $APP_DIR — Version $(node -p "require('$APP_DIR/package.json').version" 2>/dev/null || echo '?'), $source"
+  [[ -n "$dl" ]] && rm -rf "$dl"
 }
 
 app_deps() {
