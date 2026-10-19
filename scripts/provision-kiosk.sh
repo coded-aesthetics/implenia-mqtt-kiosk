@@ -218,14 +218,23 @@ system_basics() {
   # kiosk: without it a service tech SSHing in from kitty, alacritty, wezterm or
   # foot gets `Error opening terminal: xterm-kitty` from anything curses-based —
   # top, nano, htop — on the machine they were sent to fix.
+  #
+  # The audio stack is not optional either, for two reasons that both look like
+  # something else when it is missing. AnyDesk's backend does not degrade
+  # without a PulseAudio server — it crashes, and the session dies with
+  # `desk_rt_ipc_error`, which names the screen-sharing component. And the
+  # browser reaches the microphone through PulseAudio, so the voice features
+  # would simply do nothing, silently, on a machine that otherwise looks
+  # healthy. pipewire-pulse provides the Pulse interface both of them want.
   sudo apt-get install -y -qq --no-install-recommends \
     xserver-xorg xserver-xorg-core xinit x11-xserver-utils \
     xserver-xorg-input-libinput xserver-xorg-video-intel \
     lightdm lightdm-gtk-greeter \
     openbox chromium unclutter fonts-dejavu-core \
     curl ca-certificates unzip sqlite3 ncurses-term xinput \
+    pipewire pipewire-pulse wireplumber \
     dbus dbus-user-session udisks2 udiskie avahi-daemon
-  ok "X, lightdm, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo for modern terminals"
+  ok "X, lightdm, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo, audio (AnyDesk crashes without it, and the microphone needs it)"
 }
 
 # --- 2. kernel ------------------------------------------------------------
