@@ -622,6 +622,12 @@ unclutter -idle 0 &                 # no mouse pointer on a touchscreen
 udiskie --no-notify 2>/dev/null &   # mounts USB sticks under /media for USB updates
 openbox &
 
+# AnyDesk needs a client *inside* the session: the root service alone captures
+# nothing without a display manager to hand it a session, and the package ships
+# no autostart entry of its own. Started before Chromium so the fullscreen
+# kiosk window ends up on top of it.
+command -v anydesk >/dev/null && anydesk >/dev/null 2>&1 &
+
 # Chromium does not retry a failed load, so starting it before PM2 has the port
 # open would leave a permanent error page on a screen nobody can navigate.
 until curl -fs -o /dev/null http://localhost:$PORT/status; do sleep 1; done
@@ -743,7 +749,14 @@ remote_access() {
   if [[ -n "$ANYDESK_PASSWORD" ]]; then
     # Unattended access is the point: a worker cannot be talked through
     # accepting a session, and nobody is driving to the site to click Accept.
-    if printf '%s\n' "$ANYDESK_PASSWORD" | sudo anydesk --set-password >/dev/null 2>&1; then
+    # -H matters: Debian's sudo keeps the *invoking* user's HOME, so a plain
+    # `sudo anydesk` writes AnyDesk's config into /home/kiosk/.anydesk owned by
+    # root with mode 700. The user-level client then cannot open its own config
+    # directory and aborts instantly — no output, and no trace file, because
+    # the trace lives in that directory. Nothing in the session exposes the
+    # display after that, and the service reports display_server_not_supported,
+    # which sounds like anything but a permissions problem.
+    if printf '%s\n' "$ANYDESK_PASSWORD" | sudo -H anydesk --set-password >/dev/null 2>&1; then
       ok "Unattended access password set"
     else
       warn "AnyDesk refused the password — it rejects weak ones. Set it by hand: printf '%s\\n' '<password>' | sudo anydesk --set-password"
@@ -752,11 +765,19 @@ remote_access() {
     warn "No password set, so a remote session must be accepted on the touchscreen. Pass --anydesk-password or put ANYDESK_PASSWORD in kiosk.conf."
   fi
 
+  # Repair a home directory an earlier provisioning run poisoned: a root-owned
+  # ~/.anydesk is what makes the client abort, and re-running this script is how
+  # somebody would reasonably expect that to be fixed.
+  if [[ -d "$HOME/.anydesk" && ! -w "$HOME/.anydesk" ]]; then
+    sudo chown -R "$USER:$USER" "$HOME/.anydesk"
+    ok "Took back ~/.anydesk from root (an earlier run left it unusable for the client)"
+  fi
+
   # The id only exists once the service has registered with AnyDesk's servers,
   # which needs internet — hence the wait rather than one hopeful call.
   local id="" tries=0
   while [[ $tries -lt 10 ]]; do
-    id="$(sudo anydesk --get-id 2>/dev/null | tr -dc '0-9' || true)"
+    id="$(sudo -H anydesk --get-id 2>/dev/null | tr -dc '0-9' || true)"
     [[ ${#id} -ge 6 ]] && break
     id=""
     tries=$((tries + 1))
