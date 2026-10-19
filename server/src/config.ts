@@ -51,9 +51,19 @@ const envSchema = z.object({
   // recording data.
   GITHUB_OWNER: z.preprocess(blankAsUndefined, z.string().min(1).optional()),
   GITHUB_REPO: z.preprocess(blankAsUndefined, z.string().min(1).optional()),
+  /**
+   * Five minutes, not an hour.
+   *
+   * An update is announced only by the version indicator in the header, which
+   * nobody is watching — so the check has to be frequent enough that a tech who
+   * published a release a few minutes ago finds it there. One check is a single
+   * JSON request of a few kilobytes; at this interval that is on the order of a
+   * megabyte a day, which is small beside what a shift's measurements cost on
+   * the same link. The indicator can also be tapped to check immediately.
+   */
   UPDATE_CHECK_INTERVAL_MS: z.preprocess(
     blankAsUndefined,
-    z.coerce.number().positive().default(3_500_000),
+    z.coerce.number().positive().default(300_000),
   ),
 
   // Database. Defaults to <cwd>/kiosk.db. ':memory:' gives an ephemeral DB,

@@ -265,7 +265,7 @@ All three callers bound their wait on the platform at 8s (`SENSOR_RESOLVE_TIMEOU
 
 ### Sensor roles are pinned to the session
 
-A sensor's role (`depth`, `is_completed`, `geology_nr`, …) belongs to the **element**, not to the kiosk: implenia-web's wizard stamps it into `sensor.meta` at element creation and the backend serves it with `include_meta=true`. The kiosk's copies of the same CSVs are whatever its last release shipped. Two independent snapshots of one source — so resolving a role from the CSVs *at the moment of use* reads the wrong one for an element created before a role moved or a sensor was renamed, and for any session that outlives an auto-update (hourly, and a recording can run for a day).
+A sensor's role (`depth`, `is_completed`, `geology_nr`, …) belongs to the **element**, not to the kiosk: implenia-web's wizard stamps it into `sensor.meta` at element creation and the backend serves it with `include_meta=true`. The kiosk's copies of the same CSVs are whatever its last release shipped. Two independent snapshots of one source — so resolving a role from the CSVs *at the moment of use* reads the wrong one for an element created before a role moved or a sensor was renamed, and for any session that outlives an auto-update (a recording can run for a day).
 
 `beginRecording` therefore records each sensor's `role` and its real `name` in the session's `sensor_map` next to the id, and `sensorNameByRole` resolves from there — same reasoning as the ids, which have always been pinned rather than re-fetched. `findSensorNameByRole` stays the fallback for sessions recorded before this. Geology (`resolveSensors`) and post-upload completion (`autoMarkComplete`) both use it.
 
@@ -570,7 +570,7 @@ Clearing uses an empty string, never `null`: the batch endpoint types `string_se
 
 **Writes go by device id, never by element name.** `server/src/element-device.ts` resolves the name once via `GET /api/v1/measuring-device/self/child/name:<element>/resolve`, caches the id in memory, and retries a rejected write once if re-resolving yields a different id (an element device rebuilt in the platform). In memory and not in SQLite on purpose: every write by element happens online anyway, so a persisted id would only add a second source of truth that can go stale. The session sensor map is persisted for the opposite reason — the upload must survive restarts.
 
-The platform does now accept a `name:<element>` reference as the `device_id` of `readings/batch`, but the kiosk keeps resolving: that support landed in the backend after this kiosk shipped, and kiosks self-update hourly while the backend deploys separately, so both versions run in the field at once. Before it landed, the batch endpoint handed the path segment to `ValidateDeviceAccess`, which looks it up as a primary key — so `name:F-23` answered `401 device access error: device not found: name:F-23`, which reads like an auth problem and isn't. Worth knowing when reading older logs.
+The platform does now accept a `name:<element>` reference as the `device_id` of `readings/batch`, but the kiosk keeps resolving: that support landed in the backend after this kiosk shipped, and kiosks self-update on their own schedule while the backend deploys separately, so both versions run in the field at once. Before it landed, the batch endpoint handed the path segment to `ValidateDeviceAccess`, which looks it up as a primary key — so `name:F-23` answered `401 device access error: device not found: name:F-23`, which reads like an auth problem and isn't. Worth knowing when reading older logs.
 
 ## Phases
 
@@ -900,7 +900,7 @@ That batch claims no reading ids (the chunk that gridded them owns those), still
 1. A sensor with no `name` in the session's `sensor_map` is never gridded. The map is keyed by the *lowercased* name and the real spelling is not recoverable from it, so such a sensor takes the id-addressed route instead of being written to a sensor that may not exist. Sessions recorded before names were persisted therefore upload exactly as they always did.
 2. A `200` is not yet a success. The endpoint reports headers it could not match in `unknown_sensors` instead of failing, so `csvChunkProblem` treats any of *our* columns appearing there — and any shortfall in `rows_processed`, `failed_count` or `success` — as a failure.
 
-**Falling back.** If the *first* chunk fails structurally — 404/405/415 (a backend deployed before the endpoint existed; kiosks self-update hourly while the backend deploys separately, so the field runs both versions at once), unmatched column names, or an element the platform does not know — the whole session switches to the per-sensor route. Only the first chunk: nothing has been written at that point, so the switch is clean. A 5xx, a timeout or a network error is *not* structural; those mean "not now", and falling back on them would put the whole session back on the mobile link this change exists to spare.
+**Falling back.** If the *first* chunk fails structurally — 404/405/415 (a backend deployed before the endpoint existed; kiosks self-update on their own schedule while the backend deploys separately, so the field runs both versions at once), unmatched column names, or an element the platform does not know — the whole session switches to the per-sensor route. Only the first chunk: nothing has been written at that point, so the switch is clean. A 5xx, a timeout or a network error is *not* structural; those mean "not now", and falling back on them would put the whole session back on the mobile link this change exists to spare.
 
 A **422 is classified by its body, not by its status**, because the endpoint answers a refusal with the same JSON result as a success (`success` is `failed_count == 0 && rows_processed > 0`). An unmatched header and a statement timeout on the platform's own inserts therefore share one status: an unmatched name of ours or `rows_processed == 0` is structural, `failed_count` is a "not now", and a 422 the kiosk cannot parse falls back. An **element that does not resolve** is structural too, and is the one case where the per-sensor route is strictly more capable — the CSV endpoint is addressed per element device, while the per-sensor route is addressed by sensor id and needs no device at all. A resolve request that *failed to answer* is an ordinary transport failure, not this.
 
@@ -948,7 +948,7 @@ things it handles that are easy to miss when installing by hand:
   of scope for the MVP, and `--with-vosk` brings it back. It is also in no
   release (gitignored, and CI never runs `download-vosk-model.sh`), so it can
   only come from the stick or a download; putting it in the bundle would add
-  46 MB to every hourly update check over a mobile link
+  46 MB to every update check over a mobile link
 
 ### Linux, by hand (development machines, other distributions)
 
@@ -979,8 +979,8 @@ chrome.exe --kiosk --app=http://localhost:3000 --disable-infobars --noerrdialogs
 
 ## How Updates Work
 
-1. The server checks GitHub Releases hourly (configurable via `UPDATE_CHECK_INTERVAL_MS`)
-2. If a newer semver tag is found, it is recorded as pending and the UI shows a banner. **The poll only detects — it never installs.** Applying is a deliberate tap on "Installieren & neustarten" (`POST /api/update`), so a restart never arrives unannounced in the middle of a shift
+1. The server checks GitHub Releases every five minutes (`UPDATE_CHECK_INTERVAL_MS`), the first check ten seconds after boot
+2. If a newer semver tag is found, the **version indicator in the header** changes to two lines — `v0.3.1 installiert` over `v0.3.2 verfügbar`. There is no banner: an update is never urgent, and a bar across every screen is too much for a service action nobody asked for. **The poll only detects — it never installs.** Tapping the indicator turns it into `Wirklich updaten?`, and the second tap applies (`POST /api/update`); a tap anywhere else cancels. With no update known, a tap checks for one — which is also how the updater gets tested without waiting out the interval
 3. The route refuses while an element is being recorded, because applying restarts the process
 4. On apply, the `.tar.gz` asset is downloaded and its SHA256 verified against `checksum.sha256`
 5. The archive is extracted to a staging directory

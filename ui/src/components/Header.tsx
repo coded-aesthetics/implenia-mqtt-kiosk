@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { navigate } from '../hooks/useHashRouter';
 import type { OperatingMode } from '../hooks/useWebSocket';
 import { PhaseStepper, type AusrichtenSlot } from './PhaseStepper';
+import { VersionIndicator } from './VersionIndicator';
 import logo from '../../assets/implenia-logo.png';
 
 interface Props {
@@ -51,9 +52,17 @@ interface Props {
    * recording, which is why it may appear when `operatingMode` is null.
    */
   ausrichten?: AusrichtenSlot;
+  /**
+   * The newer version the updater found, announced only by the version
+   * indicator — there is no banner. An update is never urgent: the kiosk keeps
+   * recording and uploading on the version it has.
+   */
+  updateAvailable?: string | null;
+  updateApplying?: boolean;
+  updateSource?: 'github' | 'usb' | null;
 }
 
-export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode, onModeChange, hidePhaseStepper, ausrichten }: Props) {
+export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode, onModeChange, hidePhaseStepper, ausrichten, updateAvailable = null, updateApplying = false, updateSource = null }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -115,7 +124,7 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
         <span style={{ ...styles.dot, backgroundColor: connColor }} />
         <span style={styles.statusText}>{connLabel}</span>
         <span style={styles.divider} />
-        <span style={styles.versionText}>v{version}</span>
+        <VersionIndicator version={version} available={updateAvailable} applying={updateApplying} source={updateSource} />
         {voiceSupported && (
           <button
             onPointerDown={onMicPress}

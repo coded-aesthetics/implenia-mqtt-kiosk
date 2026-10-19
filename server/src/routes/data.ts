@@ -31,6 +31,22 @@ export function registerDataRoutes(app: FastifyInstance): void {
     return reply.send({ status: 'applying', version: updater.updateAvailable });
   });
 
+  /**
+   * Check now, rather than waiting for the next poll.
+   *
+   * The version indicator in the header is the only place an update is ever
+   * announced — there is no banner — so it has to be able to answer "is there
+   * one?" when somebody asks, not only when the timer next fires. It is also
+   * the only way to verify the updater at all without waiting out the interval
+   * or restarting the server.
+   */
+  app.post('/api/update/check', async (_request, reply) => {
+    // Only the available version: the UI already knows the installed one, and
+    // currentVersion is private for a reason.
+    const version = await updater.checkForUpdate();
+    return reply.send({ version });
+  });
+
   app.post('/api/update/upload', async (request, reply) => {
     const file = await request.file();
     if (!file) {
