@@ -46,7 +46,11 @@ DEPS=""
 VOSK=""
 NEW_HOSTNAME=""
 WITH_ZRAM=1
-WITH_VOSK=1
+# Off for the MVP. Voice control is opt-in at runtime anyway (the engine only
+# loads once somebody enables it), so the only thing it costs an install is the
+# 46 MB speech model — which is most of the stick's payload and most of the
+# time a machine spends provisioning. --with-vosk puts it back.
+WITH_VOSK=0
 WITH_ANYDESK=1
 ANYDESK_PASSWORD=""
 ANYDESK_ID=""
@@ -75,7 +79,9 @@ Usage: ./provision-kiosk.sh [options]
   --port N            Server port (default 3000)
   --node-major N      Node.js major version to install (default 22)
   --no-zram           Skip compressed swap
-  --no-vosk           Skip the speech model (voice commands stay off)
+  --with-vosk         Install the 46 MB speech model. Off by default: voice
+                      control is out of scope for the MVP, and the model is the
+                      bulk of both the payload and the install time
   --anydesk-password PW
                       Password for unattended remote access. Without one, a
                       remote session has to be accepted on the touchscreen.
@@ -99,7 +105,8 @@ while [[ $# -gt 0 ]]; do
     --port)        PORT="$2"; shift 2 ;;
     --node-major)  NODE_MAJOR="$2"; shift 2 ;;
     --no-zram)     WITH_ZRAM=0; shift ;;
-    --no-vosk)     WITH_VOSK=0; shift ;;
+    --with-vosk)   WITH_VOSK=1; shift ;;
+    --no-vosk)     WITH_VOSK=0; shift ;;   # accepted, already the default
     --anydesk-password) ANYDESK_PASSWORD="$2"; shift 2 ;;
     --no-anydesk)  WITH_ANYDESK=0; shift ;;
     --export-deps) EXPORT_DEPS="$2"; shift 2 ;;
@@ -219,13 +226,11 @@ system_basics() {
   # foot gets `Error opening terminal: xterm-kitty` from anything curses-based —
   # top, nano, htop — on the machine they were sent to fix.
   #
-  # The audio stack is not optional either, for two reasons that both look like
-  # something else when it is missing. AnyDesk's backend does not degrade
-  # without a PulseAudio server — it crashes, and the session dies with
-  # `desk_rt_ipc_error`, which names the screen-sharing component. And the
-  # browser reaches the microphone through PulseAudio, so the voice features
-  # would simply do nothing, silently, on a machine that otherwise looks
-  # healthy. pipewire-pulse provides the Pulse interface both of them want.
+  # The audio stack stays even with voice out of scope, because AnyDesk needs
+  # it: its backend does not degrade without a PulseAudio server, it crashes,
+  # and the session dies with `desk_rt_ipc_error` — a message naming the
+  # screen-sharing component. The browser also reaches the microphone through
+  # PulseAudio, so this is what voice will need when it returns.
   #
   # rtkit and pulseaudio-utils are Recommends that --no-install-recommends
   # drops, and both earn their place. Without rtkit, pipewire cannot get
@@ -583,7 +588,7 @@ app_env() {
 }
 
 vosk_model() {
-  [[ $WITH_VOSK -eq 1 ]] || { skip "Speech model skipped — voice commands stay off"; return; }
+  [[ $WITH_VOSK -eq 1 ]] || { skip "Speech model skipped (voice is out of MVP scope) — add --with-vosk when it comes back"; return; }
   log "Speech model"
   local target="$APP_DIR/ui/dist/vosk-model-de.tar.gz"
   # No release bundle contains the model (it is gitignored and CI never fetches

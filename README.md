@@ -944,10 +944,11 @@ things it handles that are easy to miss when installing by hand:
 - `npm install` runs inside `server/` with `--no-workspaces`: the bundle's root
   `package.json` declares `workspaces: ["server","ui"]` but ships no
   `ui/package.json`
-- **No release contains the Vosk speech model** (gitignored, and CI never runs
-  `download-vosk-model.sh`), so voice commands are silently off on a kiosk
-  installed from a release until the model is provisioned. It lands in
-  `ui/dist/` and survives self-updates, which untar over the tree
+- **The Vosk speech model is not installed by default** — voice control is out
+  of scope for the MVP, and `--with-vosk` brings it back. It is also in no
+  release (gitignored, and CI never runs `download-vosk-model.sh`), so it can
+  only come from the stick or a download; putting it in the bundle would add
+  46 MB to every hourly update check over a mobile link
 
 ### Linux, by hand (development machines, other distributions)
 

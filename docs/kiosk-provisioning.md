@@ -199,7 +199,7 @@ worth knowing are `--bundle` (install a specific release archive), `--no-vosk`
 | App | **Fetches the newest GitHub release**, verifies `checksum.sha256`, extracts into `/opt/kiosk` | `--version` pins one, `--bundle` installs a local archive, and an archive on the stick is the fallback when GitHub cannot be reached — announced as a warning, since that is how a machine ends up on an old version without anybody choosing it. Extracting is what the self-updater does, so `kiosk.db`, `.env`, `node_modules` and the speech model survive |
 | Dependencies | `npm install --omit=dev --no-workspaces` inside `server/`, or the offline archive | The bundle's root `package.json` declares `workspaces: ["server","ui"]` but ships no `ui/package.json`, so a root install fails. `server/node_modules` is where Node resolves from for `server/dist/*` anyway. An `.npmrc` with the token is written because `@coded-aesthetics/din4023` is a private GitHub Packages dependency and the bundle carries no `.npmrc`. It then loads `better-sqlite3` to prove the native modules match this machine |
 | Config | `.env` from `.env.example`, sets `PORT`, `NODE_ENV`, `GITHUB_OWNER/REPO/TOKEN`, `chmod 600` | Everything else — broker, Verfahren, API credentials — is site configuration and belongs in the wizard, not on a stick |
-| Speech model | `ui/dist/vosk-model-de.tar.gz` from the stick, or downloaded | **No release contains it**: it is gitignored and CI never runs `download-vosk-model.sh`, so voice commands are silently off on a kiosk installed from a release. Shipping it in the bundle would add ~45 MB to every hourly update check's download over a mobile link, so it is provisioned once and survives updates |
+| Speech model | **Skipped** unless `--with-vosk` | Voice control is out of scope for the MVP, and the model is 46 MB of an otherwise ~5 MB payload. It is also in no release — gitignored, and CI never runs `download-vosk-model.sh` — so when voice returns it has to come from the stick or a download, never from an update, which would otherwise put 46 MB on every hourly check over a mobile link |
 | Service | PM2, `kiosk-server`, systemd startup, `pm2 save` | The updater restarts by exiting and letting PM2 bring it back. Then waits for `/status` to answer before declaring success |
 | Session | **lightdm autologin** → `~/.xsession` → Openbox + Chromium | A display manager *is* needed, which the first version of this got wrong by confusing it with a desktop environment. `startx` from a tty autologin never registers a graphical session, so `loginctl` reports `Type=tty` with no `Display`, and anything that asks logind what display server is running — AnyDesk, portals, screen sharing — concludes there is none. GNOME is 1.2 GB; lightdm is single-digit megabytes and shows no greeter when autologin works |
 | Remote access | AnyDesk from its own apt repo, service enabled, unattended password set, id recorded | See [Remote access](#remote-access-anydesk). Never fatal: a kiosk that records and uploads but cannot be reached is still a kiosk |
@@ -306,9 +306,6 @@ Before the machine leaves:
       repeating errors
 - [ ] Tap a text field — the on-screen keyboard appears and the recording bar
       stays visible
-- [ ] For a machine that will use voice: a microphone is fitted and
-      `pactl list sources short` lists it. The panel has an analog input but no
-      microphone of its own
 - [ ] `ssh kiosk@kiosk-<rig>.local` works from a service laptop
 - [ ] **Einstellungen → System** shows the AnyDesk ID, and a test session from
       a service laptop connects without anybody touching the screen
@@ -341,6 +338,11 @@ prebuild of its own.
 
 ## Deliberately not done
 
+- **No voice control, for now.** It is out of scope for the MVP, so the 46 MB
+  speech model is not installed and `--with-vosk` is what brings it back. The
+  audio stack *is* installed regardless — AnyDesk's backend crashes without a
+  PulseAudio server — so the machine is ready for voice whenever it returns,
+  minus a microphone, which the panel does not have built in
 - **No unattended-upgrades.** It downloads packages, and the link on site is
   metered mobile — the same link the data reduction exists to spare. OS updates
   are a service task, done deliberately with a wired connection
