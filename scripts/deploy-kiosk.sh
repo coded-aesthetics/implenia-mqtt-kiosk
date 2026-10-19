@@ -74,7 +74,9 @@ fi
 log "Shipping"
 # Extracting over the tree is what the updater does, so kiosk.db, .env,
 # node_modules and the speech model are all left alone.
-tar -czf - -C "$REPO_ROOT" server/dist server/assets ui/dist \
+# The speech model is excluded: 46 MB per iteration over a site's network for
+# a file that is already on the machine and never changes.
+tar -czf - -C "$REPO_ROOT" --exclude='vosk-model-de.tar.gz' server/dist server/assets ui/dist \
   | ssh "$HOST" "tar -xzf - -C '$APP_DIR'" \
   || die "Transfer failed."
 ok "server/dist, server/assets, ui/dist"

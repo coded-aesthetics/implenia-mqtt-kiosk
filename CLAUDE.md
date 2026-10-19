@@ -75,6 +75,18 @@ The self-updater on the kiosk polls GitHub Releases hourly, compares semver agai
 
 **Rollup platform binaries**: `package-lock.json` is generated on macOS and only contains resolved entries for macOS-specific optional dependencies (e.g. `@rollup/rollup-darwin-arm64`). Running `npm ci` on Linux (GitHub Actions) fails because the linux binary (`@rollup/rollup-linux-x64-gnu`) isn't in the lockfile. The CI workflow uses `npm install` instead of `npm ci` to let npm resolve platform-appropriate binaries. Do not switch CI back to `npm ci` without first ensuring the lockfile contains cross-platform entries.
 
+**CI runs Node 24, not 20**: the workflows delete `package-lock.json` and run
+`npm install`, so every run resolves the dependency tree fresh — and on
+2026-10-19 that tree started crashing npm 10.8.2 (Node 20's bundled npm) with
+`Cannot read properties of null (reading 'edgesOut')`, an arborist bug reached
+by a transitive dependency published since the previous green run. No manifest
+in this repo had changed. npm 11 resolves the identical tree in 18 s, so both
+workflows run Node 24 — which is also the major `scripts/provision-kiosk.sh`
+installs on a kiosk, so CI now builds on the version the field runs. Do not
+drop it back to 20 without first making `npm ci` viable (see the Rollup note
+above): a fresh resolve on every run is what exposes the repo to registry churn
+in the first place.
+
 **lodash pinned to 4.17.21**: lodash 4.18.0 removed `assignWith` which breaks `workbox-build` (used by `vite-plugin-pwa`). The root `package.json` pins `"lodash": "4.17.21"` as a top-level override. Do not remove this pin.
 
 **GitHub Packages auth**: The `@coded-aesthetics/din4023` package is hosted on GitHub Packages (private). CI uses `GITHUB_TOKEN` with `packages: read` permission. The `.npmrc` scopes `@coded-aesthetics` to `npm.pkg.github.com`. The server depends on it too, for the DIN 4023 tables — only its root entry, which carries no React.

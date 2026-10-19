@@ -63,7 +63,14 @@ die()  { printf '\n\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 #
 derive_version() {
   local last base major minor n sha dirty=""
-  last="$(git -C "$REPO_ROOT" describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo 'v0.0.0')"
+  # The highest tag in the repo, not `git describe`. describe only considers
+  # tags **reachable from HEAD**, and v0.2.0 sits off this line of history — so
+  # it answered v0.1.0 and the derived version came out 0.2.0-dev.81, *below*
+  # the published v0.2.0. A kiosk installed with that would have been offered
+  # April's release as an update and quietly downgraded: exactly what the next
+  # minor is here to prevent.
+  last="$(git -C "$REPO_ROOT" tag --list 'v[0-9]*' --sort=-v:refname | head -n1)"
+  [[ -n "$last" ]] || last="v0.0.0"
   base="${last#v}"
   IFS=. read -r major minor _ <<< "$base"
   n="$(git -C "$REPO_ROOT" rev-list --count "${last}..HEAD" 2>/dev/null || echo 0)"
@@ -107,6 +114,11 @@ mkdir -p "$STAGE/server/dist" "$STAGE/server/assets" "$STAGE/ui/dist"
 cp -r "$REPO_ROOT/server/dist/." "$STAGE/server/dist/"
 cp -r "$REPO_ROOT/server/assets/." "$STAGE/server/assets/"
 cp -r "$REPO_ROOT/ui/dist/." "$STAGE/ui/dist/"
+# The speech model is in ui/dist on a machine that has run
+# download-vosk-model.sh, and CI never has it — keeping it would make this
+# bundle 46 MB bigger than the release it imitates, for a file provisioning
+# already places and that survives every update.
+rm -f "$STAGE/ui/dist/vosk-model-de.tar.gz"
 cp "$REPO_ROOT/server/package.json" "$STAGE/server/"
 cp "$REPO_ROOT/package.json" "$STAGE/"
 cp "$REPO_ROOT/.env.example" "$STAGE/"
