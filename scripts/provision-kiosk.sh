@@ -607,6 +607,17 @@ PROFILE
 
 xset s off -dpms s noblank          # a blanked screen reads as a dead kiosk
 setxkbmap de 2>/dev/null || true
+
+# AnyDesk's service runs as root, and this session's X cookie is a random file
+# in /tmp that root has no way to find — a display manager would publish it in
+# a known place, and there is deliberately no display manager here. Without
+# this, a remote session connects and ends immediately with
+# `display_server_not_supported`.
+#
+# Granting root specifically, rather than `xhost +local:`, which would admit
+# every local account. It concedes nothing in practice: root can already read
+# this machine's memory. Access control stays enabled for everyone else.
+xhost +si:localuser:root >/dev/null 2>&1 || true
 unclutter -idle 0 &                 # no mouse pointer on a touchscreen
 udiskie --no-notify 2>/dev/null &   # mounts USB sticks under /media for USB updates
 openbox &
