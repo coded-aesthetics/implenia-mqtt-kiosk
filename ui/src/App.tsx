@@ -10,6 +10,7 @@ import { ConfigPage } from './components/ConfigPage';
 import { ShiftAssignment } from './components/ShiftAssignment';
 import { ElementDetail } from './components/ElementDetail';
 import { VoiceFeedbackOverlay } from './components/VoiceFeedbackOverlay';
+import { TouchKeyboard } from './components/TouchKeyboard';
 import { CommentQueuePage } from './components/CommentQueuePage';
 import { SetupWizard } from './components/SetupWizard';
 import { TopicAssignment } from './components/TopicAssignment';
@@ -620,6 +621,13 @@ export function App() {
       }}>
         {content}
       </main>
+      {/*
+        Between main and the recording bar on purpose: main is flex:1, so the
+        keyboard takes its height out of main instead of covering it, and the
+        bar stays visible while somebody types. Renders nothing until an input
+        is focused.
+      */}
+      <TouchKeyboard />
       <RecordingBar
         currentPage={route.page}
         elementName={route.params.name}
