@@ -311,6 +311,7 @@ Reach a shell with `Ctrl+Alt+F2` (the kiosk session is on tty1), or over SSH.
 | `apt install anydesk` fails on unmet dependencies | `libgcc1` — re-run provisioning, which builds the shim package, or install it by hand (see [Remote access](#remote-access-anydesk)) |
 | `anydesk --set-password` fails silently | It rejects weak passwords. Use a longer one |
 | The on-screen keyboard never appears | It is enabled by `any-pointer: coarse`. On a machine with no touchscreen, force it: `localStorage.touchKeyboard = 'on'` in the browser console. `'off'` disables it |
+| `Error opening terminal: xterm-kitty` over SSH | The client's `TERM` has no terminfo entry on the machine. Provisioning installs `ncurses-term`, which covers kitty, alacritty, wezterm and foot; on a machine provisioned before that, `export TERM=xterm-256color` or `sudo apt install ncurses-term` |
 | `npm install` fails with 401/403 | The token is missing, expired, or lacks `read:packages` for `@coded-aesthetics` |
 
 ## The token

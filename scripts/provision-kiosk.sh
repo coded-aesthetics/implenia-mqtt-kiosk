@@ -164,13 +164,17 @@ system_basics() {
   # be named explicitly here — without the libinput driver the server comes up
   # and sees no touchscreen at all. dbus-user-session is what udiskie needs to
   # reach udisks. polkit is not named: udisks2 depends on it.
+  # ncurses-term is the one entry here that is purely for the people, not the
+  # kiosk: without it a service tech SSHing in from kitty, alacritty, wezterm or
+  # foot gets `Error opening terminal: xterm-kitty` from anything curses-based —
+  # top, nano, htop — on the machine they were sent to fix.
   sudo apt-get install -y -qq --no-install-recommends \
     xserver-xorg xserver-xorg-core xinit x11-xserver-utils \
     xserver-xorg-input-libinput xserver-xorg-video-intel \
     openbox chromium unclutter fonts-dejavu-core \
-    curl ca-certificates unzip sqlite3 \
+    curl ca-certificates unzip sqlite3 ncurses-term \
     dbus dbus-user-session udisks2 udiskie avahi-daemon
-  ok "X, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local)"
+  ok "X, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo for modern terminals"
 }
 
 # --- 2. kernel ------------------------------------------------------------
