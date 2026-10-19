@@ -1,5 +1,14 @@
+# Kiosk browser autostart for installs that have a desktop environment
+# honouring /etc/xdg/autostart. A machine provisioned with
+# scripts/provision-kiosk.sh does NOT use this file — it launches Chromium from
+# ~/.xinitrc, with no desktop environment at all. See
+# docs/kiosk-provisioning.md.
+#
+# The binary is `chromium` on Debian and `chromium-browser` on Ubuntu, hence
+# the lookup: an Exec naming the wrong one fails silently, leaving a kiosk with
+# no browser and nothing on screen to say why.
 [Desktop Entry]
 Type=Application
 Name=Implenia Kiosk
-Exec=chromium-browser --kiosk --app=http://localhost:3000 --disable-infobars --noerrdialogs --disable-session-crashed-bubble --disable-translate
+Exec=sh -c 'exec "$(command -v chromium || command -v chromium-browser)" --kiosk --app=http://localhost:3000 --no-first-run --no-default-browser-check --disable-infobars --noerrdialogs --disable-session-crashed-bubble --disable-features=Translate,TranslateUI --password-store=basic --overscroll-history-navigation=0 --disable-pinch --use-fake-ui-for-media-stream --disable-component-update'
 X-GNOME-Autostart-enabled=true
