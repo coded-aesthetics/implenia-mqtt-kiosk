@@ -20,8 +20,16 @@ office, once per release        on the machine, once per machine
 ## The target machine
 
 Senor Tech **iSPOS 195 P V** — Celeron J1900 (Bay Trail, 4 cores), 4 GB RAM,
-1024x768 capacitive touch, 10 points. Ships with Windows; the shipped disk is
-imaged before wiping, so the disk can be erased without further thought.
+1024x768. Ships with Windows; the shipped disk is imaged before wiping, so it
+can be erased without further thought.
+
+The touch panel is an **eGalax/D-WAV Titan6001 Surface Acoustic Wave**
+controller (`0eef:0001`), **single touch** — not the 10-point capacitive panel
+the spec sheet suggested. SAW responds to a gloved finger, which is what
+matters on site, and also to a resting palm or a water drop, which capacitive
+would ignore. There is no multi-touch on this hardware, so no gesture can be
+designed for it. It also needs a udev rule before X will use it at all — see
+[the troubleshooting table](#troubleshooting).
 
 Anything else x86_64 works, but the two hardware-specific decisions below
 (`intel_idle.max_cstate=1`, no desktop environment) are made for this one.
