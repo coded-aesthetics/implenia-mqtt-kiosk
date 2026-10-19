@@ -226,13 +226,21 @@ system_basics() {
   # browser reaches the microphone through PulseAudio, so the voice features
   # would simply do nothing, silently, on a machine that otherwise looks
   # healthy. pipewire-pulse provides the Pulse interface both of them want.
+  #
+  # rtkit and pulseaudio-utils are Recommends that --no-install-recommends
+  # drops, and both earn their place. Without rtkit, pipewire cannot get
+  # realtime scheduling and logs `RTKit error` on every start — on a J1900
+  # already running Chromium, capture glitches are exactly what would make
+  # speech recognition unreliable in a way nobody could diagnose.
+  # pulseaudio-utils brings `pactl`, which is how anybody answers "does this
+  # machine have a microphone" — the same argument as xinput for touch.
   sudo apt-get install -y -qq --no-install-recommends \
     xserver-xorg xserver-xorg-core xinit x11-xserver-utils \
     xserver-xorg-input-libinput xserver-xorg-video-intel \
     lightdm lightdm-gtk-greeter \
     openbox chromium unclutter fonts-dejavu-core \
     curl ca-certificates unzip sqlite3 ncurses-term xinput \
-    pipewire pipewire-pulse wireplumber \
+    pipewire pipewire-pulse wireplumber rtkit pulseaudio-utils \
     dbus dbus-user-session udisks2 udiskie avahi-daemon
   ok "X, lightdm, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo, audio (AnyDesk crashes without it, and the microphone needs it)"
 }
