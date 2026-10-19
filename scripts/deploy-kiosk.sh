@@ -96,7 +96,10 @@ fi
 
 log "Verifying"
 for _ in $(seq 1 20); do
-  if ssh "$HOST" "curl -fsS -o /dev/null http://localhost:$PORT/status"; then
+  # -fs, not -fsS: the first attempts land while PM2 is still starting, and
+  # `curl: (7) Failed to connect` above a green tick teaches people to distrust
+  # a successful deploy.
+  if ssh "$HOST" "curl -fs -o /dev/null http://localhost:$PORT/status"; then
     ok "Server answers on $PORT"
     exit 0
   fi

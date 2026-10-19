@@ -20,8 +20,16 @@ office, once per release        on the machine, once per machine
 ## The target machine
 
 Senor Tech **iSPOS 195 P V** — Celeron J1900 (Bay Trail, 4 cores), 4 GB RAM,
-1024x768 capacitive touch, 10 points. Ships with Windows; the shipped disk is
-imaged before wiping, so the disk can be erased without further thought.
+1024x768. Ships with Windows; the shipped disk is imaged before wiping, so it
+can be erased without further thought.
+
+The touch panel is an **eGalax/D-WAV Titan6001 Surface Acoustic Wave**
+controller (`0eef:0001`), **single touch** — not the 10-point capacitive panel
+the spec sheet suggested. SAW responds to a gloved finger, which is what
+matters on site, and also to a resting palm or a water drop, which capacitive
+would ignore. There is no multi-touch on this hardware, so no gesture can be
+designed for it. It also needs a udev rule before X will use it at all — see
+[the troubleshooting table](#troubleshooting).
 
 Anything else x86_64 works, but the two hardware-specific decisions below
 (`intel_idle.max_cstate=1`, no desktop environment) are made for this one.
@@ -180,7 +188,7 @@ worth knowing are `--bundle` (install a specific release archive), `--no-vosk`
 | System | Hostname, `Europe/Berlin`, `de_DE.UTF-8`, X + Openbox + Chromium + `unclutter`, `udiskie`, `avahi-daemon` | `--no-install-recommends` throughout: no print spooler, no mail agent, no desktop. `udiskie` mounts USB sticks under `/media`, which is where `USB_UPDATE_PATHS` looks — with no desktop environment nothing would mount them otherwise. `avahi` makes the machine reachable as `kiosk-g08.local` for service SSH |
 | Kernel | `intel_idle.max_cstate=1` | Bay Trail hangs at random in deep C-states. A frozen screen on site is the failure this product exists to avoid, so the workaround goes on every machine rather than waiting for a report |
 | Swap | zram, 50% of RAM, zstd | 4 GB shared with Chromium. Compressed swap in RAM beats swapping to the disk the database is on |
-| Node | NodeSource, major 22, plus PM2 | Not the newest on purpose: better-sqlite3 11.x ships no prebuild for Node 24, so Node 24 compiles it from source and that build aborts on teardown (`Assertion failed: (env) != nullptr`). Node 22 is the prebuild the project ships. The major also has to match whatever built an offline dependency archive |
+| Node | NodeSource, major 22, **npm 11 over it**, plus PM2 | Two separate pins. Node 22 because better-sqlite3 11.x ships no prebuild for Node 24, so Node 24 compiles it from source and that build aborts on teardown (`Assertion failed: (env) != nullptr`); 22 is the prebuild the project ships, and the major also has to match whatever built an offline dependency archive. npm 11 because Node 22's bundled npm 10.9 **cannot resolve this tree at all** — it dies with `Cannot read properties of null (reading 'edgesOut')`, which is what the Dependencies step looks like without the pin |
 | App | Extracts the release archive into `/opt/kiosk` | Exactly what the self-updater does, so `kiosk.db`, `.env`, `node_modules` and the speech model survive it. Verifies `checksum.sha256` first |
 | Dependencies | `npm install --omit=dev --no-workspaces` inside `server/`, or the offline archive | The bundle's root `package.json` declares `workspaces: ["server","ui"]` but ships no `ui/package.json`, so a root install fails. `server/node_modules` is where Node resolves from for `server/dist/*` anyway. An `.npmrc` with the token is written because `@coded-aesthetics/din4023` is a private GitHub Packages dependency and the bundle carries no `.npmrc`. It then loads `better-sqlite3` to prove the native modules match this machine |
 | Config | `.env` from `.env.example`, sets `PORT`, `NODE_ENV`, `GITHUB_OWNER/REPO/TOKEN`, `chmod 600` | Everything else — broker, Verfahren, API credentials — is site configuration and belongs in the wizard, not on a stick |
@@ -237,15 +245,16 @@ Three things worth knowing:
   registers on first run, so provisioning a machine with no internet leaves no
   id. The script waits 20 s and then says so; re-run it once the machine is
   online, or write the id into `/opt/kiosk/anydesk-id.txt` by hand
-- **AnyDesk's `.deb` still depends on `libgcc1`**, a package Debian dropped
-  after bookworm in favour of `libgcc-s1`, and nothing in trixie provides the
-  old name — so `apt install anydesk` fails outright. Provisioning installs a
-  shim package that provides the name (versioned, since an unversioned
-  `Provides` does not satisfy a versioned dependency) and depends on
-  `libgcc-s1`. It is built only when apt's own simulation says the dependency
-  is unmet, so a fixed AnyDesk package installs on its own terms. Repacking
-  AnyDesk's `.deb` instead would have left apt permanently unable to satisfy
-  the repo version — i.e. a fleet that silently stops getting AnyDesk updates
+- **AnyDesk's `.deb` declares `Depends: libgcc1`**, a package name Debian
+  dropped after bookworm in favour of `libgcc-s1`. **In practice this did not
+  bite:** on the first real install — Debian 13.7, AnyDesk 8.1.0 — apt resolved
+  it and the shim was never built. Provisioning carries a shim package that
+  provides the name (versioned, since an unversioned `Provides` does not
+  satisfy a versioned dependency) and depends on `libgcc-s1`, but it is built
+  *only* when apt's own simulation says the dependency is unmet. Treat it as a
+  fallback for a future archive state, not as a problem you will meet.
+  Repacking AnyDesk's `.deb` instead would have left apt permanently unable to
+  satisfy the repo version — a fleet that silently stops getting AnyDesk updates
 - **An idle AnyDesk keeps a connection to AnyDesk's servers**, over the metered
   mobile link this project otherwise works hard to spare. It is a keepalive,
   not a stream, but it is not nothing — worth watching on the first pilot
@@ -343,7 +352,8 @@ Reach a shell with `Ctrl+Alt+F2` (the kiosk session is on tty1), or over SSH.
 | Chromium shows "site cannot be reached" | The server is down: `pm2 logs kiosk-server`. The session waits for `/status`, so this means it answered once and stopped |
 | Screen goes blank after minutes | `xset` line missing from `~/.xinitrc` — re-run provisioning |
 | Random freezes, no logs | `cat /proc/cmdline | grep max_cstate`. If empty, the GRUB step did not take effect — re-run provisioning and reboot |
-| Touch taps land in the wrong place | `xinput list`, then `xinput map-to-output <id> <output>`. Add it to `~/.xinitrc` |
+| **Touch does nothing at all, mouse works** | udev mis-classified the controller, which is the normal state on this panel. Its eGalax/D-WAV SAW controller (`0eef:0001`) claims pen *and* finger tools, so libinput rejects the interface named "Touchscreen" (`missing tablet capabilities: resolution`) and adds another as a touchpad with pointer acceleration — the kernel sees every touch, X maps none to a coordinate. Provisioning installs `/etc/udev/rules.d/99-egalax-touchscreen.rules` to force the class; on a machine provisioned before that, re-run provisioning and reboot. Confirm with `DISPLAY=:0 xinput list`, and `~/.local/share/xorg/Xorg.0.log` is where the rejection is visible |
+| Touch taps land in the wrong place | `DISPLAY=:0 xinput list` for the id, then a calibration matrix: `xinput set-prop <id> "libinput Calibration Matrix" <9 floats>`. eGalax panels commonly need an inverted or swapped axis. Put the working command in `~/.xinitrc` so it survives a reboot |
 | Voice commands do nothing | `ls -l /opt/kiosk/ui/dist/vosk-model-de.tar.gz`. Missing → provision it: that file is in no release |
 | A USB update stick is not detected | `findmnt /media/*` — nothing there means `udiskie` is not running (check `~/.xinitrc`). `USB_UPDATE_PATHS` defaults to `/media` |
 | No update banner ever | Private repo without a token: `grep GITHUB /opt/kiosk/.env`. Also `curl localhost:3000/api/logs?module=updater` |
@@ -352,7 +362,8 @@ Reach a shell with `Ctrl+Alt+F2` (the kiosk session is on tty1), or over SSH.
 | AnyDesk connects but the screen is black | The service is not capturing the X session. Add `anydesk &` to `~/.xinitrc` before the Chromium loop and reboot. It is not there by default because the AnyDesk window would appear over the kiosk |
 | `apt install anydesk` fails on unmet dependencies | `libgcc1` — re-run provisioning, which builds the shim package, or install it by hand (see [Remote access](#remote-access-anydesk)) |
 | `anydesk --set-password` fails silently | It rejects weak passwords. Use a longer one |
-| The on-screen keyboard never appears | It is enabled by `any-pointer: coarse`. On a machine with no touchscreen, force it: `localStorage.touchKeyboard = 'on'` in the browser console. `'off'` disables it |
+| The on-screen keyboard never appears | A production build enables it unconditionally, so if it is missing you are looking at a dev build or `localStorage.touchKeyboard` is `'off'`. Builds before 2026-10-19 gated it on `(any-pointer: coarse)` and so hid it whenever the touchscreen was not registered with X — i.e. exactly when it was needed |
+| `Error opening terminal: xterm-kitty` over SSH | The client's `TERM` has no terminfo entry on the machine. Provisioning installs `ncurses-term`, which covers kitty, alacritty, wezterm and foot; on a machine provisioned before that, `export TERM=xterm-256color` or `sudo apt install ncurses-term` |
 | `npm install` fails with 401/403 | The token is missing, expired, or lacks `read:packages` for `@coded-aesthetics` |
 
 ## The token

@@ -94,9 +94,12 @@ environment teardown: `Assertion failed: (env) != nullptr` in
 stack. It killed nine vitest workers (43 of 52 files reported). Node 24.14
 locally does not reproduce it; the runner's 24.21 does.
 
-`scripts/provision-kiosk.sh` installs the same major on the kiosk for the same
-reason — a compiled-from-source database driver is not something to discover in
-the field. Changing either half needs the other checked: a newer Node needs a
+`scripts/provision-kiosk.sh` carries **both** pins on the kiosk, for the same
+reasons — a compiled-from-source database driver is not something to discover
+in the field, and the npm half is needed there even more than in CI, since the
+kiosk is where the dependencies are actually installed. Missing it, provisioning
+dies at its Dependencies step with no `node_modules` and an error naming nothing
+in this repository; it cost a field install on 2026-10-19. Changing either half needs the other checked: a newer Node needs a
 better-sqlite3 that has prebuilds for it, and dropping the npm pin needs `npm
 ci` to be viable (see the Rollup note above), since the fresh resolve on every
 run is what exposes this repo to registry churn at all.

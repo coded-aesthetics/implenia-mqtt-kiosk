@@ -153,8 +153,14 @@ Four things about it are load-bearing:
   declare `inputMode="decimal"` on a text input and normalise `,` to `.`
   themselves (`CalibrationPage.parseNumber`, `RohrwechselSettings`)
 
-Enabled by `any-pointer: coarse`, i.e. on the kiosk and not on a development
-machine. `localStorage.touchKeyboard = 'on' | 'off'` overrides it.
+**Always on in a production build**, because that build only ever runs on a
+kiosk, and a kiosk has no physical keyboard. It originally asked for
+`(any-pointer: coarse)` instead, which failed on the first real machine: udev
+mis-classified the touch controller, libinput refused it, Chromium saw only the
+service tech's mouse, and the keyboard switched itself off on the one machine
+that could not type without it. A dev build still uses the pointer test, since
+that is somebody's laptop. `localStorage.touchKeyboard = 'on' | 'off'` overrides
+both — which is how a tech browsing the kiosk's UI from a laptop turns it off.
 
 ## Remote Access
 
@@ -174,8 +180,7 @@ that never reached AnyDesk's servers are all normal states, and the screen says
 so rather than showing an error. Only a hit is cached, so a kiosk provisioned
 after the server started shows its ID without a restart.
 
-See [docs/kiosk-provisioning.md](docs/kiosk-provisioning.md) for the setup,
-including why AnyDesk needs a `libgcc1` shim on Debian 13.
+See [docs/kiosk-provisioning.md](docs/kiosk-provisioning.md) for the setup.
 
 ## Sensor Schema
 

@@ -164,13 +164,17 @@ system_basics() {
   # be named explicitly here — without the libinput driver the server comes up
   # and sees no touchscreen at all. dbus-user-session is what udiskie needs to
   # reach udisks. polkit is not named: udisks2 depends on it.
+  # ncurses-term is the one entry here that is purely for the people, not the
+  # kiosk: without it a service tech SSHing in from kitty, alacritty, wezterm or
+  # foot gets `Error opening terminal: xterm-kitty` from anything curses-based —
+  # top, nano, htop — on the machine they were sent to fix.
   sudo apt-get install -y -qq --no-install-recommends \
     xserver-xorg xserver-xorg-core xinit x11-xserver-utils \
     xserver-xorg-input-libinput xserver-xorg-video-intel \
     openbox chromium unclutter fonts-dejavu-core \
-    curl ca-certificates unzip sqlite3 \
+    curl ca-certificates unzip sqlite3 ncurses-term xinput \
     dbus dbus-user-session udisks2 udiskie avahi-daemon
-  ok "X, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local)"
+  ok "X, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo for modern terminals"
 }
 
 # --- 2. kernel ------------------------------------------------------------
@@ -188,6 +192,40 @@ kernel_cmdline() {
     NEEDS_REBOOT=1
     ok "intel_idle.max_cstate=1 added (Bay Trail freeze workaround)"
   fi
+}
+
+# --- 2b. touch input ------------------------------------------------------
+
+touch_input() {
+  log "Touch input"
+  local rules=/etc/udev/rules.d/99-egalax-touchscreen.rules
+  if [[ -f "$rules" ]]; then
+    skip "eGalax touch rule already in place"
+    return
+  fi
+  #
+  # The iSPOS panel carries an eGalax/D-WAV Titan6001 SAW controller
+  # (0eef:0001) whose HID descriptors claim a pen tool *and* a finger tool. So
+  # udev tags its interfaces Tablet and Touchpad, and libinput — which is
+  # right to trust those tags — rejects the one named "Touchscreen" with
+  # `missing tablet capabilities: resolution` and adds the other as a touchpad
+  # with pointer acceleration. The screen is then inert: the kernel sees every
+  # touch, X maps none of it to a coordinate.
+  #
+  # Tagging it for what it is costs nothing on a machine without the device,
+  # since the rule matches on the USB id.
+  #
+  sudo tee "$rules" >/dev/null <<'RULES'
+# eGalax/D-WAV SAW touch controller: its descriptors claim pen and finger
+# tools, so udev's input_id tags it Tablet/Touchpad and libinput either refuses
+# it or treats it as a relative pointing device. Force the real class.
+SUBSYSTEM=="input", ATTRS{idVendor}=="0eef", ATTRS{idProduct}=="0001", \
+  ENV{ID_INPUT_TABLET}="", ENV{ID_INPUT_TOUCHPAD}="", ENV{ID_INPUT_MOUSE}="", \
+  ENV{ID_INPUT_TOUCHSCREEN}="1"
+RULES
+  sudo udevadm control --reload-rules 2>/dev/null || true
+  NEEDS_REBOOT=1
+  ok "eGalax touch controller tagged as a touchscreen (takes effect on reboot)"
 }
 
 # --- 3. swap --------------------------------------------------------------
@@ -230,6 +268,27 @@ node_runtime() {
   fi
   [[ "$(node -v | sed 's/^v\([0-9]*\).*/\1/')" -ge 20 ]] || die "Node >= 20 required, got $(node -v)."
 
+  #
+  # npm 10.x cannot resolve this tree at all. It crashes with `Cannot read
+  # properties of null (reading 'edgesOut')` — an arborist bug this project's
+  # workspaces-plus-overrides tree reaches, with no manifest of ours at fault.
+  # Node 22 bundles 10.9, which fails exactly as 10.8.2 does; npm 11 resolves
+  # the same tree in seconds.
+  #
+  # The CI workflows carry the same pin. It is needed here just as much — this
+  # is where the dependencies actually get installed, and without it the whole
+  # provisioning run dies at the Dependencies step with no node_modules and an
+  # error that names nothing in this repository.
+  #
+  local npm_major
+  npm_major="$(npm -v 2>/dev/null | cut -d. -f1 || true)"
+  if [[ -z "$npm_major" ]] || [[ "$npm_major" -lt 11 ]]; then
+    sudo npm install -g npm@11 --silent
+    ok "npm $(npm -v) — Node's bundled 10.x cannot resolve this tree"
+  else
+    skip "npm $(npm -v)"
+  fi
+
   command -v pm2 >/dev/null || sudo npm install -g pm2 --silent
   ok "PM2 $(pm2 -v 2>/dev/null)"
 }
@@ -239,8 +298,23 @@ node_runtime() {
 find_payload() {
   # Newest by version, not by mtime: a stick accumulates releases and the one
   # copied last is not necessarily the newest.
+  #
+  # A glob rather than `ls`, because "no match" is an ordinary answer here and
+  # `ls` reports it as a failure. Under `set -o pipefail` that failure became
+  # the pipeline's status, then the status of the assignment this feeds, and
+  # `set -e` killed the whole run — silently, right after a step header. A
+  # stick with no offline dependency archive, which is the normal stick, could
+  # never get past "Dependencies".
   local pattern="$1"
-  ls -1 "$SCRIPT_DIR"/$pattern 2>/dev/null | sort -V | tail -1
+  local matches=() f
+  shopt -s nullglob
+  # Filtered to files that exist: nullglob drops a *pattern* that matches
+  # nothing, but a pattern with no wildcard in it (vosk-model-de.tar.gz)
+  # expands to itself whether the file is there or not.
+  for f in "$SCRIPT_DIR"/$pattern; do [[ -f "$f" ]] && matches+=( "$f" ); done
+  shopt -u nullglob
+  [[ ${#matches[@]} -gt 0 ]] || return 0
+  printf '%s\n' "${matches[@]}" | sort -V | tail -1
 }
 
 app_payload() {
@@ -299,6 +373,14 @@ NPMRC
   (cd /tmp && node -e "require('$APP_DIR/server/node_modules/better-sqlite3')") 2>/dev/null \
     && ok "better-sqlite3 loads (native modules match this machine)" \
     || die "better-sqlite3 does not load. With an offline archive this means it was built for a different Node version or Debian release — install with --token instead."
+
+  # The other compiled module, and a warning rather than a failure: it is only
+  # needed by the serial transport, so a kiosk on MQTT runs fine without it and
+  # must not be refused an install over it. A serial site would otherwise find
+  # out when the rig is already waiting.
+  (cd /tmp && node -e "require('$APP_DIR/server/node_modules/serialport')") 2>/dev/null \
+    && ok "serialport loads" \
+    || warn "serialport does not load — the serial (Elvis) transport will not work on this machine. MQTT is unaffected. Re-run with --token to rebuild it from the network."
 }
 
 set_env() {
@@ -374,8 +456,11 @@ pm2_service() {
   pm2 save >/dev/null
   ok "kiosk-server under PM2, starting on boot"
 
+  # -fs, not -fsS: the first attempt lands before the server is listening, and
+  # `curl: (7) Failed to connect` printed directly above a green tick is how a
+  # clean provisioning run gets distrusted.
   local tries=0
-  until curl -fsS -o /dev/null "http://localhost:$PORT/status"; do
+  until curl -fs -o /dev/null "http://localhost:$PORT/status"; do
     tries=$((tries + 1))
     [[ $tries -lt 30 ]] || die "Server did not answer on port $PORT within 30 s. Check: pm2 logs kiosk-server"
     sleep 1
@@ -438,7 +523,7 @@ openbox &
 
 # Chromium does not retry a failed load, so starting it before PM2 has the port
 # open would leave a permanent error page on a screen nobody can navigate.
-until curl -fsS -o /dev/null http://localhost:$PORT/status; do sleep 1; done
+until curl -fs -o /dev/null http://localhost:$PORT/status; do sleep 1; done
 
 while : ; do
   # Power loss is routine on site, and Chromium greets an unclean shutdown with
@@ -470,9 +555,14 @@ XINITRC
 # --- 7. remote access -----------------------------------------------------
 
 #
-# AnyDesk's .deb declares `Depends: libgcc1 (>= 1:4.1.1)`. Debian renamed that
-# package to libgcc-s1 and nothing in trixie provides the old name, so apt
-# refuses the install outright.
+# AnyDesk's .deb declares `Depends: libgcc1 (>= 1:4.1.1)`, a package name Debian
+# dropped after bookworm in favour of libgcc-s1.
+#
+# **On the first real install — Debian 13.7, AnyDesk 8.1.0 — apt resolved it
+# anyway and this was never built.** Something in the archive still provides the
+# name. It stays as a fallback because it is built only when apt's own
+# simulation says the dependency is unmet, so it costs a passing install
+# nothing; do not read its presence as proof the problem exists.
 #
 # A shim is the right fix rather than repacking the .deb: repacking leaves apt
 # unable to satisfy the repo version ever again, so AnyDesk silently stops
@@ -540,7 +630,7 @@ remote_access() {
 
   # The unit name has moved between AnyDesk releases, so it is discovered.
   local unit
-  unit="$(systemctl list-unit-files --type=service --no-legend 'anydesk*' 2>/dev/null | awk '{print $1; exit}')"
+  unit="$(systemctl list-unit-files --type=service --no-legend 'anydesk*' 2>/dev/null | awk '{print $1; exit}' || true)"
   if [[ -n "$unit" ]]; then
     sudo systemctl enable --now "$unit" >/dev/null 2>&1 || true
     ok "$unit enabled at boot"
@@ -565,7 +655,7 @@ remote_access() {
   # which needs internet — hence the wait rather than one hopeful call.
   local id="" tries=0
   while [[ $tries -lt 10 ]]; do
-    id="$(sudo anydesk --get-id 2>/dev/null | tr -dc '0-9')"
+    id="$(sudo anydesk --get-id 2>/dev/null | tr -dc '0-9' || true)"
     [[ ${#id} -ge 6 ]] && break
     id=""
     tries=$((tries + 1))
@@ -629,6 +719,7 @@ main() {
   preflight
   [[ -n "$EXPORT_DEPS" ]] && export_deps
   system_basics
+  touch_input
   kernel_cmdline
   compressed_swap
   node_runtime

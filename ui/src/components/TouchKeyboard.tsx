@@ -98,11 +98,21 @@ function writeState(el: Typable, next: EditState): void {
 }
 
 /**
- * On a touchscreen by default, off on a development machine with a real
- * keyboard. `any-pointer: coarse` rather than `pointer: coarse` so a mouse
- * plugged in by a service tech does not take the keyboard away from the
- * touchscreen. `localStorage.touchKeyboard = 'on' | 'off'` overrides it, which
- * is how this gets exercised in development.
+ * On wherever this is a kiosk, which a production build always is.
+ *
+ * It used to ask the browser for `(any-pointer: coarse)`, and that was the
+ * wrong question. On the first real machine the touch controller was
+ * mis-classified by udev, so libinput refused it, so Chromium saw only the
+ * service tech's mouse and reported no coarse pointer — and the keyboard
+ * switched itself off on the one machine that cannot type without it. A
+ * feature that disappears exactly when it is needed most is worse than one
+ * that is occasionally in the way.
+ *
+ * So: a production build is a kiosk and gets the keyboard unconditionally. A
+ * dev build is somebody's laptop, where the pointer test is a reasonable guess
+ * and a real keyboard is in reach either way. `localStorage.touchKeyboard =
+ * 'on' | 'off'` still overrides both, which is how a tech browsing the kiosk's
+ * UI from a laptop turns it off.
  */
 function keyboardEnabled(): boolean {
   try {
@@ -110,8 +120,9 @@ function keyboardEnabled(): boolean {
     if (forced === 'on') return true;
     if (forced === 'off') return false;
   } catch {
-    /* storage can be unavailable; fall through to the pointer test */
+    /* storage can be unavailable; fall through */
   }
+  if (!import.meta.env.DEV) return true;
   return window.matchMedia?.('(any-pointer: coarse)').matches ?? false;
 }
 
