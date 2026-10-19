@@ -117,7 +117,7 @@ worth knowing are `--bundle` (install a specific release archive), `--no-vosk`
 | System | Hostname, `Europe/Berlin`, `de_DE.UTF-8`, X + Openbox + Chromium + `unclutter`, `udiskie`, `avahi-daemon` | `--no-install-recommends` throughout: no print spooler, no mail agent, no desktop. `udiskie` mounts USB sticks under `/media`, which is where `USB_UPDATE_PATHS` looks — with no desktop environment nothing would mount them otherwise. `avahi` makes the machine reachable as `kiosk-g08.local` for service SSH |
 | Kernel | `intel_idle.max_cstate=1` | Bay Trail hangs at random in deep C-states. A frozen screen on site is the failure this product exists to avoid, so the workaround goes on every machine rather than waiting for a report |
 | Swap | zram, 50% of RAM, zstd | 4 GB shared with Chromium. Compressed swap in RAM beats swapping to the disk the database is on |
-| Node | NodeSource, major 24, plus PM2 | Debian stable's Node satisfies the `>= 20` requirement, but pinning the major keeps the ABI in step with the machines that build the offline dependency archive |
+| Node | NodeSource, major 22, plus PM2 | Not the newest on purpose: better-sqlite3 11.x ships no prebuild for Node 24, so Node 24 compiles it from source and that build aborts on teardown (`Assertion failed: (env) != nullptr`). Node 22 is the prebuild the project ships. The major also has to match whatever built an offline dependency archive |
 | App | Extracts the release archive into `/opt/kiosk` | Exactly what the self-updater does, so `kiosk.db`, `.env`, `node_modules` and the speech model survive it. Verifies `checksum.sha256` first |
 | Dependencies | `npm install --omit=dev --no-workspaces` inside `server/`, or the offline archive | The bundle's root `package.json` declares `workspaces: ["server","ui"]` but ships no `ui/package.json`, so a root install fails. `server/node_modules` is where Node resolves from for `server/dist/*` anyway. An `.npmrc` with the token is written because `@coded-aesthetics/din4023` is a private GitHub Packages dependency and the bundle carries no `.npmrc`. It then loads `better-sqlite3` to prove the native modules match this machine |
 | Config | `.env` from `.env.example`, sets `PORT`, `NODE_ENV`, `GITHUB_OWNER/REPO/TOKEN`, `chmod 600` | Everything else — broker, Verfahren, API credentials — is site configuration and belongs in the wizard, not on a stick |
@@ -252,7 +252,9 @@ sudo cp ~/node_modules.tar.gz /media/prov/        # or copy it off over SSH
 Then build sticks with `--deps node_modules.tar.gz`, and provisioning runs with
 no network at all and no token on the machine. Node still has to come from
 somewhere: either the machine gets internet once, or add Debian's own
-`nodejs` package from the installer's mirror before provisioning.
+`nodejs` package from the installer's mirror before provisioning — Debian 13
+ships 20.19, which satisfies the `>= 20` requirement and has a better-sqlite3
+prebuild of its own.
 
 ## Deliberately not done
 

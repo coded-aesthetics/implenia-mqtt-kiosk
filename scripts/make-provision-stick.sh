@@ -149,7 +149,7 @@ GITHUB_TOKEN="$TOKEN"
 # Unattended remote access. One password for the fleet is the usual choice;
 # pass --anydesk-password per stick if you would rather not have that.
 ANYDESK_PASSWORD="$ANYDESK_PASSWORD"
-NODE_MAJOR=24
+NODE_MAJOR=22
 PORT=3000
 CONF
 umask 022

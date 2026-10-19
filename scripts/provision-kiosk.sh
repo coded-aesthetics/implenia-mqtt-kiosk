@@ -23,9 +23,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 APP_DIR="/opt/kiosk"
 PORT=3000
-# Kept in step with the machines that build the offline dependency bundle: a
-# prebuilt server/node_modules only works on a matching Node major.
-NODE_MAJOR=24
+# 22, deliberately, and not the newest.
+#
+# better-sqlite3 11.x publishes no prebuilt binary for Node 24, so Node 24
+# compiles it from source — and that build aborts the process during
+# environment teardown (`Assertion failed: (env) != nullptr` in
+# RemoveEnvironmentCleanupHook). It took down nine test workers in CI. The
+# kiosk's database layer is the last place for an unvetted native build, and
+# node-v127 (Node 22) is the prebuild the project actually ships.
+#
+# It also has to match whatever built an offline dependency archive, since
+# those binaries are compiled, not portable.
+NODE_MAJOR=22
 GITHUB_OWNER="coded-aesthetics"
 GITHUB_REPO="implenia-mqtt-kiosk"
 GITHUB_TOKEN=""
@@ -61,7 +70,7 @@ Usage: ./provision-kiosk.sh [options]
                       can self-update from the private repo.
   --app-dir PATH      Install location (default /opt/kiosk)
   --port N            Server port (default 3000)
-  --node-major N      Node.js major version to install (default 24)
+  --node-major N      Node.js major version to install (default 22)
   --no-zram           Skip compressed swap
   --no-vosk           Skip the speech model (voice commands stay off)
   --anydesk-password PW
