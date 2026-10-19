@@ -929,9 +929,13 @@ on-site checklist and troubleshooting — in
 /media/prov/provision-kiosk.sh --hostname kiosk-g08
 ```
 
-`provision-kiosk.sh` installs the release into `/opt/kiosk`, wires PM2 and a
-Chromium-under-Openbox session with autologin, and is idempotent — re-running it
-repairs a machine without touching `kiosk.db`, `.env` or recorded data. Three
+`provision-kiosk.sh` **fetches the newest GitHub release**, installs it into
+`/opt/kiosk`, wires PM2 and a Chromium-under-Openbox session with autologin, and
+is idempotent — re-running it repairs a machine without touching `kiosk.db`,
+`.env` or recorded data. `--version` pins a release, `--bundle` installs a local
+archive, and an archive beside the script is the fallback when GitHub is
+unreachable. The stick deliberately carries no release: one that did would age
+into installing old code silently. Three
 things it handles that are easy to miss when installing by hand:
 
 - The release bundle carries no `.npmrc`, and `@coded-aesthetics/din4023` is a
