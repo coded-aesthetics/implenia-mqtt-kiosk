@@ -50,10 +50,17 @@ Anything else x86_64 works, but the two hardware-specific decisions below
 ```
 
 It downloads and verifies the current Debian stable netinst image, writes it to
-the stick, appends a second partition `KIOSK-PROV`, and fills that with the
-release archive, the speech model, `provision-kiosk.sh` and a `kiosk.conf`
-holding the token. One stick is therefore both the installer and the payload,
-and it is reusable on every machine — nothing an install does changes it.
+the stick, appends a second partition `KIOSK-PROV`, and fills that with
+`provision-kiosk.sh`, the speech model and a `kiosk.conf` holding the token.
+One stick is therefore both the installer and the payload, and it is reusable
+on every machine — nothing an install does changes it.
+
+**The release archive is not on it, on purpose.** Provisioning fetches the
+newest GitHub release itself, so a stick cannot age into installing old code —
+which it otherwise does silently, and the person who then reports the
+long-fixed bugs is the one least able to know they were fixed. `--latest` still
+puts an archive on the stick for a pinned version or a machine that cannot
+reach GitHub.
 
 That second partition is new empty space, so it needs a filesystem written into
 it; `mkfs.vfat` (from `dosfstools`) is what does that, and any other filesystem
@@ -189,7 +196,7 @@ worth knowing are `--bundle` (install a specific release archive), `--no-vosk`
 | Kernel | `intel_idle.max_cstate=1` | Bay Trail hangs at random in deep C-states. A frozen screen on site is the failure this product exists to avoid, so the workaround goes on every machine rather than waiting for a report |
 | Swap | zram, 50% of RAM, zstd | 4 GB shared with Chromium. Compressed swap in RAM beats swapping to the disk the database is on |
 | Node | NodeSource, major 22, **npm 11 over it**, plus PM2 | Two separate pins. Node 22 because better-sqlite3 11.x ships no prebuild for Node 24, so Node 24 compiles it from source and that build aborts on teardown (`Assertion failed: (env) != nullptr`); 22 is the prebuild the project ships, and the major also has to match whatever built an offline dependency archive. npm 11 because Node 22's bundled npm 10.9 **cannot resolve this tree at all** — it dies with `Cannot read properties of null (reading 'edgesOut')`, which is what the Dependencies step looks like without the pin |
-| App | Extracts the release archive into `/opt/kiosk` | Exactly what the self-updater does, so `kiosk.db`, `.env`, `node_modules` and the speech model survive it. Verifies `checksum.sha256` first |
+| App | **Fetches the newest GitHub release**, verifies `checksum.sha256`, extracts into `/opt/kiosk` | `--version` pins one, `--bundle` installs a local archive, and an archive on the stick is the fallback when GitHub cannot be reached — announced as a warning, since that is how a machine ends up on an old version without anybody choosing it. Extracting is what the self-updater does, so `kiosk.db`, `.env`, `node_modules` and the speech model survive |
 | Dependencies | `npm install --omit=dev --no-workspaces` inside `server/`, or the offline archive | The bundle's root `package.json` declares `workspaces: ["server","ui"]` but ships no `ui/package.json`, so a root install fails. `server/node_modules` is where Node resolves from for `server/dist/*` anyway. An `.npmrc` with the token is written because `@coded-aesthetics/din4023` is a private GitHub Packages dependency and the bundle carries no `.npmrc`. It then loads `better-sqlite3` to prove the native modules match this machine |
 | Config | `.env` from `.env.example`, sets `PORT`, `NODE_ENV`, `GITHUB_OWNER/REPO/TOKEN`, `chmod 600` | Everything else — broker, Verfahren, API credentials — is site configuration and belongs in the wizard, not on a stick |
 | Speech model | `ui/dist/vosk-model-de.tar.gz` from the stick, or downloaded | **No release contains it**: it is gitignored and CI never runs `download-vosk-model.sh`, so voice commands are silently off on a kiosk installed from a release. Shipping it in the bundle would add ~45 MB to every hourly update check's download over a mobile link, so it is provisioned once and survives updates |
@@ -307,8 +314,9 @@ Before the machine leaves:
 
 ## Sites with no internet
 
-Provisioning needs the network for exactly two things: NodeSource and the npm
-dependencies. Both can travel on the stick.
+Provisioning needs the network for three things: the GitHub release, NodeSource
+and the npm dependencies. All three can travel on the stick — the release via
+`--latest` when the stick is built, or `--bundle` at provisioning time.
 
 Build the dependency archive on an already-provisioned kiosk — same hardware,
 same Debian release, same Node major — because `better-sqlite3` and

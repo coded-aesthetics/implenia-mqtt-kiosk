@@ -41,7 +41,9 @@ Usage: ./scripts/make-provision-stick.sh [options]
 
   --device /dev/sdX   USB stick to write. Everything on it is destroyed.
                       Omit to only assemble the payload directory.
-  --latest            Take the newest GitHub release
+  --latest            Put the newest GitHub release on the stick. Optional —
+                      provisioning fetches the newest release by itself, so a
+                      stick without one never goes stale
   --version vX.Y.Z    Take a specific release
   --token TOKEN       GitHub token written into kiosk.conf, so the kiosk can
                       install private dependencies and self-update. Read-only
@@ -83,6 +85,7 @@ done
 
 log()  { printf '\n\033[1;34m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '    \033[32m✓\033[0m %s\n' "$*"; }
+skip() { printf '    \033[2m·\033[0m %s\n' "$*"; }
 warn() { printf '    \033[33m!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\n\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
@@ -108,9 +111,12 @@ if [[ -n "$VERSION" ]]; then
   fi
   ok "$(basename "$(ls -1 "$OUT"/app-v*.tar.gz | tail -1)") with checksum"
 else
+  # No longer a warning: provisioning fetches the newest release itself, which
+  # is what stops a stick from ageing into installing old code. An archive here
+  # is for pinning a version or for a machine that cannot reach GitHub.
   ls -1 "$OUT"/app-v*.tar.gz >/dev/null 2>&1 \
-    && ok "Release archive already in the payload: $(basename "$(ls -1 "$OUT"/app-v*.tar.gz | tail -1)")" \
-    || warn "No release archive — pass --latest or --version, or copy app-vX.Y.Z.tar.gz into $OUT by hand"
+    && ok "Release archive in the payload (pins the version): $(basename "$(ls -1 "$OUT"/app-v*.tar.gz | tail -1)")" \
+    || skip "No release archive — provisioning will fetch the newest release itself. Pass --latest to pin one onto the stick instead."
 fi
 
 # The speech model ships with no release (gitignored, and CI never fetches it),

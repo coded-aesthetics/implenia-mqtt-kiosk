@@ -98,7 +98,7 @@ Never use `console.log` in server code — the only exception is `config.ts` for
 The settings page (`#/config`) provides:
 
 - **API key** — base64-encoded JSON token from the Implenia portal. Validated on save via `GET /api/v1/measuring-device/self`
-- **Server address** — Production / Development preset selector, plus free-text for local development
+- **Server address** — Production / Development / **Lokal**, the last being free text for a local or staging backend. Available on a kiosk, not only in dev builds: `NODE_ENV=development` would be the obvious alternative and it crash-loops the server (see CLAUDE.md, Logging), while nothing else was protecting it — the server accepts any URL that parses
 - **Devices** — add/edit/remove Elvis (serial) and simulator devices
 - **Sensor mapping** — assign serial channel indices to named sensors per Verfahren (machine type)
 - **Datenübertragung** — how much of a recording leaves the kiosk and by which route (see "Data Reduction" below)
@@ -929,9 +929,13 @@ on-site checklist and troubleshooting — in
 /media/prov/provision-kiosk.sh --hostname kiosk-g08
 ```
 
-`provision-kiosk.sh` installs the release into `/opt/kiosk`, wires PM2 and a
-Chromium-under-Openbox session with autologin, and is idempotent — re-running it
-repairs a machine without touching `kiosk.db`, `.env` or recorded data. Three
+`provision-kiosk.sh` **fetches the newest GitHub release**, installs it into
+`/opt/kiosk`, wires PM2 and a Chromium-under-Openbox session with autologin, and
+is idempotent — re-running it repairs a machine without touching `kiosk.db`,
+`.env` or recorded data. `--version` pins a release, `--bundle` installs a local
+archive, and an archive beside the script is the fallback when GitHub is
+unreachable. The stick deliberately carries no release: one that did would age
+into installing old code silently. Three
 things it handles that are easy to miss when installing by hand:
 
 - The release bundle carries no `.npmrc`, and `@coded-aesthetics/din4023` is a
