@@ -44,7 +44,15 @@ Anything else x86_64 works, but the two hardware-specific decisions below
 It downloads and verifies the current Debian stable netinst image, writes it to
 the stick, appends a second partition `KIOSK-PROV`, and fills that with the
 release archive, the speech model, `provision-kiosk.sh` and a `kiosk.conf`
-holding the token. One stick is therefore both the installer and the payload.
+holding the token. One stick is therefore both the installer and the payload,
+and it is reusable on every machine — nothing an install does changes it.
+
+That second partition is new empty space, so it needs a filesystem written into
+it; `mkfs.vfat` (from `dosfstools`) is what does that, and any other filesystem
+needs its own `mkfs` just the same. The builder uses **vfat** when it can and
+falls back to **ext4**, which Debian reads just as well — the only thing vfat
+buys is a colleague on Windows or macOS being able to drop a newer release onto
+the stick. `--filesystem` forces either.
 
 Find the device first and be sure of it — `dd` does not ask twice:
 
@@ -93,13 +101,25 @@ under Openbox.
 Log in as `kiosk` on the console, plug the stick back in:
 
 ```bash
-sudo mkdir -p /media/prov && sudo mount /dev/disk/by-label/KIOSK-PROV /media/prov
+sudo mkdir -p /media/prov
+sudo mount -o uid=$(id -u) /dev/disk/by-label/KIOSK-PROV /media/prov
 /media/prov/provision-kiosk.sh --hostname kiosk-g08
 ```
 
-(`/media` belongs to root, hence the `sudo` on both. Only the first run needs
-this: once the kiosk session is up, `udiskie` mounts the stick by itself and it
-appears as `/media/kiosk/KIOSK-PROV`.)
+`/media` belongs to root, hence the `sudo` on both — and the stick's own
+`README.txt` carries the exact mount command for the filesystem it was built
+with, which is the one to use:
+
+- **vfat** needs `-o uid=$(id -u)`. A plain `sudo mount` of a FAT partition
+  gives every file to root, and provisioning then cannot append this machine to
+  `machines.tsv` — it skips the register silently, and that register is the one
+  record of the fleet's AnyDesk ids.
+- **ext4** takes no `uid=` option at all (and `mount` refuses it): ownership
+  comes from the filesystem, which the stick builder sets to uid 1000, the
+  first user the Debian installer creates.
+
+Only the first run needs any of this. Once the kiosk session is up, `udiskie`
+mounts the stick itself, as the kiosk user, at `/media/kiosk/KIOSK-PROV`.
 
 Ten to fifteen minutes, then it offers a reboot. **Take it** — the machine
 coming up into the kiosk by itself is the only test that matters here.
