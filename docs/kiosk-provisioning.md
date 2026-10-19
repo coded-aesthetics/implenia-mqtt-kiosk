@@ -77,11 +77,40 @@ and you copy that onto the `KIOSK-PROV` partition.
 
 | Setting | Value | Why |
 |---|---|---|
-| Restore on AC Power Loss | **Power On** | The cabinet gets power when the rig does, and nobody will look for a power button behind the monitor |
-| SATA mode | **AHCI** | Not IDE/RAID |
+| Restore on AC Power Loss | **Look for it; this revision has none** | See the note below — it is not a blocker for getting a machine up, but it decides whether a kiosk comes back on its own after a power cut |
 | Fast Boot | **Disabled** | Otherwise the USB keyboard is not up in time to reach the boot menu |
-| Secure Boot | **Disabled** | Simpler; nothing here needs it |
+| Quiet Boot | **Disabled** | Shows POST and the boot-menu key prompt instead of a logo |
+| mSATA/PCIe Control | **Leave as found** | The slot is muxed: an mSATA SSD is invisible to the installer while this says `PCIe`. On the machines seen so far it ships on `PCIe` and the disk is elsewhere, so leave it — and only switch it to `mSATA` if the partitioner finds no disk |
 | Boot order | Internal disk first, after the install | A stick left in the machine must not strand it in an installer |
+
+**Not on this board**, though generic AMI guides list them: *SATA mode* (Bay Trail is
+AHCI-only, nothing to set) and *Secure Boot* (no UEFI Secure Boot in this
+firmware, so the install is legacy BIOS and GRUB goes to the MBR — Debian
+detects that by itself).
+
+### Open: this revision does not come back by itself after a power cut
+
+The BIOS on the first machine (2026-10-19) has **no** restore-on-AC-power-loss
+setting under any of its names. After mains is removed and restored, the
+machine stays off until somebody presses the power button — behind the monitor.
+
+Deliberately deferred rather than solved, because it does not block an install.
+It matters as soon as a machine's socket is switched rather than permanent:
+then it needs a press every morning, by the people least able to care about it.
+Three ways out, in order of preference, for whoever picks this up:
+
+- **Another name for the same setting.** `State After G3` is AMI's own term and
+  the likeliest label, under **Chipset → South Bridge**. `Power Mode: AT / ATX`
+  is the POS-board idiom and is *better* — in AT mode the machine powers up
+  whenever mains is applied and the power button stops mattering. Also
+  `AC Back Function`, `PWRON After PWR-Fail`, `Power On by AC`.
+- **A mainboard jumper.** POS boards commonly carry an AT/ATX select jumper
+  that does it in hardware. Needs the unit opened and the service manual.
+- **A daily RTC wake**, armed from Linux (`/sys/class/rtc/rtc0/wakealarm`) by a
+  systemd unit on shutdown, so the machine returns by itself once mains is
+  back. Needs *Wake system from S5 by RTC* in the BIOS, which boards often have
+  even without AC-loss restore. Cruder: it recovers at the next alarm, not in
+  seconds.
 
 ## 3. Debian installer
 
@@ -89,16 +118,30 @@ Boot the stick, pick **Graphical install**, and answer:
 
 | Step | Answer |
 |---|---|
-| Language / location | English, Germany, locale `de_DE.UTF-8` |
+| Language / location | English, then **`other` → Europe → Germany** — Germany is not in the first list when the language is English |
+| Locale | **Any `en_*.UTF-8`.** `de_DE.UTF-8` is *not offered*: the list only carries locales for the language picked, so choosing English rules German out. It does not matter — provisioning runs `locale-gen de_DE.UTF-8` and `update-locale` itself, and the app formats every date and number with an explicit `'de-DE'` in JS rather than from the system locale. Pick Deutsch as the *language* at the top if you want the installer itself in German |
 | Keyboard | German |
 | Hostname | `kiosk-<rig>`, e.g. `kiosk-g08`. Domain blank |
 | Root password | **Leave empty** — the first user then gets `sudo`, which the provisioning script needs |
 | User | Full name `Kiosk`, username **`kiosk`** |
-| Partitioning | Guided – use entire disk, all files in one partition. **Check the target is the internal disk, not the stick** |
+| Partitioning | Guided – use entire disk, all files in one partition. **Pick the disk by its model string, never by its device letter** — see below |
 | Mirror | `deb.debian.org`, no proxy |
 | Popularity contest | No |
 | Software selection | **Deselect everything** except *SSH server* and *standard system utilities* |
 | GRUB | Install to the internal disk |
+
+**At the partitioning step, pick the disk by model, not by letter.** The SSD and
+the installer stick are both `/dev/sd?`, and the order depends on enumeration —
+the stick can perfectly well be `sda`. The installer prints both with their
+models:
+
+```
+SCSI1 (0,0,0) (sda) - 64.0 GB ATA ADATA ISSS316-…      ← the internal SSD
+SCSI2 (0,0,0) (sdb) - 123.5 GB USB SanDisk 3.2Gen1     ← the installer stick
+```
+
+Take the ATA/ADATA one. Size separates them too, unless the SSD happens to
+match the stick.
 
 No desktop environment: GNOME would spend a third of the 4 GB before Chromium
 opens. The session is set up by the next step instead, and is a single Chromium
