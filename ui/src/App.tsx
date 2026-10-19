@@ -43,6 +43,31 @@ export function App() {
   const shift = useShiftAssignment(config.hasApiKey, config.apiUrl);
   const { importShift, clearImport } = shift;
 
+  /**
+   * Arriving at the element list refetches, and so does connectivity coming
+   * back.
+   *
+   * useShiftAssignment lives here, above the router, so it mounts once for the
+   * life of the app: navigating to the element list only re-renders it and
+   * fires no request. A failure from an hour ago therefore stayed on screen
+   * until something unrelated changed — with no way for a worker to clear it.
+   *
+   * The first mount is skipped, since the hook fetches on its own.
+   */
+  const prevPageRef = useRef<string | null>(null);
+  const prevConnRef = useRef(connectivity);
+  const refetchShift = shift.refetch;
+  useEffect(() => {
+    const was = prevPageRef.current;
+    prevPageRef.current = route.page;
+    if (route.page === 'home' && was !== null && was !== 'home') refetchShift();
+  }, [route.page, refetchShift]);
+  useEffect(() => {
+    const was = prevConnRef.current;
+    prevConnRef.current = connectivity;
+    if (connectivity === 'online' && was === 'offline') refetchShift();
+  }, [connectivity, refetchShift]);
+
   const [devMode, setDevMode] = useState(false);
   useEffect(() => {
     fetch('/status').then((r) => r.json()).then((d) => setDevMode(!!d.devMode)).catch(() => {});

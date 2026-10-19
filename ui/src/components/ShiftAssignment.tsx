@@ -146,6 +146,20 @@ export function ShiftAssignment({
           <div style={{ ...styles.noticeIcon, backgroundColor: 'var(--color-warning)' }}>⚠</div>
           <div style={styles.noticeText}>Verbindungsproblem</div>
           <div style={styles.noticeSubtext}>{shift.error}</div>
+          {/*
+            The way out of the error, and the reason it is the first thing
+            offered: the fetch is owned above the router, so leaving the screen
+            and coming back used to change nothing. Without this the only exits
+            were the settings screen and a file import — neither of which helps
+            when the problem was a passing one.
+          */}
+          <button
+            type="button"
+            onClick={() => shift.refetch()}
+            style={styles.retryButton}
+          >
+            Erneut versuchen
+          </button>
           <a
             href="#/config?section=api-url"
             onClick={(e) => { e.preventDefault(); navigate('config?section=api-url'); }}
@@ -431,6 +445,20 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'center' as const,
     maxWidth: '400px',
     lineHeight: 1.5,
+  },
+  // The primary way out of a connection error, so it is the solid one and it
+  // meets the glove minimum rather than the 56px the secondary links use.
+  retryButton: {
+    fontSize: '1.2rem',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    color: '#fff',
+    backgroundColor: 'var(--color-accent)',
+    border: 'none',
+    borderRadius: '8px',
+    padding: '0 2.5rem',
+    minHeight: 'var(--tap-min)',
+    cursor: 'pointer',
   },
   configLink: {
     fontSize: '1.1rem',
