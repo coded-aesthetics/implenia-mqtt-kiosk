@@ -110,7 +110,8 @@ Boot the stick, pick **Graphical install**, and answer:
 
 | Step | Answer |
 |---|---|
-| Language / location | English, Germany, locale `de_DE.UTF-8` |
+| Language / location | English, then **`other` → Europe → Germany** — Germany is not in the first list when the language is English |
+| Locale | **Any `en_*.UTF-8`.** `de_DE.UTF-8` is *not offered*: the list only carries locales for the language picked, so choosing English rules German out. It does not matter — provisioning runs `locale-gen de_DE.UTF-8` and `update-locale` itself, and the app formats every date and number with an explicit `'de-DE'` in JS rather than from the system locale. Pick Deutsch as the *language* at the top if you want the installer itself in German |
 | Keyboard | German |
 | Hostname | `kiosk-<rig>`, e.g. `kiosk-g08`. Domain blank |
 | Root password | **Leave empty** — the first user then gets `sudo`, which the provisioning script needs |
