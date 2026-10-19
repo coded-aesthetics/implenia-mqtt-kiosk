@@ -174,8 +174,7 @@ that never reached AnyDesk's servers are all normal states, and the screen says
 so rather than showing an error. Only a hit is cached, so a kiosk provisioned
 after the server started shows its ID without a restart.
 
-See [docs/kiosk-provisioning.md](docs/kiosk-provisioning.md) for the setup,
-including why AnyDesk needs a `libgcc1` shim on Debian 13.
+See [docs/kiosk-provisioning.md](docs/kiosk-provisioning.md) for the setup.
 
 ## Sensor Schema
 

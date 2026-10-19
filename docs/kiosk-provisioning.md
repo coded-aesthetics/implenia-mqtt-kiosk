@@ -194,15 +194,16 @@ Three things worth knowing:
   registers on first run, so provisioning a machine with no internet leaves no
   id. The script waits 20 s and then says so; re-run it once the machine is
   online, or write the id into `/opt/kiosk/anydesk-id.txt` by hand
-- **AnyDesk's `.deb` still depends on `libgcc1`**, a package Debian dropped
-  after bookworm in favour of `libgcc-s1`, and nothing in trixie provides the
-  old name — so `apt install anydesk` fails outright. Provisioning installs a
-  shim package that provides the name (versioned, since an unversioned
-  `Provides` does not satisfy a versioned dependency) and depends on
-  `libgcc-s1`. It is built only when apt's own simulation says the dependency
-  is unmet, so a fixed AnyDesk package installs on its own terms. Repacking
-  AnyDesk's `.deb` instead would have left apt permanently unable to satisfy
-  the repo version — i.e. a fleet that silently stops getting AnyDesk updates
+- **AnyDesk's `.deb` declares `Depends: libgcc1`**, a package name Debian
+  dropped after bookworm in favour of `libgcc-s1`. **In practice this did not
+  bite:** on the first real install — Debian 13.7, AnyDesk 8.1.0 — apt resolved
+  it and the shim was never built. Provisioning carries a shim package that
+  provides the name (versioned, since an unversioned `Provides` does not
+  satisfy a versioned dependency) and depends on `libgcc-s1`, but it is built
+  *only* when apt's own simulation says the dependency is unmet. Treat it as a
+  fallback for a future archive state, not as a problem you will meet.
+  Repacking AnyDesk's `.deb` instead would have left apt permanently unable to
+  satisfy the repo version — a fleet that silently stops getting AnyDesk updates
 - **An idle AnyDesk keeps a connection to AnyDesk's servers**, over the metered
   mobile link this project otherwise works hard to spare. It is a keepalive,
   not a stream, but it is not nothing — worth watching on the first pilot

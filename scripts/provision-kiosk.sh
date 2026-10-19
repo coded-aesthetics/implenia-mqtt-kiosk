@@ -335,6 +335,14 @@ NPMRC
   (cd /tmp && node -e "require('$APP_DIR/server/node_modules/better-sqlite3')") 2>/dev/null \
     && ok "better-sqlite3 loads (native modules match this machine)" \
     || die "better-sqlite3 does not load. With an offline archive this means it was built for a different Node version or Debian release — install with --token instead."
+
+  # The other compiled module, and a warning rather than a failure: it is only
+  # needed by the serial transport, so a kiosk on MQTT runs fine without it and
+  # must not be refused an install over it. A serial site would otherwise find
+  # out when the rig is already waiting.
+  (cd /tmp && node -e "require('$APP_DIR/server/node_modules/serialport')") 2>/dev/null \
+    && ok "serialport loads" \
+    || warn "serialport does not load — the serial (Elvis) transport will not work on this machine. MQTT is unaffected. Re-run with --token to rebuild it from the network."
 }
 
 set_env() {
@@ -410,8 +418,11 @@ pm2_service() {
   pm2 save >/dev/null
   ok "kiosk-server under PM2, starting on boot"
 
+  # -fs, not -fsS: the first attempt lands before the server is listening, and
+  # `curl: (7) Failed to connect` printed directly above a green tick is how a
+  # clean provisioning run gets distrusted.
   local tries=0
-  until curl -fsS -o /dev/null "http://localhost:$PORT/status"; do
+  until curl -fs -o /dev/null "http://localhost:$PORT/status"; do
     tries=$((tries + 1))
     [[ $tries -lt 30 ]] || die "Server did not answer on port $PORT within 30 s. Check: pm2 logs kiosk-server"
     sleep 1
@@ -474,7 +485,7 @@ openbox &
 
 # Chromium does not retry a failed load, so starting it before PM2 has the port
 # open would leave a permanent error page on a screen nobody can navigate.
-until curl -fsS -o /dev/null http://localhost:$PORT/status; do sleep 1; done
+until curl -fs -o /dev/null http://localhost:$PORT/status; do sleep 1; done
 
 while : ; do
   # Power loss is routine on site, and Chromium greets an unclean shutdown with
@@ -506,9 +517,14 @@ XINITRC
 # --- 7. remote access -----------------------------------------------------
 
 #
-# AnyDesk's .deb declares `Depends: libgcc1 (>= 1:4.1.1)`. Debian renamed that
-# package to libgcc-s1 and nothing in trixie provides the old name, so apt
-# refuses the install outright.
+# AnyDesk's .deb declares `Depends: libgcc1 (>= 1:4.1.1)`, a package name Debian
+# dropped after bookworm in favour of libgcc-s1.
+#
+# **On the first real install — Debian 13.7, AnyDesk 8.1.0 — apt resolved it
+# anyway and this was never built.** Something in the archive still provides the
+# name. It stays as a fallback because it is built only when apt's own
+# simulation says the dependency is unmet, so it costs a passing install
+# nothing; do not read its presence as proof the problem exists.
 #
 # A shim is the right fix rather than repacking the .deb: repacking leaves apt
 # unable to satisfy the repo version ever again, so AnyDesk silently stops
