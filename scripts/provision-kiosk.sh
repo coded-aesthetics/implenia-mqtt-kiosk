@@ -230,6 +230,27 @@ node_runtime() {
   fi
   [[ "$(node -v | sed 's/^v\([0-9]*\).*/\1/')" -ge 20 ]] || die "Node >= 20 required, got $(node -v)."
 
+  #
+  # npm 10.x cannot resolve this tree at all. It crashes with `Cannot read
+  # properties of null (reading 'edgesOut')` — an arborist bug this project's
+  # workspaces-plus-overrides tree reaches, with no manifest of ours at fault.
+  # Node 22 bundles 10.9, which fails exactly as 10.8.2 does; npm 11 resolves
+  # the same tree in seconds.
+  #
+  # The CI workflows carry the same pin. It is needed here just as much — this
+  # is where the dependencies actually get installed, and without it the whole
+  # provisioning run dies at the Dependencies step with no node_modules and an
+  # error that names nothing in this repository.
+  #
+  local npm_major
+  npm_major="$(npm -v 2>/dev/null | cut -d. -f1)"
+  if [[ -z "$npm_major" ]] || [[ "$npm_major" -lt 11 ]]; then
+    sudo npm install -g npm@11 --silent
+    ok "npm $(npm -v) — Node's bundled 10.x cannot resolve this tree"
+  else
+    skip "npm $(npm -v)"
+  fi
+
   command -v pm2 >/dev/null || sudo npm install -g pm2 --silent
   ok "PM2 $(pm2 -v 2>/dev/null)"
 }
