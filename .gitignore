@@ -18,3 +18,11 @@ test-results/
 playwright-report/
 blob-report/
 .playwright/
+
+# Provisioning stick artefacts (scripts/make-provision-stick.sh):
+# the assembled payload and the cached Debian ISO.
+/provision-stick/
+/.cache/
+
+# Locally built release bundles (scripts/make-bundle.sh)
+/dist-bundle/
