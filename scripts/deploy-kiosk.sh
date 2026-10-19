@@ -86,12 +86,28 @@ ssh "$HOST" "pm2 restart kiosk-server --update-env >/dev/null" || die "PM2 resta
 ok "kiosk-server restarted"
 
 if [[ $RESTART_BROWSER -eq 1 ]]; then
-  # The service worker precaches the UI, and the build is registered as
-  # `prompt` — but with skipWaiting and clientsClaim, so a fresh load takes the
-  # new build immediately. The ~/.xinitrc loop brings Chromium back in two
-  # seconds; that loop is why killing it is safe rather than a black screen.
-  ssh "$HOST" "pkill -u \$(id -un) chromium || true" >/dev/null 2>&1 || true
-  ok "Chromium restarted — it reloads into the new UI"
+  #
+  # The service worker has to be cleared, not just outrun.
+  #
+  # Extracting over the tree leaves the *previous* hashed assets in place, so
+  # the old precache stays completely valid — nothing 404s, and the old service
+  # worker has no reason to give up serving it. The new worker does install in
+  # the background and does take over (skipWaiting, clientsClaim), but only
+  # from the *next* load onward: restart Chromium once and you get yesterday's
+  # UI with tomorrow's worker warming up behind it. That is a deploy that
+  # reports success and changes nothing on screen.
+  #
+  # The rm brackets the shutdown because a dying Chromium rewrites these
+  # directories on its way out. localStorage lives elsewhere and is untouched —
+  # which matters, since the unsent voice comment queue is kept there.
+  #
+  # Single-quoted: every expansion below belongs to the remote shell.
+  ssh "$HOST" 'SW="$HOME/.config/chromium/Default/Service Worker"
+    rm -rf "$SW/CacheStorage" "$SW/ScriptCache" 2>/dev/null
+    pkill -u "$(id -un)" chromium
+    rm -rf "$SW/CacheStorage" "$SW/ScriptCache" 2>/dev/null
+    true' >/dev/null 2>&1 || true
+  ok "Chromium restarted with its service worker cleared — this load is the new UI"
 fi
 
 log "Verifying"
