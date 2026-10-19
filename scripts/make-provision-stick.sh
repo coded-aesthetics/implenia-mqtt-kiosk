@@ -174,12 +174,13 @@ Implenia Kiosk — provisioning stick
 2. Log in as "kiosk" after the first boot, plug this stick back in and run:
 
      sudo mkdir -p /media/prov
-     @MOUNT@
+     sudo mount -o uid=$(id -u) /dev/disk/by-label/KIOSK-PROV /media/prov
      /media/prov/provision-kiosk.sh --hostname kiosk-<rig>
 
-   Use that mount command as written. It is the one that leaves the stick
-   writable for this user, so the machine can be appended to machines.tsv —
-   the only record of the fleet's AnyDesk ids.
+   The uid= is what leaves this stick writable for you, so the machine can be
+   appended to machines.tsv — the only record of the fleet's AnyDesk ids.
+   If this stick's payload partition is ext4 rather than FAT32, leave the
+   -o uid=... out: mount rejects it there, and ext4 carries ownership itself.
 
    It takes 10-15 minutes and ends by asking to reboot. Say yes: the machine
    has to come up into the kiosk on its own, and that is the test.
@@ -195,8 +196,7 @@ Implenia Kiosk — provisioning stick
 Re-running provision-kiosk.sh is safe — it repairs a machine rather than
 duplicating anything, and keeps the database, the .env and recorded data.
 STICKREADME
-sed -i "s|@MOUNT@|$MOUNT_CMD|" "$OUT/README.txt"
-ok "README.txt (mount command for $FILESYSTEM)"
+ok "README.txt"
 
 du -sh "$OUT" | awk '{printf "    payload size: %s\n", $1}'
 
