@@ -17,7 +17,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
+
+      # Node 22's bundled npm (10.9.x) cannot resolve this tree at all — see
+      # CLAUDE.md, CI Quirks. npm 11 can, and the Node version has to stay 22
+      # regardless: better-sqlite3 11.x publishes no prebuild for Node 24, so
+      # Node 24 compiles it from source and that build aborts the process on
+      # teardown (Assertion failed: (env) != nullptr).
+      - name: Use npm 11
+        run: npm install -g npm@11
 
       - name: Authenticate GitHub Packages
         run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc

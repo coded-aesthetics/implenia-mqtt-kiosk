@@ -103,6 +103,79 @@ The settings page (`#/config`) provides:
 - **Sensor mapping** — assign serial channel indices to named sensors per Verfahren (machine type)
 - **Datenübertragung** — how much of a recording leaves the kiosk and by which route (see "Data Reduction" below)
 - **Software update** — manual `.tar.gz` upload for offline environments
+- **Fernwartung** — this machine's AnyDesk ID, and whether AnyDesk is connected
+
+## On-Screen Keyboard
+
+There is no physical keyboard on a kiosk, so the app brings its own
+(`TouchKeyboard`, `utils/touchKeyboard.ts`). Every value anybody enters goes
+through it: the broker URL and API token in the wizard, calibration factors, a
+geology description, a comment.
+
+It attaches by listening for `focusin` on the document rather than by wrapping
+each input, so a field added later gets a keyboard without anybody wiring one
+up, and the layout follows what the markup already declares:
+
+| Field | Layout |
+|---|---|
+| `inputMode="decimal"` / `"numeric"` | Numeric pad with `,` and `-` — a calibration offset is routinely negative |
+| `type="number"` | Numeric pad, **digits only** (see below) |
+| everything else, including `type="password"` and `textarea` | German QWERTZ, umlauts in the letter rows, `123` layer for `: / @ _` and digits |
+
+Four things about it are load-bearing:
+
+- **It is a flex child of the shell, not an overlay.** Rendered between `main`
+  (which is `flex: 1`) and the recording bar, it takes its height out of the
+  content instead of covering it, so the live depth and the stop button stay
+  visible while somebody types. A **full-viewport overlay that holds an input**
+  cannot shrink that way and must end at `var(--keyboard-inset, 0)`, which the
+  keyboard publishes on `:root` while open — `GeologiePicker` does, since its
+  search field is the one place a worker types mid-drilling. The inset is the
+  distance from the bottom of the viewport to the top of the keyboard, *not*
+  the keyboard's height: the keyboard sits above the recording bar, so
+  reserving its height alone leaves the overlay overlapping it by the bar's
+  76px
+- **Keys act on `pointerdown` and cancel it.** `preventDefault` keeps focus and
+  the caret in the field, and since nothing listens for `click`, there is no
+  compatibility click afterwards to land on whichever key replaced this one
+  when the layout switched
+- **Writes go through the prototype's `value` setter plus a bubbling `input`
+  event.** Assigning `el.value` on a controlled React input is swallowed on the
+  next render
+- **`type="number"` can hold no decimal separator at all**, and a period is not
+  a workaround. HTML value sanitization empties the value whenever it is not a
+  valid floating-point number, and the intermediate state of typing a decimal
+  always is one: after `1.` the browser answers `el.value` as `""`, so the next
+  digit starts a new number and `1`, `.`, `2` comes out as `2`. Nothing on this
+  side can produce that intermediate, so the pad for those fields carries
+  digits only. Nothing is lost — the only `type="number"` field here is the
+  Elvis baud rate, an integer, while the fields that really hold decimals
+  declare `inputMode="decimal"` on a text input and normalise `,` to `.`
+  themselves (`CalibrationPage.parseNumber`, `RohrwechselSettings`)
+
+Enabled by `any-pointer: coarse`, i.e. on the kiosk and not on a development
+machine. `localStorage.touchKeyboard = 'on' | 'off'` overrides it.
+
+## Remote Access
+
+```
+GET /api/remote-access   → { id: "1234567890" | null, status: "online" | "offline" | null }
+```
+
+AnyDesk, set up by `scripts/provision-kiosk.sh` with unattended access, so a
+service tech can reach a kiosk without a worker accepting anything. The
+settings screen shows the ID for reading out over the phone.
+
+The ID is read from `/opt/kiosk/anydesk-id.txt`, written once during
+provisioning — **not** from `anydesk --get-id`, which answers an empty line and
+exit status 1 for anyone but root, and this server runs as the kiosk user.
+Everything degrades to `null`: no AnyDesk, no network, or a provisioning run
+that never reached AnyDesk's servers are all normal states, and the screen says
+so rather than showing an error. Only a hit is cached, so a kiosk provisioned
+after the server started shows its ID without a restart.
+
+See [docs/kiosk-provisioning.md](docs/kiosk-provisioning.md) for the setup,
+including why AnyDesk needs a `libgcc1` shim on Debian 13.
 
 ## Sensor Schema
 
@@ -836,13 +909,45 @@ Builds `server/dist/` (TypeScript → JS) and `ui/dist/` (Vite bundle). The serv
 
 ## Production Deployment
 
-### Linux (systemd + PM2)
+### Debian industry PC (the field setup)
+
+Two commands, documented end to end — BIOS settings, Debian installer answers,
+on-site checklist and troubleshooting — in
+**[docs/kiosk-provisioning.md](docs/kiosk-provisioning.md)**.
+
+```bash
+# office, once per release: Debian installer + payload on one stick
+./scripts/make-provision-stick.sh --device /dev/sdX --latest \
+  --token ghp_… --anydesk-password '<fleet password>'
+
+# on the machine, after a bare Debian install (stick mounted at /media/prov)
+/media/prov/provision-kiosk.sh --hostname kiosk-g08
+```
+
+`provision-kiosk.sh` installs the release into `/opt/kiosk`, wires PM2 and a
+Chromium-under-Openbox session with autologin, and is idempotent — re-running it
+repairs a machine without touching `kiosk.db`, `.env` or recorded data. Three
+things it handles that are easy to miss when installing by hand:
+
+- The release bundle carries no `.npmrc`, and `@coded-aesthetics/din4023` is a
+  private GitHub Packages dependency, so dependencies need a token (or the
+  offline archive from `--export-deps`)
+- `npm install` runs inside `server/` with `--no-workspaces`: the bundle's root
+  `package.json` declares `workspaces: ["server","ui"]` but ships no
+  `ui/package.json`
+- **No release contains the Vosk speech model** (gitignored, and CI never runs
+  `download-vosk-model.sh`), so voice commands are silently off on a kiosk
+  installed from a release until the model is provisioned. It lands in
+  `ui/dist/` and survives self-updates, which untar over the tree
+
+### Linux, by hand (development machines, other distributions)
 
 ```bash
 ./scripts/install-service.sh
 ```
 
-### Kiosk Browser (Linux)
+With a desktop environment that honours `/etc/xdg/autostart`, the kiosk browser
+can go there instead of the provisioned `~/.xinitrc` session:
 
 ```bash
 sudo cp scripts/kiosk.desktop /etc/xdg/autostart/

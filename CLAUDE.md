@@ -75,6 +75,32 @@ The self-updater on the kiosk polls GitHub Releases hourly, compares semver agai
 
 **Rollup platform binaries**: `package-lock.json` is generated on macOS and only contains resolved entries for macOS-specific optional dependencies (e.g. `@rollup/rollup-darwin-arm64`). Running `npm ci` on Linux (GitHub Actions) fails because the linux binary (`@rollup/rollup-linux-x64-gnu`) isn't in the lockfile. The CI workflow uses `npm install` instead of `npm ci` to let npm resolve platform-appropriate binaries. Do not switch CI back to `npm ci` without first ensuring the lockfile contains cross-platform entries.
 
+**CI runs Node 22 with npm 11 installed over it**, and both halves are load
+bearing — the two obvious single-version choices each fail, in opposite ways.
+
+*Why not Node 20's npm.* The workflows delete `package-lock.json` and run
+`npm install`, so every run resolves the tree fresh. On 2026-10-19 that
+started crashing npm 10.8.2 (Node 20's bundled npm) with `Cannot read
+properties of null (reading 'edgesOut')` — an arborist bug reached by a
+transitive dependency published since the previous green run, with no manifest
+in this repo changed. npm 10.9 (Node 22's) crashes identically. npm 11
+resolves the same tree in 18 s, hence the explicit `npm install -g npm@11`.
+
+*Why not Node 24.* better-sqlite3 11.x publishes linux-x64 prebuilds for
+node-v108/115/127/131 — Node 18, 20, 22, 23 — and **none for Node 24**. Node 24
+therefore compiles it from source, and that build aborts the process during
+environment teardown: `Assertion failed: (env) != nullptr` in
+`RemoveEnvironmentCleanupHook`, with `Statement::~Statement()` on the native
+stack. It killed nine vitest workers (43 of 52 files reported). Node 24.14
+locally does not reproduce it; the runner's 24.21 does.
+
+`scripts/provision-kiosk.sh` installs the same major on the kiosk for the same
+reason — a compiled-from-source database driver is not something to discover in
+the field. Changing either half needs the other checked: a newer Node needs a
+better-sqlite3 that has prebuilds for it, and dropping the npm pin needs `npm
+ci` to be viable (see the Rollup note above), since the fresh resolve on every
+run is what exposes this repo to registry churn at all.
+
 **lodash pinned to 4.17.21**: lodash 4.18.0 removed `assignWith` which breaks `workbox-build` (used by `vite-plugin-pwa`). The root `package.json` pins `"lodash": "4.17.21"` as a top-level override. Do not remove this pin.
 
 **GitHub Packages auth**: The `@coded-aesthetics/din4023` package is hosted on GitHub Packages (private). CI uses `GITHUB_TOKEN` with `packages: read` permission. The `.npmrc` scopes `@coded-aesthetics` to `npm.pkg.github.com`. The server depends on it too, for the DIN 4023 tables — only its root entry, which carries no React.

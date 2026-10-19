@@ -343,7 +343,14 @@ function Kachel({
 const styles: Record<string, CSSProperties> = {
   overlay: {
     position: 'fixed',
-    inset: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    // Not `inset: 0`: the on-screen keyboard is the only way to use the search
+    // field, and it cannot shrink a fixed overlay the way it shrinks the shell.
+    // Ending above it keeps the tabs, the search field and the entries in view
+    // while somebody types. 0 when no keyboard is open.
+    bottom: 'var(--keyboard-inset, 0)',
     zIndex: 500,
     backgroundColor: 'var(--surface-1)',
     display: 'flex',
