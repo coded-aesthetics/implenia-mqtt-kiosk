@@ -311,7 +311,7 @@ Reach a shell with `Ctrl+Alt+F2` (the kiosk session is on tty1), or over SSH.
 | AnyDesk connects but the screen is black | The service is not capturing the X session. Add `anydesk &` to `~/.xinitrc` before the Chromium loop and reboot. It is not there by default because the AnyDesk window would appear over the kiosk |
 | `apt install anydesk` fails on unmet dependencies | `libgcc1` — re-run provisioning, which builds the shim package, or install it by hand (see [Remote access](#remote-access-anydesk)) |
 | `anydesk --set-password` fails silently | It rejects weak passwords. Use a longer one |
-| The on-screen keyboard never appears | It is enabled by `any-pointer: coarse`. On a machine with no touchscreen, force it: `localStorage.touchKeyboard = 'on'` in the browser console. `'off'` disables it |
+| The on-screen keyboard never appears | A production build enables it unconditionally, so if it is missing you are looking at a dev build or `localStorage.touchKeyboard` is `'off'`. Builds before 2026-10-19 gated it on `(any-pointer: coarse)` and so hid it whenever the touchscreen was not registered with X — i.e. exactly when it was needed |
 | `Error opening terminal: xterm-kitty` over SSH | The client's `TERM` has no terminfo entry on the machine. Provisioning installs `ncurses-term`, which covers kitty, alacritty, wezterm and foot; on a machine provisioned before that, `export TERM=xterm-256color` or `sudo apt install ncurses-term` |
 | `npm install` fails with 401/403 | The token is missing, expired, or lacks `read:packages` for `@coded-aesthetics` |
 
