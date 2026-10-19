@@ -40,7 +40,7 @@ export function App() {
   const route = useHashRouter();
   const config = useConfig();
   const setup = useActiveVerfahren();
-  const shift = useShiftAssignment(config.hasApiKey);
+  const shift = useShiftAssignment(config.hasApiKey, config.apiUrl);
   const { importShift, clearImport } = shift;
 
   const [devMode, setDevMode] = useState(false);

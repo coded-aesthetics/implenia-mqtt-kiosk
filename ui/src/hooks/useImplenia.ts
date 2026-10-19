@@ -154,7 +154,20 @@ export interface ShiftAssignmentState {
   clearImport: () => Promise<void>;
 }
 
-export function useShiftAssignment(hasApiKey: boolean): ShiftAssignmentState {
+/**
+ * `apiUrl` is a parameter, not decoration: the fetch has to re-run when the
+ * server address changes, not only when a key appears.
+ *
+ * Saving the key and saving the address are two separate actions on the
+ * connection screen, in that order. With `hasApiKey` as the only dependency,
+ * the fetch fired after the key — failing, because there was no usable address
+ * yet — and then nothing re-triggered it when the address arrived. The
+ * connection screen validated the new address and reported success while the
+ * element list kept showing "Verbindungsproblem" from the earlier attempt,
+ * until somebody reloaded the page. Found on the first machine pointed at a
+ * local backend.
+ */
+export function useShiftAssignment(hasApiKey: boolean, apiUrl: string | null): ShiftAssignmentState {
   const [state, setState] = useState<{
     data: ShiftAssignment | null;
     source: 'api' | 'import' | null;
@@ -195,7 +208,7 @@ export function useShiftAssignment(hasApiKey: boolean): ShiftAssignmentState {
         if (id !== fetchIdRef.current) return;
         setState({ data: null, source: null, loading: false, error: (err as Error).message, notFound: false });
       });
-  }, [hasApiKey]);
+  }, [hasApiKey, apiUrl]);
 
   useEffect(() => {
     fetchShift();
