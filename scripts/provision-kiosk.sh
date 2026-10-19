@@ -172,7 +172,7 @@ system_basics() {
     xserver-xorg xserver-xorg-core xinit x11-xserver-utils \
     xserver-xorg-input-libinput xserver-xorg-video-intel \
     openbox chromium unclutter fonts-dejavu-core \
-    curl ca-certificates unzip sqlite3 ncurses-term \
+    curl ca-certificates unzip sqlite3 ncurses-term xinput \
     dbus dbus-user-session udisks2 udiskie avahi-daemon
   ok "X, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo for modern terminals"
 }
@@ -192,6 +192,40 @@ kernel_cmdline() {
     NEEDS_REBOOT=1
     ok "intel_idle.max_cstate=1 added (Bay Trail freeze workaround)"
   fi
+}
+
+# --- 2b. touch input ------------------------------------------------------
+
+touch_input() {
+  log "Touch input"
+  local rules=/etc/udev/rules.d/99-egalax-touchscreen.rules
+  if [[ -f "$rules" ]]; then
+    skip "eGalax touch rule already in place"
+    return
+  fi
+  #
+  # The iSPOS panel carries an eGalax/D-WAV Titan6001 SAW controller
+  # (0eef:0001) whose HID descriptors claim a pen tool *and* a finger tool. So
+  # udev tags its interfaces Tablet and Touchpad, and libinput — which is
+  # right to trust those tags — rejects the one named "Touchscreen" with
+  # `missing tablet capabilities: resolution` and adds the other as a touchpad
+  # with pointer acceleration. The screen is then inert: the kernel sees every
+  # touch, X maps none of it to a coordinate.
+  #
+  # Tagging it for what it is costs nothing on a machine without the device,
+  # since the rule matches on the USB id.
+  #
+  sudo tee "$rules" >/dev/null <<'RULES'
+# eGalax/D-WAV SAW touch controller: its descriptors claim pen and finger
+# tools, so udev's input_id tags it Tablet/Touchpad and libinput either refuses
+# it or treats it as a relative pointing device. Force the real class.
+SUBSYSTEM=="input", ATTRS{idVendor}=="0eef", ATTRS{idProduct}=="0001", \
+  ENV{ID_INPUT_TABLET}="", ENV{ID_INPUT_TOUCHPAD}="", ENV{ID_INPUT_MOUSE}="", \
+  ENV{ID_INPUT_TOUCHSCREEN}="1"
+RULES
+  sudo udevadm control --reload-rules 2>/dev/null || true
+  NEEDS_REBOOT=1
+  ok "eGalax touch controller tagged as a touchscreen (takes effect on reboot)"
 }
 
 # --- 3. swap --------------------------------------------------------------
@@ -685,6 +719,7 @@ main() {
   preflight
   [[ -n "$EXPORT_DEPS" ]] && export_deps
   system_basics
+  touch_input
   kernel_cmdline
   compressed_swap
   node_runtime
