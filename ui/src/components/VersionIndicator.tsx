@@ -104,8 +104,10 @@ export function VersionIndicator({ version, available, applying, source = null }
     return (
       <div ref={boxRef} style={styles.wrap}>
         <button type="button" onClick={install} style={{ ...styles.box, ...styles.confirm }}>
-          <span style={styles.line}>Wirklich updaten?</span>
-          <span style={styles.lineSmall}>v{available}{source === 'usb' ? ' (USB)' : ''} · App startet neu</span>
+          {/* "Wirklich {verb}?" per the house pattern, and the verb is the one
+              the offer used — upgraden, not updaten. */}
+          <span style={styles.line}>Wirklich upgraden?</span>
+          <span style={styles.lineSmall}>App startet neu</span>
         </button>
       </div>
     );
@@ -119,8 +121,11 @@ export function VersionIndicator({ version, available, applying, source = null }
           onClick={() => setMode('confirming')}
           style={{ ...styles.box, ...styles.offered }}
         >
-          <span style={styles.lineMuted}>v{version} installiert</span>
-          <span style={styles.lineAccent}>v{available} verfügbar{source === 'usb' ? ' (USB)' : ''}</span>
+          {/* One line naming both versions and the action. Two stacked lines
+              read as a label with a subtitle; this reads as the button it is. */}
+          <span style={styles.lineAccent}>
+            von v{version} auf v{available} upgraden{source === 'usb' ? ' (USB)' : ''}
+          </span>
         </button>
         {message && <span style={styles.message}>{message}</span>}
       </div>
@@ -152,7 +157,7 @@ const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     minHeight: '48px',
     padding: '0 0.75rem',
     gap: '1px',
@@ -161,7 +166,7 @@ const styles: Record<string, CSSProperties> = {
     background: 'transparent',
     cursor: 'pointer',
     fontFamily: 'inherit',
-    textAlign: 'right',
+    textAlign: 'center',
   },
   plain: {},
   offered: {
