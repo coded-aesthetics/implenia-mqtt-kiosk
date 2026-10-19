@@ -128,6 +128,13 @@ preflight() {
   [[ -f /etc/debian_version ]] || warn "Not a Debian system — proceeding, but nothing here is tested elsewhere."
   [[ "$(uname -m)" == "x86_64" ]] || warn "Not x86_64 ($(uname -m)) — the prebuilt native modules will not match."
   ok "Running as $USER, sudo available, Debian $(cat /etc/debian_version 2>/dev/null || echo '?')"
+
+  # AnyDesk refuses short or patterned passwords, and it refuses them at the
+  # very end of the run — fifteen minutes after the only moment anybody could
+  # have done something about it. Said here instead.
+  if [[ $WITH_ANYDESK -eq 1 && -n "$ANYDESK_PASSWORD" && ${#ANYDESK_PASSWORD} -lt 12 ]]; then
+    warn "The AnyDesk password is ${#ANYDESK_PASSWORD} characters. AnyDesk requires at least 8 and rejects simple patterns; under 12 it is usually refused. Remote access will stay interactive unless you pass a longer --anydesk-password."
+  fi
 }
 
 # --- 1. system ------------------------------------------------------------
@@ -759,7 +766,7 @@ remote_access() {
     if printf '%s\n' "$ANYDESK_PASSWORD" | sudo -H anydesk --set-password >/dev/null 2>&1; then
       ok "Unattended access password set"
     else
-      warn "AnyDesk refused the password — it rejects weak ones. Set it by hand: printf '%s\\n' '<password>' | sudo anydesk --set-password"
+      warn "AnyDesk refused the ${#ANYDESK_PASSWORD}-character password — it wants at least 8, recommends over 12, and rejects simple patterns. Unattended access is NOT active. Set it by hand (the -H matters, or root takes ~/.anydesk back): printf '%s\\n' '<longer password>' | sudo -H anydesk --set-password"
     fi
   else
     warn "No password set, so a remote session must be accepted on the touchscreen. Pass --anydesk-password or put ANYDESK_PASSWORD in kiosk.conf."
