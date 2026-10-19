@@ -306,6 +306,9 @@ Before the machine leaves:
       repeating errors
 - [ ] Tap a text field — the on-screen keyboard appears and the recording bar
       stays visible
+- [ ] For a machine that will use voice: a microphone is fitted and
+      `pactl list sources short` lists it. The panel has an analog input but no
+      microphone of its own
 - [ ] `ssh kiosk@kiosk-<rig>.local` works from a service laptop
 - [ ] **Einstellungen → System** shows the AnyDesk ID, and a test session from
       a service laptop connects without anybody touching the screen
@@ -367,7 +370,7 @@ Reach a shell with `Ctrl+Alt+F2` (the kiosk session is on tty1), or over SSH.
 | Random freezes, no logs | `cat /proc/cmdline | grep max_cstate`. If empty, the GRUB step did not take effect — re-run provisioning and reboot |
 | **Touch does nothing at all, mouse works** | udev mis-classified the controller, which is the normal state on this panel. Its eGalax/D-WAV SAW controller (`0eef:0001`) claims pen *and* finger tools, so libinput rejects the interface named "Touchscreen" (`missing tablet capabilities: resolution`) and adds another as a touchpad with pointer acceleration — the kernel sees every touch, X maps none to a coordinate. Provisioning installs `/etc/udev/rules.d/99-egalax-touchscreen.rules` to force the class; on a machine provisioned before that, re-run provisioning and reboot. Confirm with `DISPLAY=:0 xinput list`, and `~/.local/share/xorg/Xorg.0.log` is where the rejection is visible |
 | Touch taps land in the wrong place | `DISPLAY=:0 xinput list` for the id, then a calibration matrix: `xinput set-prop <id> "libinput Calibration Matrix" <9 floats>`. eGalax panels commonly need an inverted or swapped axis. Put the working command in `~/.xsession` so it survives a reboot |
-| Voice commands do nothing | `ls -l /opt/kiosk/ui/dist/vosk-model-de.tar.gz`. Missing → provision it: that file is in no release |
+| Voice commands do nothing | Three things in this order: `pactl list sources short` for a microphone the machine can see (the panel has an analog input and no microphone of its own, so one has to be fitted), `pgrep -u kiosk pipewire` for a running sound server, and `ls -l /opt/kiosk/ui/dist/vosk-model-de.tar.gz` for the speech model, which is in no release and is placed by provisioning |
 | A USB update stick is not detected | `findmnt /media/*` — nothing there means `udiskie` is not running (check `~/.xsession`). `USB_UPDATE_PATHS` defaults to `/media` |
 | No update banner ever | Private repo without a token: `grep GITHUB /opt/kiosk/.env`. Also `curl localhost:3000/api/logs?module=updater` |
 | "Restore pages?" bubble after power loss | The `Preferences` rewrite in `~/.xsession` is missing — re-run provisioning |
