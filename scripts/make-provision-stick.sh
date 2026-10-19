@@ -29,6 +29,7 @@ ANYDESK_PASSWORD=""
 DEPS=""
 OUT=""
 PAYLOAD_PART_SIZE="8G"
+FILESYSTEM=""
 ASSUME_YES=0
 REPO="coded-aesthetics/implenia-mqtt-kiosk"
 ISO_BASE="https://cdimage.debian.org/debian-cd/current/amd64/iso-cd"
@@ -55,6 +56,9 @@ Usage: ./scripts/make-provision-stick.sh [options]
                       internet during setup
   --out DIR           Where to assemble the payload (default: a temp dir, or
                       ./provision-stick when no --device is given)
+  --filesystem FS     vfat or ext4 for the payload partition. The default is
+                      vfat when mkfs.vfat is installed, ext4 otherwise — see
+                      the note it prints.
   --yes               No confirmation prompt before writing the stick
   -h, --help          This text
 USAGE
@@ -70,6 +74,7 @@ while [[ $# -gt 0 ]]; do
     --anydesk-password) ANYDESK_PASSWORD="$2"; shift 2 ;;
     --deps)    DEPS="$2"; shift 2 ;;
     --out)     OUT="$2"; shift 2 ;;
+    --filesystem) FILESYSTEM="$2"; shift 2 ;;
     --yes|-y)  ASSUME_YES=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *)         echo "Unknown option: $1" >&2; usage; exit 1 ;;
@@ -169,8 +174,12 @@ Implenia Kiosk — provisioning stick
 2. Log in as "kiosk" after the first boot, plug this stick back in and run:
 
      sudo mkdir -p /media/prov
-     sudo mount /dev/disk/by-label/KIOSK-PROV /media/prov
+     @MOUNT@
      /media/prov/provision-kiosk.sh --hostname kiosk-<rig>
+
+   Use that mount command as written. It is the one that leaves the stick
+   writable for this user, so the machine can be appended to machines.tsv —
+   the only record of the fleet's AnyDesk ids.
 
    It takes 10-15 minutes and ends by asking to reboot. Say yes: the machine
    has to come up into the kiosk on its own, and that is the test.
@@ -186,7 +195,8 @@ Implenia Kiosk — provisioning stick
 Re-running provision-kiosk.sh is safe — it repairs a machine rather than
 duplicating anything, and keeps the database, the .env and recorded data.
 STICKREADME
-ok "README.txt"
+sed -i "s|@MOUNT@|$MOUNT_CMD|" "$OUT/README.txt"
+ok "README.txt (mount command for $FILESYSTEM)"
 
 du -sh "$OUT" | awk '{printf "    payload size: %s\n", $1}'
 
@@ -200,14 +210,46 @@ log "Preparing $DEVICE"
 # dosfstools and is missing on plenty of workstations, and discovering that
 # after the image is on the stick leaves a half-built one.
 missing=()
-for tool in dd sfdisk mkfs.vfat partprobe udevadm; do
+for tool in dd sfdisk partprobe udevadm; do
   command -v "$tool" >/dev/null || missing+=("$tool")
 done
 if [[ ${#missing[@]} -gt 0 ]]; then
   die "Missing: ${missing[*]}
-    Debian/Ubuntu:  sudo apt install dosfstools parted util-linux
-    Arch:           sudo pacman -S dosfstools parted util-linux"
+    Debian/Ubuntu:  sudo apt install parted util-linux
+    Arch:           sudo pacman -S parted util-linux"
 fi
+
+#
+# The payload partition is new empty space, so it needs a filesystem written
+# into it — that is all mkfs.vfat is for, and any other filesystem needs its own
+# mkfs just the same.
+#
+# vfat by preference, and not for the kiosk's sake: Debian reads either one
+# natively. It is so that a colleague on Windows or macOS can drop a newer
+# release onto the stick without re-flashing it. ext4 costs only that.
+#
+if [[ -z "$FILESYSTEM" ]]; then
+  if command -v mkfs.vfat >/dev/null; then FILESYSTEM=vfat; else FILESYSTEM=ext4; fi
+fi
+command -v "mkfs.$FILESYSTEM" >/dev/null || die "No mkfs.$FILESYSTEM on this machine.
+    vfat (preferred):  sudo pacman -S dosfstools   /   sudo apt install dosfstools
+    or pass --filesystem ext4, which needs only e2fsprogs."
+case "$FILESYSTEM" in
+  vfat)
+    PART_TYPE=c          # W95 FAT32 (LBA)
+    # A plain `sudo mount` of a FAT partition gives every file to root, and
+    # provisioning then cannot append the machine to machines.tsv.
+    MOUNT_CMD='sudo mount -o uid=$(id -u) /dev/disk/by-label/KIOSK-PROV /media/prov'
+    ;;
+  ext4)
+    PART_TYPE=83         # Linux
+    # ext4 takes no uid= mount option — ownership comes from the filesystem, so
+    # the payload is chowned to uid 1000 below, which is the kiosk user.
+    MOUNT_CMD='sudo mount /dev/disk/by-label/KIOSK-PROV /media/prov'
+    warn "Payload partition will be ext4 — Debian reads it fine, but a Windows or macOS machine cannot refresh this stick. Install dosfstools for vfat."
+    ;;
+  *) die "Unknown filesystem: $FILESYSTEM (vfat or ext4)" ;;
+esac
 
 [[ -b "$DEVICE" ]] || die "$DEVICE is not a block device."
 base="$(basename "$DEVICE")"
@@ -254,19 +296,26 @@ log "Adding the payload partition"
 before="$(lsblk -nlo NAME "$DEVICE" | tail -n +2)"
 # Appended after the image's own partitions, in the free space a stick this size
 # has left over. The image's partition entries are untouched, so it still boots.
-echo "start=,size=$PAYLOAD_PART_SIZE,type=c" | sudo sfdisk --append --no-reread "$DEVICE" >/dev/null
+echo "start=,size=$PAYLOAD_PART_SIZE,type=$PART_TYPE" | sudo sfdisk --append --no-reread "$DEVICE" >/dev/null
 sudo partprobe "$DEVICE" 2>/dev/null || true
 sudo udevadm settle
 sleep 1
 after="$(lsblk -nlo NAME "$DEVICE" | tail -n +2)"
 part="/dev/$(comm -13 <(echo "$before" | sort) <(echo "$after" | sort) | head -1)"
 [[ -b "$part" ]] || die "The payload partition did not appear. The stick still has a working installer — copy the payload from $OUT onto a second stick instead."
-sudo mkfs.vfat -F 32 -n KIOSK-PROV "$part" >/dev/null
-ok "$part formatted as KIOSK-PROV"
+case "$FILESYSTEM" in
+  vfat) sudo mkfs.vfat -F 32 -n KIOSK-PROV "$part" >/dev/null ;;
+  ext4) sudo mkfs.ext4 -q -L KIOSK-PROV "$part" >/dev/null ;;
+esac
+ok "$part formatted as KIOSK-PROV ($FILESYSTEM)"
 
 mnt="$(mktemp -d)"
 sudo mount "$part" "$mnt"
 sudo cp -r "$OUT"/. "$mnt"/
+# ext4 carries its own ownership, and uid 1000 is the first user the Debian
+# installer creates — the kiosk user. Without this, provisioning cannot write
+# the fleet register.
+[[ "$FILESYSTEM" == "ext4" ]] && sudo chown -R 1000:1000 "$mnt"
 sudo sync
 sudo umount "$mnt"
 rmdir "$mnt"
@@ -279,7 +328,8 @@ cat <<SUMMARY
   On the kiosk PC:
     1. Boot from it, install Debian (docs/kiosk-provisioning.md)
     2. Log in as kiosk, plug the stick back in, then:
-         mkdir -p /media/prov && sudo mount /dev/disk/by-label/KIOSK-PROV /media/prov
+         sudo mkdir -p /media/prov
+         $MOUNT_CMD
          /media/prov/provision-kiosk.sh --hostname kiosk-<rig>
 
 SUMMARY
