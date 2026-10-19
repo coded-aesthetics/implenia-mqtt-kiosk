@@ -17,7 +17,9 @@ export function KlemmbackeIndicator({ value, unit, openThreshold, closeThreshold
     [closeThreshold],
   );
 
-  const stateLabel = isOpen ? 'Offen' : 'Zu';
+  // "Auf", not "Offen": it is the word on site, it pairs with "Zu" at the same
+  // length, and the two-character difference is room the row next to it needs.
+  const stateLabel = isOpen ? 'Auf' : 'Zu';
   const color = isOpen
     ? 'var(--color-success)'
     : value >= closeThreshold * 1.5
@@ -31,7 +33,7 @@ export function KlemmbackeIndicator({ value, unit, openThreshold, closeThreshold
   return (
     <div style={styles.container}>
       <div style={styles.top}>
-        <span style={{ ...styles.stateText, color }}>Klemmbacke</span>
+        <span style={{ ...styles.stateText, ...styles.stateNoun, color }}>Klemmbacke</span>
         <span style={{ ...styles.stateText, ...styles.stateLabel, color }}>{stateLabel}</span>
         <span style={styles.spacer} />
         <span style={styles.valueGroup}>
@@ -56,16 +58,27 @@ const styles: Record<string, CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     padding: '0.5rem 0',
-    gap: '0.5rem',
+    gap: '0.4rem',
   },
   stateText: {
-    fontSize: '1.6rem',
+    fontSize: '1.5rem',
     fontWeight: 900,
     lineHeight: 1,
+    whiteSpace: 'nowrap',
   },
+  // The noun names the thing; the word after it is what changes and what a
+  // glance is actually for. Giving the name a smaller size is 30px back for
+  // the total volume sharing this row, and reads as a label rather than as a
+  // second reading.
+  stateNoun: {
+    fontSize: '1.25rem',
+  },
+  // Reserves the width of the longer of the two words, so the pressure beside
+  // it does not shift sideways every time the jaws move. "Auf" and "Zu" differ
+  // by one character, which is why this is now 3rem and not 5.5.
   stateLabel: {
     display: 'inline-block',
-    minWidth: '5.5rem',
+    minWidth: '3rem',
   },
   spacer: {
     flex: 1,
