@@ -111,11 +111,43 @@ done
 
 NEEDS_REBOOT=0
 
+# Every warning is collected as well as printed. A provisioning run scrolls
+# twenty screens of apt output past the operator, and the two things that
+# actually needed a human — a refused AnyDesk password, a release that could not
+# be fetched — went by in one dim line each. They are repeated at the end,
+# directly above the reboot prompt, where the decision to let the machine leave
+# is made.
+WARNINGS=()
+
 log()  { printf '\n\033[1;34m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '    \033[32m✓\033[0m %s\n' "$*"; }
 skip() { printf '    \033[2m·\033[0m %s\n' "$*"; }
-warn() { printf '    \033[33m!\033[0m %s\n' "$*" >&2; }
-die()  { printf '\n\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+warn() { WARNINGS+=("$*"); printf '    \033[1;33m! WARNING\033[0m %s\n' "$*" >&2; }
+
+show_warnings() {
+  local rule='════════════════════════════════════════════════════════════'
+  if [[ ${#WARNINGS[@]} -eq 0 ]]; then
+    printf '\n\033[1;32m%s\n  No warnings. Nothing needs a human.\n%s\033[0m\n' "$rule" "$rule"
+    return
+  fi
+  # A rule rather than a box: a box's border has to match the text's width, and
+  # the text here is whatever a step had to say.
+  printf '\n\033[1;33m%s\n  %d WARNING(S) — read these before the machine leaves\n%s\033[0m\n\n' \
+    "$rule" "${#WARNINGS[@]}" "$rule"
+  local i=1 w
+  for w in "${WARNINGS[@]}"; do
+    printf '\033[1;33m  %d.\033[0m %s\n\n' "$i" "$w"
+    i=$((i + 1))
+  done
+}
+
+die()  {
+  # The failure is louder than the warnings, but the warnings explain it often
+  # enough to be worth repeating here too.
+  [[ ${#WARNINGS[@]} -gt 0 ]] && show_warnings
+  printf '\n\033[1;31m✗ FAILED: %s\033[0m\n' "$*" >&2
+  exit 1
+}
 
 # --- 0. preflight ---------------------------------------------------------
 
@@ -872,6 +904,8 @@ summary() {
               MQTT settings. Nothing else needs typing on this machine.
 
 SUMMARY
+  show_warnings
+
   if [[ $NEEDS_REBOOT -eq 1 ]]; then
     warn "A reboot is needed for the kernel parameter, and it is also the test that matters: the machine must come up into the kiosk on its own."
     if [[ $ASSUME_YES -eq 0 ]]; then
