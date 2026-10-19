@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatNumber, isNoValue } from './format';
+import { formatNumber, isNoValue, formatAnydeskId } from './format';
 
 describe('formatNumber', () => {
   it('formats numbers with 2 decimal places by default', () => {
@@ -73,5 +73,24 @@ describe('isNoValue', () => {
     expect(isNoValue(-42)).toBe(false);
     expect(isNoValue('42')).toBe(false);
     expect(isNoValue('text')).toBe(false);
+  });
+});
+
+describe('formatAnydeskId', () => {
+  it('groups a ten digit id from the right', () => {
+    expect(formatAnydeskId('1234567890')).toBe('1 234 567 890');
+  });
+
+  it('groups a nine digit id evenly', () => {
+    expect(formatAnydeskId('123456789')).toBe('123 456 789');
+  });
+
+  it('is stable when handed an already grouped id', () => {
+    expect(formatAnydeskId('1 234 567 890')).toBe('1 234 567 890');
+  });
+
+  it('is empty for no digits', () => {
+    expect(formatAnydeskId('')).toBe('');
+    expect(formatAnydeskId('keine')).toBe('');
   });
 });

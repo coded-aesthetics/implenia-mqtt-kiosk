@@ -37,3 +37,20 @@ export function isNoValue(v: unknown): boolean {
   if (typeof v === 'number') return !Number.isFinite(v);
   return false;
 }
+
+/**
+ * Group an AnyDesk id in threes, the way AnyDesk itself writes it.
+ *
+ * Grouped from the right, so a 9-digit and a 10-digit id both read naturally
+ * ("123 456 789", "1 234 567 890"). It is read out over the phone, which is
+ * the whole reason it is grouped at all.
+ */
+export function formatAnydeskId(id: string): string {
+  const digits = id.replace(/\D/g, '');
+  if (digits.length === 0) return '';
+  const groups: string[] = [];
+  for (let end = digits.length; end > 0; end -= 3) {
+    groups.unshift(digits.slice(Math.max(0, end - 3), end));
+  }
+  return groups.join(' ');
+}

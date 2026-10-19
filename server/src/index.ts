@@ -21,6 +21,7 @@ import {
 import { registerLogRoutes } from './routes/logs.js';
 import { registerVerfahrenRoutes } from './routes/verfahren.js';
 import { registerTranscribeRoutes } from './routes/transcribe.js';
+import { registerRemoteAccessRoutes } from './routes/remote-access.js';
 import { isWhisperAvailable } from './whisper.js';
 import { close as closeDb, reclaimStrandedUploads } from './db.js';
 const log = createLogger('server');
@@ -50,6 +51,7 @@ async function start(): Promise<void> {
   registerLogRoutes(app);
   registerVerfahrenRoutes(app);
   registerTranscribeRoutes(app);
+  registerRemoteAccessRoutes(app);
   setupWebSocket(app);
 
   // SPA fallback: serve index.html for unmatched routes
