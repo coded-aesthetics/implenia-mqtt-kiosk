@@ -98,7 +98,7 @@ Never use `console.log` in server code — the only exception is `config.ts` for
 The settings page (`#/config`) provides:
 
 - **API key** — base64-encoded JSON token from the Implenia portal. Validated on save via `GET /api/v1/measuring-device/self`
-- **Server address** — Production / Development preset selector, plus free-text for local development
+- **Server address** — Production / Development / **Lokal**, the last being free text for a local or staging backend. Available on a kiosk, not only in dev builds: `NODE_ENV=development` would be the obvious alternative and it crash-loops the server (see CLAUDE.md, Logging), while nothing else was protecting it — the server accepts any URL that parses
 - **Devices** — add/edit/remove Elvis (serial) and simulator devices
 - **Sensor mapping** — assign serial channel indices to named sensors per Verfahren (machine type)
 - **Datenübertragung** — how much of a recording leaves the kiosk and by which route (see "Data Reduction" below)

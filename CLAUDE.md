@@ -994,6 +994,13 @@ log.error('Failed: %s', err.message);
 
 **Format**: JSON in production (captured by PM2 to `~/.pm2/logs/`), pretty-printed in development via `pino-pretty`. Each log entry includes a `module` field for filtering.
 
+**Never set `NODE_ENV=development` on a kiosk.** `pino-pretty` is a
+devDependency and a kiosk installs with `npm install --omit=dev`, so the dev
+logger's transport cannot load: the server exits at startup and PM2 restarts it
+into a crash loop. It is the obvious way to unlock a dev-only affordance in the
+UI, and it takes the machine down instead — which is why the custom API URL in
+Einstellungen → Verbindung is not gated on it.
+
 **Remote access**: `GET /api/logs` returns the last N log entries from an in-memory ring buffer (1000 entries max). Query params: `limit` (number), `level` (pino level name, e.g. `error`), `module` (e.g. `updater`). This endpoint is for service personnel diagnosing issues without physical access to the kiosk.
 
 **Log levels**: Use `info` for operational milestones (connected, session started, update applied), `error` for failures that need attention, `warn` for degraded states, `debug` for development diagnostics. Don't log at `info` level in tight loops (per-reading, per-frame) — those go to `debug` at most.

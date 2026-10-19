@@ -30,7 +30,7 @@ export function ConfigPage({ config, devMode, deviceFrames, updateAvailable, sec
   }
   switch (section) {
     case 'verbindung':
-      return <VerbindungConfig config={config} devMode={devMode} />;
+      return <VerbindungConfig config={config} />;
     case 'datenquelle':
       return <DatenquelleConfig devMode={devMode} deviceFrames={deviceFrames} />;
     case 'messwerte':

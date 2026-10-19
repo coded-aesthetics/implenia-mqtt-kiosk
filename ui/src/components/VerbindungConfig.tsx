@@ -5,7 +5,6 @@ import { configStyles as styles } from './configStyles';
 
 interface Props {
   config: ConfigState;
-  devMode?: boolean;
 }
 
 const API_URLS: Record<string, string> = {
@@ -21,7 +20,7 @@ function resolveUrlPreset(url: string | null | undefined): string {
   return 'custom';
 }
 
-export function VerbindungConfig({ config, devMode = false }: Props) {
+export function VerbindungConfig({ config }: Props) {
   // ── API key ──────────────────────────────────────────────────────────────
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
@@ -274,14 +273,24 @@ export function VerbindungConfig({ config, devMode = false }: Props) {
             >
               Development
             </button>
-            {devMode && (
-              <button
-                style={urlPreset === 'custom' ? styles.presetButtonActive : styles.presetButton}
-                onClick={() => setUrlPreset('custom')}
-              >
-                Lokal
-              </button>
-            )}
+            {/*
+              Not gated on devMode any more. A kiosk runs with
+              NODE_ENV=production, so the only way to point one at a local or
+              staging backend was to rebuild the UI — or to flip NODE_ENV,
+              which crash-loops the server, since the dev logger pulls in
+              pino-pretty and the kiosk installs with --omit=dev.
+
+              Nothing was being protected: the server accepts any apiUrl that
+              parses, this screen already permits deleting the API key, and the
+              value shows up with a live validation badge that makes a wrong
+              one obvious. Two taps put it back on Production.
+            */}
+            <button
+              style={urlPreset === 'custom' ? styles.presetButtonActive : styles.presetButton}
+              onClick={() => setUrlPreset('custom')}
+            >
+              Lokal
+            </button>
           </div>
 
           {urlPreset === 'custom' && (
@@ -289,7 +298,7 @@ export function VerbindungConfig({ config, devMode = false }: Props) {
               type="url"
               value={apiUrl}
               onChange={(e) => setApiUrl(e.target.value)}
-              placeholder="http://localhost:3000"
+              placeholder="http://192.168.2.50:3000"
               style={styles.input}
               autoComplete="off"
               onKeyDown={(e) => { if (e.key === 'Enter') handleUrlSave(); }}
