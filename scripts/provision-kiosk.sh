@@ -129,6 +129,13 @@ preflight() {
   [[ "$(uname -m)" == "x86_64" ]] || warn "Not x86_64 ($(uname -m)) — the prebuilt native modules will not match."
   ok "Running as $USER, sudo available, Debian $(cat /etc/debian_version 2>/dev/null || echo '?')"
 
+  # The mistake that cost a provisioning run: /media/prov is an ordinary
+  # directory when the stick is not mounted, and a script copied into it runs
+  # perfectly well with no kiosk.conf, no token and no payload beside it.
+  if [[ ! -f "$SCRIPT_DIR/kiosk.conf" ]] && ! ls "$SCRIPT_DIR"/app-v*.tar.gz >/dev/null 2>&1; then
+    warn "No kiosk.conf and no release archive next to this script ($SCRIPT_DIR) — if this should be the provisioning stick, it is probably not mounted. Carrying on; credentials must then come from the command line."
+  fi
+
   # AnyDesk refuses short or patterned passwords, and it refuses them at the
   # very end of the run — fifteen minutes after the only moment anybody could
   # have done something about it. Said here instead.
@@ -417,7 +424,25 @@ app_payload() {
     fi
   fi
 
-  [[ -n "$BUNDLE" && -f "$BUNDLE" ]] || die "No release to install: GitHub could not be reached (or no token is set) and there is no app-vX.Y.Z.tar.gz next to this script. Pass --bundle, or --version once connectivity is back."
+  #
+  # Keep going with what is installed rather than dying here.
+  #
+  # Dying left a machine half-provisioned on the first real repair run: the
+  # packages step had already installed lightdm, and the session was never
+  # configured because the script exited two steps earlier — so the machine
+  # booted to a greeter and then a black screen. Re-running provisioning is the
+  # documented way to repair a machine, and a repair tool that refuses to
+  # configure anything because it could not reach GitHub is worse than useless;
+  # the app on disk is usually exactly the one wanted anyway.
+  #
+  if [[ -z "$BUNDLE" || ! -f "$BUNDLE" ]]; then
+    if [[ -f "$APP_DIR/package.json" ]]; then
+      warn "No release available (GitHub unreachable or no token, and none on the stick) — keeping the installed version $(node -p "require('$APP_DIR/package.json').version" 2>/dev/null || echo '?') and carrying on with the rest of the setup."
+      [[ -n "$dl" ]] && rm -rf "$dl"
+      return 0
+    fi
+    die "No release to install, and nothing installed yet: GitHub could not be reached (or no token is set) and there is no app-vX.Y.Z.tar.gz next to this script. Is the stick mounted? Otherwise pass --bundle or --version."
+  fi
 
   # Verify the checksum the release ships, if it came along.
   local sum="${BUNDLE%.tar.gz}.sha256"
