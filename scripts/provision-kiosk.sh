@@ -243,7 +243,7 @@ node_runtime() {
   # error that names nothing in this repository.
   #
   local npm_major
-  npm_major="$(npm -v 2>/dev/null | cut -d. -f1)"
+  npm_major="$(npm -v 2>/dev/null | cut -d. -f1 || true)"
   if [[ -z "$npm_major" ]] || [[ "$npm_major" -lt 11 ]]; then
     sudo npm install -g npm@11 --silent
     ok "npm $(npm -v) — Node's bundled 10.x cannot resolve this tree"
@@ -260,8 +260,23 @@ node_runtime() {
 find_payload() {
   # Newest by version, not by mtime: a stick accumulates releases and the one
   # copied last is not necessarily the newest.
+  #
+  # A glob rather than `ls`, because "no match" is an ordinary answer here and
+  # `ls` reports it as a failure. Under `set -o pipefail` that failure became
+  # the pipeline's status, then the status of the assignment this feeds, and
+  # `set -e` killed the whole run — silently, right after a step header. A
+  # stick with no offline dependency archive, which is the normal stick, could
+  # never get past "Dependencies".
   local pattern="$1"
-  ls -1 "$SCRIPT_DIR"/$pattern 2>/dev/null | sort -V | tail -1
+  local matches=() f
+  shopt -s nullglob
+  # Filtered to files that exist: nullglob drops a *pattern* that matches
+  # nothing, but a pattern with no wildcard in it (vosk-model-de.tar.gz)
+  # expands to itself whether the file is there or not.
+  for f in "$SCRIPT_DIR"/$pattern; do [[ -f "$f" ]] && matches+=( "$f" ); done
+  shopt -u nullglob
+  [[ ${#matches[@]} -gt 0 ]] || return 0
+  printf '%s\n' "${matches[@]}" | sort -V | tail -1
 }
 
 app_payload() {
@@ -561,7 +576,7 @@ remote_access() {
 
   # The unit name has moved between AnyDesk releases, so it is discovered.
   local unit
-  unit="$(systemctl list-unit-files --type=service --no-legend 'anydesk*' 2>/dev/null | awk '{print $1; exit}')"
+  unit="$(systemctl list-unit-files --type=service --no-legend 'anydesk*' 2>/dev/null | awk '{print $1; exit}' || true)"
   if [[ -n "$unit" ]]; then
     sudo systemctl enable --now "$unit" >/dev/null 2>&1 || true
     ok "$unit enabled at boot"
@@ -586,7 +601,7 @@ remote_access() {
   # which needs internet — hence the wait rather than one hopeful call.
   local id="" tries=0
   while [[ $tries -lt 10 ]]; do
-    id="$(sudo anydesk --get-id 2>/dev/null | tr -dc '0-9')"
+    id="$(sudo anydesk --get-id 2>/dev/null | tr -dc '0-9' || true)"
     [[ ${#id} -ge 6 ]] && break
     id=""
     tries=$((tries + 1))
