@@ -54,6 +54,8 @@ WITH_VOSK=0
 WITH_ANYDESK=1
 ANYDESK_PASSWORD=""
 ANYDESK_ID=""
+WIFI_SSID=""
+WIFI_PSK=""
 ASSUME_YES=0
 EXPORT_DEPS=""
 
@@ -86,6 +88,9 @@ Usage: ./provision-kiosk.sh [options]
                       Password for unattended remote access. Without one, a
                       remote session has to be accepted on the touchscreen.
   --no-anydesk        Skip remote access entirely
+  --wifi-ssid SSID    Pre-seed this WLAN so the machine joins it by itself when
+                      it arrives on site. Normally the Implenia box's AP.
+  --wifi-psk PW       Password for --wifi-ssid (omit for an open network)
   --export-deps PATH  Write this machine's server/node_modules to PATH as a
                       reusable offline dependency archive, then exit
   --yes               No prompts, no reboot at the end
@@ -109,6 +114,8 @@ while [[ $# -gt 0 ]]; do
     --no-vosk)     WITH_VOSK=0; shift ;;   # accepted, already the default
     --anydesk-password) ANYDESK_PASSWORD="$2"; shift 2 ;;
     --no-anydesk)  WITH_ANYDESK=0; shift ;;
+    --wifi-ssid)   WIFI_SSID="$2"; shift 2 ;;
+    --wifi-psk)    WIFI_PSK="$2"; shift 2 ;;
     --export-deps) EXPORT_DEPS="$2"; shift 2 ;;
     --yes|-y)      ASSUME_YES=1; shift ;;
     -h|--help)     usage; exit 0 ;;
@@ -246,8 +253,9 @@ system_basics() {
     openbox chromium unclutter fonts-dejavu-core \
     curl ca-certificates unzip sqlite3 ncurses-term xinput \
     pipewire pipewire-pulse wireplumber rtkit pulseaudio-utils \
-    dbus dbus-user-session udisks2 udiskie avahi-daemon
-  ok "X, lightdm, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo, audio (AnyDesk crashes without it, and the microphone needs it)"
+    dbus dbus-user-session udisks2 udiskie avahi-daemon \
+    network-manager
+  ok "X, lightdm, Openbox, Chromium, udiskie (USB updates), avahi (reach it as $(hostname).local), terminfo, audio (AnyDesk crashes without it, and the microphone needs it), NetworkManager (the WLAN screen)"
 }
 
 # --- 2. kernel ------------------------------------------------------------
@@ -299,6 +307,88 @@ RULES
   sudo udevadm control --reload-rules 2>/dev/null || true
   NEEDS_REBOOT=1
   ok "eGalax touch controller tagged as a touchscreen (takes effect on reboot)"
+}
+
+# --- 2c. WLAN -------------------------------------------------------------
+
+wifi_access() {
+  log "WLAN"
+
+  # Installing network-manager does not disturb the wired connection this run
+  # is using. Debian's NetworkManager.conf ships `[ifupdown] managed=false`, and
+  # the netinst installer puts the ethernet interface in
+  # /etc/network/interfaces — so eth0 stays with ifupdown and NetworkManager
+  # only ever touches the wireless device. That is deliberate rather than
+  # incidental: migrating the wired config mid-provisioning would cut the
+  # network out from under the step that is running.
+
+  # Checked at the kernel level, not through nmcli: the point is to find out in
+  # the office whether this machine has a usable wireless device at all, and a
+  # missing firmware blob looks exactly like a missing card from up here.
+  if compgen -G "/sys/class/net/*/wireless" >/dev/null; then
+    ok "Wireless interface present: $(ls -d /sys/class/net/*/wireless | cut -d/ -f5 | tr '\n' ' ')"
+  else
+    warn "This machine reports no wireless interface, so the kiosk's WLAN screen will say it is unavailable and the machine will need a network cable on site. Check whether the WLAN is switched off in the BIOS, and whether the driver is missing its firmware: 'sudo dmesg | grep -i firmware'. Debian's non-free-firmware packages (firmware-iwlwifi, firmware-realtek, firmware-atheros) are the usual fix."
+  fi
+
+  # The server runs as this user and is not root, so changing a connection goes
+  # through polkit. Granted explicitly rather than by adding the user to
+  # `netdev`: that group's effect depends on policy files NetworkManager ships
+  # and Debian may change, and this has to be the one place the permission is
+  # described. `YES` rather than an auth prompt — there is nobody to type an
+  # admin password on a kiosk, and a prompt no one can answer is a dead end.
+  local rules=/etc/polkit-1/rules.d/50-kiosk-network.rules
+  if [[ -f "$rules" ]] && grep -q "\"$USER\"" "$rules"; then
+    skip "polkit rule for $USER already in place"
+  else
+    # polkitd reads this directory but does not ship it: a Debian 13 kiosk has
+    # no /etc/polkit-1/rules.d until something creates one, and `tee` cannot
+    # write into a directory that is not there.
+    sudo mkdir -p "$(dirname "$rules")"
+    sudo tee "$rules" >/dev/null <<RULES
+// The kiosk app sets this machine's WLAN from its own settings screen
+// (Einstellungen -> WLAN). The server runs as $USER, not as root.
+polkit.addRule(function(action, subject) {
+  if (subject.user == "$USER" && (
+        action.id == "org.freedesktop.NetworkManager.settings.modify.system" ||
+        action.id == "org.freedesktop.NetworkManager.network-control" ||
+        action.id == "org.freedesktop.NetworkManager.enable-disable-wifi")) {
+    return polkit.Result.YES;
+  }
+});
+RULES
+    ok "polkit: $USER may change WLAN settings"
+  fi
+
+  # Pre-seeding is the normal case, and the screen is the recovery path: a
+  # machine that already knows the box's AP joins it by itself when it arrives,
+  # and nobody has to type a password with gloves on.
+  if [[ -z "$WIFI_SSID" ]]; then
+    skip "No --wifi-ssid given; the WLAN is set on site in Einstellungen -> WLAN"
+    return
+  fi
+
+  if ! systemctl is-active --quiet NetworkManager; then
+    warn "NetworkManager is not running yet, so the WLAN '$WIFI_SSID' could not be pre-seeded. Re-run this script after a reboot, or set it on site in Einstellungen -> WLAN."
+    return
+  fi
+
+  # Idempotent, and never activated here. With autoconnect on, NetworkManager
+  # joins it by itself once the AP is in range — which on site is what should
+  # happen, and in the office is a no-op because the box is not there. The wired
+  # connection keeps the default route either way, so this cannot interfere
+  # with the rest of the run.
+  sudo nmcli connection delete "$WIFI_SSID" >/dev/null 2>&1 || true
+  local add=(nmcli connection add type wifi con-name "$WIFI_SSID" ssid "$WIFI_SSID"
+             connection.autoconnect yes connection.autoconnect-priority 10)
+  if [[ -n "$WIFI_PSK" ]]; then
+    add+=(wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$WIFI_PSK")
+  fi
+  if sudo "${add[@]}" >/dev/null 2>&1; then
+    ok "WLAN '$WIFI_SSID' pre-seeded (joins by itself when in range)"
+  else
+    warn "The WLAN '$WIFI_SSID' could not be pre-seeded. Set it on site in Einstellungen -> WLAN."
+  fi
 }
 
 # --- 3. swap --------------------------------------------------------------
@@ -944,6 +1034,7 @@ main() {
   [[ -n "$EXPORT_DEPS" ]] && export_deps
   system_basics
   touch_input
+  wifi_access
   kernel_cmdline
   compressed_swap
   node_runtime

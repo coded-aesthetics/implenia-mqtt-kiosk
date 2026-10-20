@@ -26,6 +26,8 @@ ISO=""
 VERSION=""
 TOKEN=""
 ANYDESK_PASSWORD=""
+WIFI_SSID=""
+WIFI_PSK=""
 DEPS=""
 OUT=""
 PAYLOAD_PART_SIZE="8G"
@@ -54,6 +56,9 @@ Usage: ./scripts/make-provision-stick.sh [options]
                       Password for unattended remote access, written into
                       kiosk.conf. Without one, a remote session has to be
                       accepted on the kiosk's touchscreen.
+  --wifi-ssid SSID    WLAN every kiosk from this stick joins by itself — the
+                      Implenia box's AP. Written into kiosk.conf.
+  --wifi-psk PW       Password for --wifi-ssid (omit for an open network)
   --deps PATH         Offline dependency archive from a provisioned kiosk
                       (provision-kiosk.sh --export-deps), for sites with no
                       internet during setup
@@ -77,6 +82,8 @@ while [[ $# -gt 0 ]]; do
     --version) VERSION="$2"; shift 2 ;;
     --token)   TOKEN="$2"; shift 2 ;;
     --anydesk-password) ANYDESK_PASSWORD="$2"; shift 2 ;;
+    --wifi-ssid)   WIFI_SSID="$2"; shift 2 ;;
+    --wifi-psk)    WIFI_PSK="$2"; shift 2 ;;
     --deps)    DEPS="$2"; shift 2 ;;
     --out)     OUT="$2"; shift 2 ;;
     --with-vosk) WITH_VOSK=1; shift ;;
@@ -167,11 +174,17 @@ GITHUB_TOKEN="$TOKEN"
 # Unattended remote access. One password for the fleet is the usual choice;
 # pass --anydesk-password per stick if you would rather not have that.
 ANYDESK_PASSWORD="$ANYDESK_PASSWORD"
+# The WLAN the kiosk joins on site. Pre-seeded here so a machine carried to a
+# site connects by itself; the WLAN screen in the app is the recovery path for
+# when this is not the right network after all.
+WIFI_SSID="$WIFI_SSID"
+WIFI_PSK="$WIFI_PSK"
 NODE_MAJOR=22
 PORT=3000
 CONF
 umask 022
 [[ -n "$ANYDESK_PASSWORD" ]] && ok "kiosk.conf carries the AnyDesk password (unattended access)" || warn "kiosk.conf without an AnyDesk password — remote sessions must be accepted on the touchscreen"
+[[ -n "$WIFI_SSID" ]] && ok "kiosk.conf carries the WLAN \"$WIFI_SSID\" (the kiosk joins it by itself on site)" || skip "kiosk.conf without a WLAN — it is set on site in Einstellungen -> WLAN"
 [[ -n "$TOKEN" ]] && ok "kiosk.conf with token" || warn "kiosk.conf without a token — the kiosk then needs --deps for dependencies, and GitHub self-updates stay off"
 
 cat > "$OUT/README.txt" <<'STICKREADME'

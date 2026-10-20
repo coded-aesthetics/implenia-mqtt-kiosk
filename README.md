@@ -97,6 +97,7 @@ Never use `console.log` in server code — the only exception is `config.ts` for
 
 The settings page (`#/config`) provides:
 
+- **WLAN** — the network this machine is on, and the one place to change it (see "WLAN" below)
 - **API key** — base64-encoded JSON token from the Implenia portal. Validated on save via `GET /api/v1/measuring-device/self`
 - **Server address** — Production / Development / **Lokal**, the last being free text for a local or staging backend. Available on a kiosk, not only in dev builds: `NODE_ENV=development` would be the obvious alternative and it crash-loops the server (see CLAUDE.md, Logging), while nothing else was protecting it — the server accepts any URL that parses
 - **Devices** — add/edit/remove Elvis (serial) and simulator devices
@@ -161,6 +162,134 @@ service tech's mouse, and the keyboard switched itself off on the one machine
 that could not type without it. A dev build still uses the pointer test, since
 that is somebody's laptop. `localStorage.touchKeyboard = 'on' | 'off'` overrides
 both — which is how a tech browsing the kiosk's UI from a laptop turns it off.
+
+## WLAN
+
+```
+GET  /api/config/netzwerk        → { hostname, capability, ssid, signal,
+                                     defaultRouteDevice, routedElsewhere }
+GET  /api/config/netzwerk/scan   → { networks: [{ ssid, signal, secured, active }] }
+POST /api/config/netzwerk        → { ssid, psk } — switch, with rollback
+```
+
+A kiosk is primed in the office and carried to a site, where it has to join the
+Implenia MQTT box's access point. The box serves MQTT at `192.168.2.1` **and**
+carries the internet uplink, so that one network is both the data source and
+the upload path — there is no cable on site. `Einstellungen → WLAN` is the
+first tile, and the first step of the setup wizard, because nothing after it
+can be checked until the machine is on that network.
+
+Normally nobody uses it: `make-provision-stick.sh --wifi-ssid/--wifi-psk`
+pre-seeds the box's AP into every kiosk the stick provisions, and the machine
+joins it by itself when it arrives. The screen is the recovery path for when
+that is not the right network after all.
+
+### It configures the machine the server runs on
+
+Wi-Fi belongs to a machine, not to an application, and a browser cannot reach
+the network stack of a box it merely talks HTTP to. Today the server and the
+touchscreen are the same machine, so this is the machine the technician is
+standing in front of — and the screen names it (`hostname`) rather than saying
+"this kiosk". If the server is ever split onto its own box, each box needs its
+own agent; no design avoids that. `NetworkController` (`server/src/network.ts`)
+is the seam, so the split costs an implementation rather than a redesign.
+
+### A failed switch may never cost the machine its network
+
+A kiosk that cannot be reached is a truck roll — AnyDesk needs a network too —
+so `connect()` stages the change and commits it only once it has proven itself:
+
+1. Delete any leftover pending profile, so a previous attempt's password cannot
+   leak into this one.
+2. Create the new profile **with `autoconnect no`**, under a name of our own.
+   Existing profiles are never modified: the one currently up may be the only
+   known-good network the machine has, and a rewritten PSK cannot be read back
+   and restored.
+3. Activate it, bounded.
+4. TCP-connect the configured MQTT broker.
+5. Only then commit — rename, `autoconnect yes`, priority above every other
+   profile, and drop the stale profile for the same SSID. On any failure,
+   delete the pending profile and bring the previous one back up.
+
+Because `autoconnect` is set only in step 5, a crash, power cut or PM2 restart
+at any earlier point comes back on the previous network by itself. That
+ordering is the whole safety property; `network.test.ts` asserts it directly.
+
+**The internet is not a pass condition.** The box carries the uplink, so its
+mobile link can be down while the box itself serves MQTT perfectly. Refusing a
+correct network over that would be the tail wagging the dog — the kiosk buffers
+offline by design. The result reports `internet` and commits either way.
+
+**No free-text SSID field.** Only networks the machine can actually see are
+offered, which answers "does this network exist" for free. Typing an SSID with
+gloves on is how a kiosk ends up on a network that is not there.
+
+**Switching is refused while a recording runs** (409, German, naming the
+element) — same guard and same reasoning as `POST /api/update`. The box's AP is
+the data source, so the seconds the new link takes to come up, and the rollback
+on a failed attempt, are measurements nobody can get back.
+
+**The office trap, stated correctly.** `routedElsewhere` is `ip route show
+default` naming an interface that is not the Wi-Fi — on a bench, the network
+cable. What it means is **not** that the broker is unreachable: the box's own
+subnet is a connected route over the Wi-Fi and beats the cable's default route,
+so a cable does not cut the kiosk off from a box it has joined. What it does is
+let the acceptance test reach a broker that lives on the *cable's* network and
+succeed without saying anything about the Wi-Fi at all.
+
+So the screen splits the two. The status card states the fact in the same voice
+as the line above it — `Datenverkehr: über „enp1s0", nicht über das WLAN` — and
+the consequence goes in the message box beside the Verbinden button, which is
+where the check is already explained: *"Solange das Netzwerkkabel steckt, kann
+diese Prüfung über das Kabel laufen und sagt dann nichts über das WLAN — zum
+Test das Kabel abziehen."* The first version put a fact, a false claim and an
+instruction in one sentence, which read as three unrelated assertions.
+
+**The failure message narrates the rollback.** "Verbunden mit „X", aber der
+MQTT-Broker … antwortet nicht … Das Gerät ist in keinem WLAN" is two true
+sentences in different tenses — the attempt, then the state after it was undone
+— and side by side they read as a contradiction. Naming the undo is what orders
+them: *"Der Wechsel wurde zurückgenommen, das Gerät bleibt im bisherigen WLAN."*
+
+**The message box is sized by measurement, not arithmetic.** Five lines at rest,
+growing to seven, every number read off `scrollHeight` on the rendered page at
+1024x768. Three versions derived on paper — five lines, then six, then a height
+that forgot the card's own 48px of padding — each cut a real message off
+mid-sentence while the sums said it fit. A 32-character SSID also wraps worse
+than its length suggests, which no budget in characters can express; the
+server's 260-character test carries one for that reason. It grows rather than
+staying fixed because the only thing that ever changes this text is a tap on
+Verbinden, so the resize happens with the finger already off the button — while
+a box permanently sized for the worst message costs the list two rows on every
+screen that never sees one.
+
+**Layout.** Two columns: what the machine is on and the connect controls at the
+left, the networks in range and the result message at the right. The message
+belongs to the button and reads best beside it — but the status card above the
+button grows (that cable warning is three lines), and the first version put the
+two in one column, where they pushed the button off a 768px screen. Under the
+list the height is reserved out of the list's share instead, so nothing the
+status card does can move the button and an arriving error does not resize the
+list either. Both columns are bounded and the screen sizes itself with
+`flex: 1`, because it also renders inside the setup wizard, where it gets what
+is left after the step's continue button rather than the whole of `main`.
+
+### On the machine
+
+`provision-kiosk.sh` installs `network-manager` and writes a polkit rule
+(`/etc/polkit-1/rules.d/50-kiosk-network.rules`) letting the kiosk user change
+connections — the server is not root. Installing it does not disturb the wired
+connection the provisioning run is using: Debian ships `[ifupdown]
+managed=false`, and the installer puts the ethernet interface in
+`/etc/network/interfaces`, so NetworkManager only ever touches the wireless
+device. The step also checks for a wireless interface and warns if there is
+none, which is where a missing firmware blob shows up — in the office, not on
+site.
+
+A machine without NetworkManager or without a wireless interface answers
+`capability: { available: false, reason }` and the screen shows the reason.
+Both are normal states, not errors: such a kiosk works perfectly well on a
+cable.
 
 ## Remote Access
 
@@ -1035,11 +1164,13 @@ server/src/
   csv-upload.ts       — Session → chunked CSV for the measuring-device batch endpoint
   reduction-config.ts — Per-kiosk export/upload granularity and upload route
   connectivity.ts     — Online/offline watchdog
+  network.ts          — WLAN: scan, and the staged switch that cannot lock the kiosk out
   updater.ts          — Self-update from GitHub Releases
   device-manager.ts   — Device lifecycle management
   routes/
     config.ts         — /api/config (API key, URL, validation)
     config-reduction.ts — /api/config/datenuebertragung (granularity + upload route)
+    config-network.ts — /api/config/netzwerk (WLAN, with the recording guard)
     data.ts           — /api/readings, /api/stats
     devices.ts        — /api/config/devices + mappings
     verfahren.ts      — /api/verfahren (sensor definitions)

@@ -342,7 +342,7 @@ export function App() {
   if (screen === 'setup') {
     return (
       <SetupWizard
-        step={route.params.step ?? 'verfahren'}
+        step={route.params.step ?? 'netzwerk'}
         onFinish={() => { setup.refetch(); navigate(''); }}
         config={config}
       />
@@ -637,7 +637,10 @@ export function App() {
       <main style={{
         ...styles.main,
         ...(route.page === 'element' || route.page === 'bohren' || route.page === 'sensors' || route.page === 'calibration' || route.page === 'rohrverlaengerung' || route.page === 'geologie' || route.page === 'ausrichten'
-          || (route.page === 'config' && !route.params.section)
+          // The hub, and the WLAN screen: both lay themselves out against the
+          // available height rather than growing past it. Everything else on
+          // /config is a stack of cards that may scroll.
+          || (route.page === 'config' && (!route.params.section || route.params.section === 'netzwerk'))
           ? { overflow: 'hidden', display: 'flex', flexDirection: 'column' as const }
           : {}),
       }}>

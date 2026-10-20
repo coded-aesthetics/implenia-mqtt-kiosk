@@ -61,8 +61,22 @@ die()  { printf '\n\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 [[ -n "$HOST" ]] || { usage; exit 1; }
 
 log "Checking $HOST"
-ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" "test -d '$APP_DIR/server' && test -f '$APP_DIR/package.json'" \
-  || die "$HOST is not a provisioned kiosk (no $APP_DIR). Run scripts/provision-kiosk.sh on it first, or pass --app-dir."
+# ssh reserves 255 for its own failures, so the two cases are distinguishable
+# and must be distinguished: this check answered "not a provisioned kiosk" for a
+# connection that never got as far as asking, and sent somebody off to
+# re-provision a machine that was fine. A kiosk resolves over mDNS to a couple
+# of IPv6 addresses and sshd on a J1900 running Chromium is slow enough to lose
+# the banner exchange, so a timed-out first attempt is a normal thing to see.
+set +e
+ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" \
+  "test -d '$APP_DIR/server' && test -f '$APP_DIR/package.json'"
+probe=$?
+set -e
+if [[ $probe -eq 255 ]]; then
+  die "Cannot reach $HOST over SSH (see the error above). It often answers on a second try — mDNS hands out several addresses and sshd is slow to fork on these machines. Check with: ssh $HOST true"
+elif [[ $probe -ne 0 ]]; then
+  die "$HOST is reachable but is not a provisioned kiosk (no $APP_DIR). Run scripts/provision-kiosk.sh on it first, or pass --app-dir."
+fi
 ok "Reachable, $APP_DIR looks provisioned"
 
 if [[ $RUN_BUILD -eq 1 ]]; then

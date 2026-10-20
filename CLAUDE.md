@@ -32,6 +32,7 @@ This runs on construction sites, not office desks. Every UI decision should refl
 - **No scrolling** — All content must fit within the viewport. Scrollbars mean the layout is wrong. Workers glance at a screen, they don't scroll. Design layouts to fill available space (e.g. use flex with `min-height: 0`, `modus="vollbild"` for visualizations) rather than overflowing
 - **Keep screens shallow** — A screen with more than 3–4 cards or sections is too dense; split it into a hub page with navigation tiles and dedicated sub-screens. This applies especially to settings and configuration, where fields accumulate over time. When adding a new setting, check whether the page it lands on still fits at 1024x768 — if not, introduce a sub-screen rather than making the page scroll. Service-personnel screens (wizard steps, Rohrverlängerung) may scroll when the density is justified, but worker-facing screens never do
 - **Landscape-first** — Industry PCs are typically widescreen. Use CSS Grid for responsive tile layouts
+- **No emoji** — The kiosk installs `fonts-dejavu-core` and nothing else, so there is no emoji font on the machine: anything above `U+FFFF` renders as a tofu box. `✓` `✕` `⚠` `·` `„" ` `—` are covered and in use; a padlock, a wifi glyph or a warning emoji are not. Check a new symbol on the machine (`fc-list ':charset=<codepoint>' | wc -l`) rather than in a browser on a developer laptop, which has fonts the kiosk does not
 - **Minimal text** — Use numbers, colors, and icons over paragraphs. Workers glance, they don't read
 - **Language: German** — All UI-facing text must be in German. Code, comments, and documentation stay in English
 - **Locale: `de-DE`** — All date/time formatting must use the `'de-DE'` locale. Use `date-fns` with `{ locale: de }` from `date-fns/locale` for formatting and relative times (e.g. `formatDistanceToNow`, `format`). For simple one-off timestamps, `toLocaleTimeString('de-DE')` is acceptable. Never rely on browser defaults
@@ -976,6 +977,112 @@ wrong:
 
 `grid-reduce.test.ts`, `csv-upload.test.ts`, `reduction-config.test.ts` and
 `csv-upload-session.test.ts` pin all of this.
+
+## The WLAN switch is staged, and that ordering is the safety property
+
+On site the kiosk joins the Implenia MQTT box's access point, which serves the
+data **and** carries the internet uplink — one network, no cable. The screen
+that changes it (`Einstellungen → WLAN`, `server/src/network.ts`) is therefore
+the one screen that can take the machine off the air, and a kiosk nobody can
+reach is a truck roll: AnyDesk needs a network too.
+
+`connect()` stages the change: delete any leftover pending profile, create the
+new one **with `autoconnect no`**, activate it, TCP-connect the MQTT box, and
+only then commit — rename, `autoconnect yes`, priority above every other
+profile, drop the stale profile for the same SSID. On any failure the pending
+profile is deleted and the previous one brought back up.
+
+**`autoconnect` is set only in the last step, and nothing may move it earlier.**
+That is what makes a crash, a power cut or a PM2 restart mid-switch come back on
+the previous network by itself, with no rollback timer to survive the restart
+too. `network.test.ts` asserts the ordering directly rather than the outcome,
+because the outcome looks identical until the day it does not.
+
+What else must not be broken:
+
+- **Existing profiles are never modified.** The one currently up may be the only
+  known-good network the machine has, and a PSK cannot be read back out of
+  NetworkManager to be restored. The new profile is always a fresh one under a
+  name of our own (`implenia-pending`) until it is committed.
+- **The internet is not a pass condition.** The box carries the uplink, so its
+  mobile link can be down while the box serves MQTT perfectly. The acceptance
+  test is the configured broker answering; `internet` is reported and the switch
+  commits either way. The kiosk buffers offline by design — refusing a correct network
+  over a sulking LTE modem is the tail wagging the dog.
+- **A cable on the default route does not mean the broker is unreachable.** The
+  box's own subnet is a connected route over the Wi-Fi and beats the cable's
+  default route. What `routedElsewhere` means is that the acceptance test can
+  reach a broker on the *cable's* network and tell you nothing about the Wi-Fi —
+  so the status card states the route as a fact and the consequence lives beside
+  the check it qualifies, not stitched onto the fact as a warning.
+- **A failure names the MQTT broker and its port, never "die Implenia-Box".**
+  The probe goes to whatever address the kiosk is configured for; that is the
+  box on a site and anything at all on a bench, and naming the box told a kiosk
+  pointed at a replay server that a device it has never met was not answering.
+  The port is there because `1884` against an expected `1883` is invisible
+  without it.
+- **A failure message says where the machine actually ended up** — restored,
+  on nothing, or *untouched*. All three are distinct: `rollback()` can itself
+  fail, and a profile that could not even be created means nothing was switched
+  at all, so claiming a rollback there told a technician their kiosk had no
+  network while it sat on the one it started with.
+- **The commit is checked, and the stale profile outlives a failed one.** An
+  unchecked `connection modify` reaches the exact state the staging exists to
+  prevent, from the inside: the live connection keeps the pending name and
+  `autoconnect no` while the real profile for that SSID has just been deleted,
+  so the next reboot comes back on nothing — and the next attempt deletes the
+  live profile as if it were the previous one and rolls back to a uuid that no
+  longer exists. A failed commit is rolled back like any other failure.
+- **The profile is built for the security the AP advertises.** `wpa-psk`
+  against a WPA3-only network never associates and looks exactly like a wrong
+  password, so the operator retypes a correct one until they give up;
+  `keyManagementFor` reads NetworkManager's own SECURITY field, and an 802.1X
+  network is refused outright rather than offered a password box it can never
+  satisfy.
+- **Reading the status never drives the radio.** `device wifi list` defaults to
+  `--rescan auto`, which scans whenever the cache is older than 30 s — so the
+  settings hub waited on a radio scan before painting any of its five tiles.
+  The scan list is also not authoritative about what the machine is on: a
+  failed one reported a connected kiosk as "Nicht verbunden". The active
+  connection answers that.
+- **Every message fits the screen's message box** — 260 characters, pinned by a
+  test, with a 32-character SSID (the longest the standard allows) in it. The
+  box sits under the *network list*, in the other column from the button it
+  reports on, because the status card above that button grows: a kiosk on a
+  network cable shows an extra line about it, which is the state of every
+  machine being set up on a bench, and the first version put the message under
+  the button where the two together pushed it off the screen.
+- **The box's size is measured, never counted.** It holds five lines at rest
+  and grows to seven, and every one of those numbers came from reading
+  `scrollHeight` on the rendered page at 1024x768. Three earlier versions were
+  derived on paper — five lines, then six, then a height that forgot the card's
+  own 48px of padding — and each cut a real message off mid-sentence while the
+  arithmetic said it fit. A long SSID also wraps worse than its character count
+  suggests, which no budget in characters can express.
+- **A failure message never contradicts itself across the rollback.**
+  "Verbunden mit „X" … das Gerät ist in keinem WLAN" is two true sentences in
+  different tenses, and without naming the undo between them it reads as
+  nonsense. Every message says the switch was taken back before it says where
+  the machine ended up.
+- **Both columns are bounded** (`minHeight: 0` and their own scroll), and the
+  screen takes its height with `flex: 1` rather than `height: 100%`, because it
+  renders in two places with different room: the config page, where it fills
+  `main`, and the setup wizard, where it gets what is left after the step's
+  continue button. An unbounded column does not scroll, it draws over whatever
+  comes after it — which in the wizard is that button.
+- **No free-text SSID field.** Only networks the machine can see are offered,
+  which answers "does this network exist" for free.
+- **A switch is refused while a recording runs**, 409 and German, same guard as
+  `POST /api/update`. The AP is the data source.
+- **A machine that cannot do this is a state, not an error.** No
+  NetworkManager, no wireless interface → `capability.available === false` with
+  a German reason the screen shows. Such a kiosk works fine on a cable.
+
+Wi-Fi belongs to a machine, not to an application, so this configures the box
+the *server* runs on and the screen names it. Today that is the touchscreen in
+front of the technician. If the server is ever split onto its own box, each box
+needs its own agent — no design avoids that — and `NetworkController` is the
+seam so that costs an implementation rather than a redesign.
 
 ## Testing
 
