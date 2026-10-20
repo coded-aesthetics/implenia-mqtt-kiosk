@@ -342,7 +342,7 @@ export function App() {
   if (screen === 'setup') {
     return (
       <SetupWizard
-        step={route.params.step ?? 'verfahren'}
+        step={route.params.step ?? 'netzwerk'}
         onFinish={() => { setup.refetch(); navigate(''); }}
         config={config}
       />

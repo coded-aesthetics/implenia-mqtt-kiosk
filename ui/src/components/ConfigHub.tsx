@@ -12,9 +12,14 @@ interface TileStatus {
   summary: string;
 }
 
-type SectionKey = 'verbindung' | 'datenquelle' | 'messwerte' | 'system';
+type SectionKey = 'netzwerk' | 'verbindung' | 'datenquelle' | 'messwerte' | 'system';
 
+/**
+ * In the order a kiosk is set up on site. WLAN comes first because nothing
+ * after it can be checked until the machine is on the Implenia box's network.
+ */
 const SECTIONS: { key: SectionKey; label: string }[] = [
+  { key: 'netzwerk', label: 'WLAN' },
   { key: 'verbindung', label: 'Verbindung' },
   { key: 'datenquelle', label: 'Datenquelle' },
   { key: 'messwerte', label: 'Messwerte' },
@@ -23,6 +28,7 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
 
 export function ConfigHub({ config, updateAvailable }: Props) {
   const [status, setStatus] = useState<Record<SectionKey, TileStatus>>({
+    netzwerk: { color: 'var(--text-muted)', summary: '...' },
     verbindung: { color: 'var(--text-muted)', summary: '...' },
     datenquelle: { color: 'var(--text-muted)', summary: '...' },
     messwerte: { color: 'var(--text-muted)', summary: '...' },
@@ -38,10 +44,25 @@ export function ConfigHub({ config, updateAvailable }: Props) {
     const transportP = fetch('/api/config/transport', { signal: s }).then((r) => r.json()).catch(() => null);
     const rohrwechselP = fetch('/api/config/rohrwechsel', { signal: s }).then((r) => r.json()).catch(() => null);
     const calibrationP = fetch('/api/config/calibration', { signal: s }).then((r) => r.json()).catch(() => null);
+    const netzwerkP = fetch('/api/config/netzwerk', { signal: s }).then((r) => r.json()).catch(() => null);
 
-    Promise.all([configP, validateP, transportP, rohrwechselP, calibrationP]).then(
-      ([_cfg, validate, transport, rohrwechsel, calibration]) => {
+    Promise.all([configP, validateP, transportP, rohrwechselP, calibrationP, netzwerkP]).then(
+      ([_cfg, validate, transport, rohrwechsel, calibration, netzwerk]) => {
         if (controller.signal.aborted) return;
+
+        // WLAN. A machine that cannot set its own Wi-Fi is not a fault, so the
+        // tile stays neutral and says so rather than going red — the wired
+        // connection it has instead works perfectly well.
+        let netzwerkTile: TileStatus;
+        if (!netzwerk || netzwerk.capability?.available !== true) {
+          netzwerkTile = { color: 'var(--text-muted)', summary: 'Nicht verfügbar' };
+        } else if (netzwerk.routedElsewhere) {
+          netzwerkTile = { color: 'var(--color-warning)', summary: `Verkehr über ${netzwerk.defaultRouteDevice}` };
+        } else if (netzwerk.ssid) {
+          netzwerkTile = { color: 'var(--color-success)', summary: netzwerk.ssid };
+        } else {
+          netzwerkTile = { color: 'var(--color-warning)', summary: 'Nicht verbunden' };
+        }
 
         // Verbindung
         let verbindung: TileStatus;
@@ -88,7 +109,7 @@ export function ConfigHub({ config, updateAvailable }: Props) {
           ? { color: 'var(--color-warning)', summary: `Update verfügbar: v${updateAvailable}` }
           : { color: 'var(--color-success)', summary: 'Aktuell' };
 
-        setStatus({ verbindung, datenquelle, messwerte, system });
+        setStatus({ netzwerk: netzwerkTile, verbindung, datenquelle, messwerte, system });
       },
     );
 
@@ -115,7 +136,7 @@ export function ConfigHub({ config, updateAvailable }: Props) {
 const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(2, 1fr)',
+    gridTemplateColumns: 'repeat(3, 1fr)',
     gridTemplateRows: 'repeat(2, 1fr)',
     gap: 'var(--space-lg)',
     padding: 'var(--space-xl)',

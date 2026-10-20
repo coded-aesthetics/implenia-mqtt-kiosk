@@ -1,6 +1,7 @@
 import type { ConfigState } from '../hooks/useImplenia';
 import type { DeviceFrame } from '../hooks/useWebSocket';
 import { ConfigHub } from './ConfigHub';
+import { NetzwerkConfig } from './NetzwerkConfig';
 import { VerbindungConfig } from './VerbindungConfig';
 import { DatenquelleConfig } from './DatenquelleConfig';
 import { MesswerteConfig } from './MesswerteConfig';
@@ -16,7 +17,7 @@ interface Props {
 }
 
 const VALID_SECTIONS = [
-  'verbindung', 'datenquelle', 'messwerte', 'datenuebertragung', 'system',
+  'netzwerk', 'verbindung', 'datenquelle', 'messwerte', 'datenuebertragung', 'system',
 ] as const;
 type Section = typeof VALID_SECTIONS[number];
 
@@ -29,6 +30,8 @@ export function ConfigPage({ config, devMode, deviceFrames, updateAvailable, sec
     return <ConfigHub config={config} updateAvailable={updateAvailable} />;
   }
   switch (section) {
+    case 'netzwerk':
+      return <NetzwerkConfig />;
     case 'verbindung':
       return <VerbindungConfig config={config} />;
     case 'datenquelle':

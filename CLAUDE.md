@@ -977,6 +977,59 @@ wrong:
 `grid-reduce.test.ts`, `csv-upload.test.ts`, `reduction-config.test.ts` and
 `csv-upload-session.test.ts` pin all of this.
 
+## The WLAN switch is staged, and that ordering is the safety property
+
+On site the kiosk joins the Implenia MQTT box's access point, which serves the
+data **and** carries the internet uplink — one network, no cable. The screen
+that changes it (`Einstellungen → WLAN`, `server/src/network.ts`) is therefore
+the one screen that can take the machine off the air, and a kiosk nobody can
+reach is a truck roll: AnyDesk needs a network too.
+
+`connect()` stages the change: delete any leftover pending profile, create the
+new one **with `autoconnect no`**, activate it, TCP-connect the MQTT box, and
+only then commit — rename, `autoconnect yes`, priority above every other
+profile, drop the stale profile for the same SSID. On any failure the pending
+profile is deleted and the previous one brought back up.
+
+**`autoconnect` is set only in the last step, and nothing may move it earlier.**
+That is what makes a crash, a power cut or a PM2 restart mid-switch come back on
+the previous network by itself, with no rollback timer to survive the restart
+too. `network.test.ts` asserts the ordering directly rather than the outcome,
+because the outcome looks identical until the day it does not.
+
+What else must not be broken:
+
+- **Existing profiles are never modified.** The one currently up may be the only
+  known-good network the machine has, and a PSK cannot be read back out of
+  NetworkManager to be restored. The new profile is always a fresh one under a
+  name of our own (`implenia-pending`) until it is committed.
+- **The internet is not a pass condition.** The box carries the uplink, so its
+  mobile link can be down while the box serves MQTT perfectly. The acceptance
+  test is the box answering; `internet` is reported and the switch commits
+  either way. The kiosk buffers offline by design — refusing a correct network
+  over a sulking LTE modem is the tail wagging the dog.
+- **A failure message says whether the old network came back**, because
+  `rollback()` can itself fail. Claiming "das bisherige WLAN ist
+  wiederhergestellt" when it is not is worse than saying nothing.
+- **Every message fits the screen's fixed-height slot** — five lines, about 220
+  characters, pinned by a test. The slot's height is fixed rather than a
+  minimum: the left column has about twenty pixels of slack above the recording
+  bar, so a long failure would otherwise push the Verbinden button underneath
+  it, on the one screen whose whole job is recovering from a failure.
+- **No free-text SSID field.** Only networks the machine can see are offered,
+  which answers "does this network exist" for free.
+- **A switch is refused while a recording runs**, 409 and German, same guard as
+  `POST /api/update`. The AP is the data source.
+- **A machine that cannot do this is a state, not an error.** No
+  NetworkManager, no wireless interface → `capability.available === false` with
+  a German reason the screen shows. Such a kiosk works fine on a cable.
+
+Wi-Fi belongs to a machine, not to an application, so this configures the box
+the *server* runs on and the screen names it. Today that is the touchscreen in
+front of the technician. If the server is ever split onto its own box, each box
+needs its own agent — no design avoids that — and `NetworkController` is the
+seam so that costs an implementation rather than a redesign.
+
 ## Testing
 
 This software auto-updates on machines where a broken deploy costs real time and money. Tests are a safety net, not a checkbox.

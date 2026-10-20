@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { navigate } from '../hooks/useHashRouter';
 import type { ConfigState } from '../hooks/useImplenia';
 import { MqttSettings } from './MqttSettings';
+import { NetzwerkConfig } from './NetzwerkConfig';
 import { VerbindungConfig } from './VerbindungConfig';
 import { usePolledJson } from '../hooks/usePolledJson';
 
@@ -29,9 +30,10 @@ interface Props {
 }
 
 type Transport = 'mqtt' | 'serial';
-type Step = 'verfahren' | 'transport' | 'mqtt' | 'serial' | 'verbindung' | 'done';
+type Step = 'netzwerk' | 'verfahren' | 'transport' | 'mqtt' | 'serial' | 'verbindung' | 'done';
 
 const STEP_TITLES: Record<Step, string> = {
+  netzwerk: 'WLAN verbinden',
   verfahren: 'Verfahren wählen',
   transport: 'Datenquelle wählen',
   mqtt: 'MQTT-Box verbinden',
@@ -40,10 +42,18 @@ const STEP_TITLES: Record<Step, string> = {
   done: 'Einrichtung abgeschlossen',
 };
 
-/** The step sequence depends on the transport, so the counter stays honest. */
+/**
+ * The step sequence depends on the transport, so the counter stays honest.
+ *
+ * WLAN is first because nothing after it can be verified until the machine is
+ * on the Implenia box's network: the box serves MQTT *and* carries the internet
+ * uplink, so the transport step and the API step both have nothing to talk to
+ * before it. It is also the only step that is not a commit — a kiosk set up in
+ * the office on a cable walks past it.
+ */
 function stepOrder(transport: Transport | null): Step[] {
-  if (transport === null) return ['verfahren', 'transport', 'done'];
-  return ['verfahren', 'transport', transport, 'verbindung', 'done'];
+  if (transport === null) return ['netzwerk', 'verfahren', 'transport', 'done'];
+  return ['netzwerk', 'verfahren', 'transport', transport, 'verbindung', 'done'];
 }
 
 interface SerialDevice {
@@ -59,7 +69,7 @@ function isStep(value: string): value is Step {
 
 export function SetupWizard({ step: rawStep, onFinish, config }: Props) {
   const hasApiKey = config.hasApiKey;
-  const step: Step = isStep(rawStep) ? rawStep : 'verfahren';
+  const step: Step = isStep(rawStep) ? rawStep : 'netzwerk';
   const goto = (next: Step) => navigate(`setup/${next}`);
 
   const [verfahren, setVerfahren] = useState<Verfahren[]>([]);
@@ -77,6 +87,11 @@ export function SetupWizard({ step: rawStep, onFinish, config }: Props) {
   const [mqttSaved, setMqttSaved] = useState(false);
   const [brokerUrl, setBrokerUrl] = useState('');
   const [serialDevices, setSerialDevices] = useState<SerialDevice[] | null>(null);
+
+  // ── WLAN ──
+  // Only for the continue button's wording; the step's own screen owns
+  // everything else and reports back when it has connected.
+  const [wifiSsid, setWifiSsid] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/verfahren')
@@ -121,6 +136,11 @@ export function SetupWizard({ step: rawStep, onFinish, config }: Props) {
     fetch('/api/config/transport')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (d?.configured) setTransport(d.transport); })
+      .catch(() => {});
+
+    fetch('/api/config/netzwerk')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setWifiSsid(d?.ssid ?? null))
       .catch(() => {});
 
     fetch('/api/config/mqtt')
@@ -231,7 +251,34 @@ export function SetupWizard({ step: rawStep, onFinish, config }: Props) {
         </div>
       </header>
 
-      <main style={styles.main}>
+      <main style={step === 'netzwerk' ? { ...styles.main, ...styles.mainWide } : styles.main}>
+        {step === 'netzwerk' && (
+          <>
+            {/*
+              No question heading, unlike every other step. This one embeds a
+              whole screen rather than a few choices, and the heading's 68px
+              pushed the continue button to y=772 — off a 768px display, with
+              no scrollbar to say so. The wizard header already names the step
+              and the screen says "Netzwerk wählen", so nothing is lost.
+            */}
+            <NetzwerkConfig onConnected={setWifiSsid} />
+            {/*
+              Always enabled, and labelled for what it actually does. The step
+              commits nothing of its own — NetzwerkConfig connects immediately —
+              so there is nothing here to save, and a kiosk being prepared in
+              the office on a network cable has to be able to walk past it.
+            */}
+            {/* Inset to the cards' own margin: the step has no horizontal
+                padding of its own, so without this the button is full-bleed. */}
+            <button
+              onClick={() => goto('verfahren')}
+              style={{ ...styles.confirmButton, margin: '0 var(--space-xl)' }}
+            >
+              {wifiSsid ? 'Weiter' : 'Ohne WLAN fortfahren'}
+            </button>
+          </>
+        )}
+
         {step === 'verfahren' && (
           <>
             <h1 style={styles.question}>
@@ -517,6 +564,24 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: '900px',
     width: '100%',
     margin: '0 auto',
+  },
+  /**
+   * The WLAN step only. The wizard's 900px column collapses the screen's two
+   * card columns into one, which stacks three cards taller than the viewport.
+   */
+  mainWide: {
+    maxWidth: '1024px',
+    // `main` is content-box with 32px of padding, so a 1024px max width makes
+    // the step 1088px wide and pushes the layout off the side of the screen.
+    boxSizing: 'border-box' as const,
+    // The embedded screen brings its own padding on all four sides, so the
+    // wizard's own is pure duplication here. Vertically it is what put the
+    // continue button below a 768px display; horizontally it narrowed the step
+    // to 896px, one pixel under what the screen's two card columns need — and
+    // they silently collapsed into one, which is twice as tall.
+    padding: 'var(--space-md) 0',
+    justifyContent: 'flex-start',
+    overflowY: 'auto' as const,
   },
   question: {
     fontSize: 'var(--font-lg)',

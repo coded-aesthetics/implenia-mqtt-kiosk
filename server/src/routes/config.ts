@@ -19,6 +19,7 @@ import { registerRohrwechselConfigRoutes } from './config-rohrwechsel.js';
 import { registerReductionConfigRoutes } from './config-reduction.js';
 import { registerCalibrationRoutes } from './config-calibration.js';
 import { registerTopicOverrideRoutes } from './config-topics.js';
+import { registerNetworkConfigRoutes } from './config-network.js';
 
 // Logs as 'config', not as this file's name: /api/logs?module=config is how
 // service personnel filter these, and splitting the file must not split that.
@@ -233,4 +234,5 @@ export function registerConfigRoutes(app: FastifyInstance): void {
   registerReductionConfigRoutes(app);
   registerCalibrationRoutes(app);
   registerTopicOverrideRoutes(app);
+  registerNetworkConfigRoutes(app);
 }

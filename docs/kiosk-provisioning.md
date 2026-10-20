@@ -46,8 +46,15 @@ Anything else x86_64 works, but the two hardware-specific decisions below
 
 ```bash
 ./scripts/make-provision-stick.sh --device /dev/sdX --latest \
-  --token ghp_… --anydesk-password '<fleet password>'
+  --token ghp_… --anydesk-password '<fleet password>' \
+  --wifi-ssid 'Implenia-Box-G08' --wifi-psk '<box password>'
 ```
+
+`--wifi-ssid/--wifi-psk` are per site, not per fleet — they are the MQTT box's
+own access point. Every kiosk provisioned from the stick then joins that box by
+itself when it arrives, which is the whole point: nobody types a WLAN password
+on a touchscreen with gloves on. Leave them out and the WLAN is set on site in
+**Einstellungen → WLAN**.
 
 It downloads and verifies the current Debian stable netinst image, writes it to
 the stick, appends a second partition `KIOSK-PROV`, and fills that with
@@ -193,6 +200,7 @@ worth knowing are `--bundle` (install a specific release archive), `--no-vosk`
 | Step | What | Why |
 |---|---|---|
 | System | Hostname, `Europe/Berlin`, `de_DE.UTF-8`, X + Openbox + Chromium + `unclutter`, `udiskie`, `avahi-daemon` | `--no-install-recommends` throughout: no print spooler, no mail agent, no desktop. `udiskie` mounts USB sticks under `/media`, which is where `USB_UPDATE_PATHS` looks — with no desktop environment nothing would mount them otherwise. `avahi` makes the machine reachable as `kiosk-g08.local` for service SSH |
+| WLAN | `network-manager`, a polkit rule for the kiosk user, a check for a wireless interface, and `--wifi-ssid` pre-seeded with `autoconnect` on | The MQTT box's access point is both the data source and the internet uplink on site, and the app sets it from **Einstellungen → WLAN** — as the kiosk user, not as root, hence polkit. Installing NetworkManager does not disturb the wired connection this run is using: Debian ships `[ifupdown] managed=false` and the installer puts the ethernet interface in `/etc/network/interfaces`, so only the wireless device is ever touched. The interface check is there to find a missing firmware blob **in the office** rather than on site |
 | Kernel | `intel_idle.max_cstate=1` | Bay Trail hangs at random in deep C-states. A frozen screen on site is the failure this product exists to avoid, so the workaround goes on every machine rather than waiting for a report |
 | Swap | zram, 50% of RAM, zstd | 4 GB shared with Chromium. Compressed swap in RAM beats swapping to the disk the database is on |
 | Node | NodeSource, major 22, **npm 11 over it**, plus PM2 | Two separate pins. Node 22 because better-sqlite3 11.x ships no prebuild for Node 24, so Node 24 compiles it from source and that build aborts on teardown (`Assertion failed: (env) != nullptr`); 22 is the prebuild the project ships, and the major also has to match whatever built an offline dependency archive. npm 11 because Node 22's bundled npm 10.9 **cannot resolve this tree at all** — it dies with `Cannot read properties of null (reading 'edgesOut')`, which is what the Dependencies step looks like without the pin |
@@ -292,10 +300,17 @@ or, more usually, their own over AnyDesk.
 
 ## 5. On site
 
-The touchscreen wizard asks for **Verfahren → data source (MQTT or serial) →
-the settings for that choice**. Both the Verfahren and the transport are
-write-once; see *First-start setup* in the README. Nothing else needs typing on
-the machine.
+The touchscreen wizard asks for **WLAN → Verfahren → data source (MQTT or
+serial) → the settings for that choice**. Both the Verfahren and the transport
+are write-once; see *First-start setup* in the README. Nothing else needs
+typing on the machine.
+
+The WLAN step is first because the Implenia box's access point carries both the
+MQTT data and the internet uplink — until the machine is on it, no later step
+has anything to talk to. It is also the only step that commits nothing of its
+own: a pre-seeded kiosk arrives already connected and walks straight past it,
+and a machine being prepared on a cable can skip it with **Ohne WLAN
+fortfahren**.
 
 Before the machine leaves:
 
@@ -306,6 +321,8 @@ Before the machine leaves:
       repeating errors
 - [ ] Tap a text field — the on-screen keyboard appears and the recording bar
       stays visible
+- [ ] **Einstellungen → WLAN** lists networks and names this machine. On a
+      pre-seeded kiosk it already shows the box's SSID, green
 - [ ] `ssh kiosk@kiosk-<rig>.local` works from a service laptop
 - [ ] **Einstellungen → System** shows the AnyDesk ID, and a test session from
       a service laptop connects without anybody touching the screen
