@@ -17,6 +17,8 @@ interface Props {
   onMicPress?: () => void;
   onMicRelease?: () => void;
   commentQueueCount?: number;
+  /** An element is being recorded: the update offer shrinks to a dot. */
+  recording?: boolean;
   operatingMode?: OperatingMode | null;
   /**
    * Switch what the rig is doing. Omit to render the phase read-only.
@@ -64,7 +66,7 @@ interface Props {
   updateFailure?: string | null;
 }
 
-export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode, onModeChange, hidePhaseStepper, ausrichten, updateAvailable = null, updateApplying = false, updateSource = null, updateFailure = null }: Props) {
+export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, recording = false, operatingMode, onModeChange, hidePhaseStepper, ausrichten, updateAvailable = null, updateApplying = false, updateSource = null, updateFailure = null }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -126,7 +128,7 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
         <span style={{ ...styles.dot, backgroundColor: connColor }} />
         <span style={styles.statusText}>{connLabel}</span>
         <span style={styles.divider} />
-        <VersionIndicator version={version} available={updateAvailable} applying={updateApplying} source={updateSource} failure={updateFailure} />
+        <VersionIndicator version={version} available={updateAvailable} applying={updateApplying} source={updateSource} failure={updateFailure} recording={recording} />
         {voiceSupported && (
           <button
             onPointerDown={onMicPress}

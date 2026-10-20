@@ -619,6 +619,7 @@ export function App() {
         onMicPress={voice.startListening}
         onMicRelease={voice.stopListening}
         commentQueueCount={commentQueue.pendingCount}
+        recording={recordingState.active}
         operatingMode={recordingState.operatingMode}
         onModeChange={setOperatingMode}
         hidePhaseStepper={route.page === 'geologie' && route.query.beenden === '1'}
