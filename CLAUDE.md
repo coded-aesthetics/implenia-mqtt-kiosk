@@ -1006,9 +1006,15 @@ What else must not be broken:
   name of our own (`implenia-pending`) until it is committed.
 - **The internet is not a pass condition.** The box carries the uplink, so its
   mobile link can be down while the box serves MQTT perfectly. The acceptance
-  test is the box answering; `internet` is reported and the switch commits
-  either way. The kiosk buffers offline by design — refusing a correct network
+  test is the configured broker answering; `internet` is reported and the switch
+  commits either way. The kiosk buffers offline by design — refusing a correct network
   over a sulking LTE modem is the tail wagging the dog.
+- **A failure names the MQTT broker and its port, never "die Implenia-Box".**
+  The probe goes to whatever address the kiosk is configured for; that is the
+  box on a site and anything at all on a bench, and naming the box told a kiosk
+  pointed at a replay server that a device it has never met was not answering.
+  The port is there because `1884` against an expected `1883` is invisible
+  without it.
 - **A failure message says whether the old network came back**, because
   `rollback()` can itself fail. Claiming "das bisherige WLAN ist
   wiederhergestellt" when it is not is worse than saying nothing.

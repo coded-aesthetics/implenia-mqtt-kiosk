@@ -50,7 +50,7 @@ type Message =
   | { kind: 'success'; text: string };
 
 const HINT =
-  'Nach dem Verbinden prüft der Kiosk, ob die Implenia-Box erreichbar ist. ' +
+  'Nach dem Verbinden prüft der Kiosk, ob der MQTT-Broker erreichbar ist. ' +
   'Schlägt das fehl, wird das bisherige WLAN wiederhergestellt.';
 
 /** Words, not bars: a signal icon small enough to fit is too small to read. */
@@ -130,7 +130,7 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
         setMessage({
           kind: 'success',
           text:
-            `Verbunden mit „${selected.ssid}". Die Implenia-Box antwortet.` +
+            `Verbunden mit „${selected.ssid}". Der MQTT-Broker antwortet.` +
             (data.internet
               ? ' Internet ist verfügbar.'
               : ' Noch kein Internet — Messwerte werden gespeichert und später hochgeladen.'),
@@ -198,7 +198,7 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
 
           {/*
             The office trap: with a network cable plugged in, the wired
-            connection wins and the Implenia-Box is unreachable even though the
+            connection wins and the MQTT broker is unreachable even though the
             WLAN is up and this card says "Verbunden".
 
             Two lines, deliberately: this card also carries the connect
@@ -206,7 +206,7 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
           */}
           {status?.routedElsewhere && (
             <div style={{ ...styles.blockedNotice, marginBottom: 0 }}>
-              Netzwerkkabel („{status.defaultRouteDevice}") steckt: Die Implenia-Box ist
+              Netzwerkkabel („{status.defaultRouteDevice}") steckt: Der MQTT-Broker ist
               nicht erreichbar. Bitte abziehen.
             </div>
           )}
@@ -290,8 +290,8 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
 
             {networks.length === 0 && !scanning && (
               <div style={styles.blockedNotice}>
-                Kein WLAN gefunden. Bitte prüfen, ob die Implenia-Box eingeschaltet ist, und
-                dann „Neu suchen" antippen.
+                Kein WLAN gefunden. Bitte prüfen, ob der Access Point eingeschaltet ist,
+                und dann „Neu suchen" antippen.
               </div>
             )}
 

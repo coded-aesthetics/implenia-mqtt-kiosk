@@ -364,14 +364,21 @@ describe('a switch that fails', () => {
     expect((result as { error: string }).error).toContain('IP-Adresse');
   });
 
-  it('rolls back a network the MQTT box does not answer on', async () => {
+  it('rolls back a network the MQTT broker does not answer on', async () => {
     // Associated, DHCP fine, wrong network. This is the failure the scan list
     // cannot catch, and the only reason the acceptance test exists.
     const { net, nmcli } = harness({ broker: false });
     const result = await net.connect('Nachbar-WLAN', 'geheim123');
 
     expect(result).toMatchObject({ ok: false, code: 'unreachable' });
-    expect((result as { error: string }).error).toContain('192.168.2.1');
+    const error = (result as { error: string }).error;
+    // Named for what was probed, with the port: a kiosk pointed at a replay
+    // server was being told "die Implenia-Box" does not answer, about a device
+    // it has never met — and 1884 against an expected 1883 is invisible
+    // without the port.
+    expect(error).toContain('MQTT-Broker');
+    expect(error).toContain('192.168.2.1:1883');
+    expect(error).not.toContain('Implenia-Box');
     expect(nmcli().some((c) => c.includes('connection.autoconnect yes'))).toBe(false);
     expect(nmcli().some((c) => c.includes('connection up aaaa-1111'))).toBe(true);
   });

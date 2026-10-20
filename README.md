@@ -206,7 +206,7 @@ so `connect()` stages the change and commits it only once it has proven itself:
    known-good network the machine has, and a rewritten PSK cannot be read back
    and restored.
 3. Activate it, bounded.
-4. TCP-connect the MQTT box.
+4. TCP-connect the configured MQTT broker.
 5. Only then commit — rename, `autoconnect yes`, priority above every other
    profile, and drop the stale profile for the same SSID. On any failure,
    delete the pending profile and bring the previous one back up.

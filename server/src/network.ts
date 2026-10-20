@@ -501,21 +501,30 @@ export class LocalNetwork implements NetworkController {
       return { ok: false, code, error: this.message(code, ssid, restored, up.stderr) };
     }
 
-    // Step 4. The MQTT box is the acceptance test, and the internet is not: the
-    // box carries the uplink, so its mobile link can be down while the box
-    // itself serves MQTT perfectly — and refusing a correct network over that
-    // would be the tail wagging the dog. The kiosk buffers offline by design.
+    // Step 4. The configured MQTT broker is the acceptance test, and the
+    // internet is not: on a site the box carries the uplink, so its mobile link
+    // can be down while it serves MQTT perfectly — and refusing a correct
+    // network over that would be the tail wagging the dog. The kiosk buffers
+    // offline by design.
     const { host, port } = this.endpoint();
     const reachable = await this.probe(host, port, PROBE_TIMEOUT_MS);
     if (!reachable) {
-      log.warn('Joined "%s" but the MQTT box at %s:%d did not answer', ssid, host, port);
+      log.warn('Joined "%s" but the MQTT broker at %s:%d did not answer', ssid, host, port);
       const restored = await this.rollback(previous);
       return {
         ok: false,
         code: 'unreachable',
         error:
-          `Verbunden mit „${ssid}", aber die Implenia-Box antwortet nicht (${host}). ` +
-          'Vermutlich ist es das falsche Netzwerk. Bitte prüfen, ob die Box läuft.' +
+          // Named for what was actually probed, and with the port.
+          //
+          // It said "die Implenia-Box", which is the right noun on a site and
+          // the wrong one everywhere else: the probe goes to whatever broker
+          // this kiosk is configured for, and a kiosk pointed at a replay
+          // server was told a device it has never met was not answering. The
+          // port earns its place for the same reason — 1884 against an
+          // expected 1883 is invisible without it.
+          `Verbunden mit „${ssid}", aber der MQTT-Broker ${host}:${port} antwortet nicht. ` +
+          'Vermutlich ist es das falsche WLAN — bitte Adresse und Broker prüfen.' +
           this.restoredSuffix(restored),
       };
     }
@@ -615,7 +624,7 @@ export class LocalNetwork implements NetworkController {
         );
       case 'no-ip':
         return (
-          `„${ssid}" hat keine IP-Adresse vergeben. Bitte prüfen, ob die Implenia-Box ` +
+          `„${ssid}" hat keine IP-Adresse vergeben. Bitte prüfen, ob der Access Point ` +
           'vollständig gestartet ist, und erneut versuchen.' + suffix
         );
       default:
