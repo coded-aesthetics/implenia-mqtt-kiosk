@@ -423,21 +423,28 @@ const netStyles: Record<string, CSSProperties> = {
   },
   messageCard: {
     /**
-     * Five lines of --font-base at 1.4 (7.7rem) **plus the card's own padding**
-     * (2 x --space-lg), as a fixed height and not a minimum.
+    /**
+     * Five lines at rest, seven at most, **plus the card's own padding**
+     * (2 x --space-lg in each figure).
      *
-     * The padding is the part that was missed: this box started life with a
-     * 16px inset of its own, and moving it into a card kept the old height
-     * while adding 48px of padding inside it, which quietly ate two of the five
-     * lines and cut the longest hint off mid-sentence.
+     * Both numbers are measured on the rendered page, not counted: a
+     * 32-character SSID — the longest the standard allows — wraps worse than
+     * its length suggests, and the longest message the server can produce needs
+     * seven lines. Earlier versions of this comment claimed five and then six,
+     * both derived on paper, and both cut a real message off mid-sentence. The
+     * padding is the other half of that: the box began with a 16px inset of its
+     * own, and moving it into a card kept the old height while adding 48px
+     * inside it.
      *
-     * Fixed in both directions on purpose: a message that arrived and resized
-     * the list would move the network rows under the finger reaching for one.
-     * The server keeps every message it can send inside five lines — pinned by
-     * a test — and the scroll is the backstop for the one piece of text it does
-     * not write itself.
+     * It grows rather than staying fixed because the only thing that ever
+     * changes this text is a tap on Verbinden — it never arrives on its own. So
+     * the resize happens with the finger already off the button and in the
+     * other column from the list, while a box permanently sized for the worst
+     * message would cost the list two of its rows on every screen that never
+     * sees one.
      */
-    height: 'calc(7.7rem + 2 * var(--space-lg))',
+    minHeight: 'calc(7.7rem + 2 * var(--space-lg))',
+    maxHeight: 'calc(10.78rem + 2 * var(--space-lg))',
     flexShrink: 0,
     overflowY: 'auto',
     fontSize: 'var(--font-base)',

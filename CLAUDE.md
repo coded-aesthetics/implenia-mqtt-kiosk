@@ -1024,16 +1024,25 @@ What else must not be broken:
 - **A failure message says whether the old network came back**, because
   `rollback()` can itself fail. Claiming "das bisherige WLAN ist
   wiederhergestellt" when it is not is worse than saying nothing.
-- **Every message fits the screen's fixed-height slot** — five lines, about 220
-  characters, pinned by a test. The slot sits under the *network list*, in the
-  other column from the button it reports on, and its height is fixed rather
-  than a minimum. Both of those are load-bearing: the status card above the
-  button grows (a kiosk still on its network cable shows a warning about it,
-  which is the state a machine is in while being set up on a bench), and the
-  first version put the message under the button, where the two together pushed
-  it off the screen — on the one screen whose whole job is recovering from a
-  failure. Fixed height also keeps an arriving error from resizing the list
-  under the finger reaching for a network.
+- **Every message fits the screen's message box** — 260 characters, pinned by a
+  test, with a 32-character SSID (the longest the standard allows) in it. The
+  box sits under the *network list*, in the other column from the button it
+  reports on, because the status card above that button grows: a kiosk on a
+  network cable shows an extra line about it, which is the state of every
+  machine being set up on a bench, and the first version put the message under
+  the button where the two together pushed it off the screen.
+- **The box's size is measured, never counted.** It holds five lines at rest
+  and grows to seven, and every one of those numbers came from reading
+  `scrollHeight` on the rendered page at 1024x768. Three earlier versions were
+  derived on paper — five lines, then six, then a height that forgot the card's
+  own 48px of padding — and each cut a real message off mid-sentence while the
+  arithmetic said it fit. A long SSID also wraps worse than its character count
+  suggests, which no budget in characters can express.
+- **A failure message never contradicts itself across the rollback.**
+  "Verbunden mit „X" … das Gerät ist in keinem WLAN" is two true sentences in
+  different tenses, and without naming the undo between them it reads as
+  nonsense. Every message says the switch was taken back before it says where
+  the machine ended up.
 - **Both columns are bounded** (`minHeight: 0` and their own scroll), and the
   screen takes its height with `flex: 1` rather than `height: 100%`, because it
   renders in two places with different room: the config page, where it fills

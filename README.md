@@ -245,6 +245,24 @@ diese Prüfung über das Kabel laufen und sagt dann nichts über das WLAN — zu
 Test das Kabel abziehen."* The first version put a fact, a false claim and an
 instruction in one sentence, which read as three unrelated assertions.
 
+**The failure message narrates the rollback.** "Verbunden mit „X", aber der
+MQTT-Broker … antwortet nicht … Das Gerät ist in keinem WLAN" is two true
+sentences in different tenses — the attempt, then the state after it was undone
+— and side by side they read as a contradiction. Naming the undo is what orders
+them: *"Der Wechsel wurde zurückgenommen, das Gerät bleibt im bisherigen WLAN."*
+
+**The message box is sized by measurement, not arithmetic.** Five lines at rest,
+growing to seven, every number read off `scrollHeight` on the rendered page at
+1024x768. Three versions derived on paper — five lines, then six, then a height
+that forgot the card's own 48px of padding — each cut a real message off
+mid-sentence while the sums said it fit. A 32-character SSID also wraps worse
+than its length suggests, which no budget in characters can express; the
+server's 260-character test carries one for that reason. It grows rather than
+staying fixed because the only thing that ever changes this text is a tap on
+Verbinden, so the resize happens with the finger already off the button — while
+a box permanently sized for the worst message costs the list two rows on every
+screen that never sees one.
+
 **Layout.** Two columns: what the machine is on and the connect controls at the
 left, the networks in range and the result message at the right. The message
 belongs to the button and reads best beside it — but the status card above the

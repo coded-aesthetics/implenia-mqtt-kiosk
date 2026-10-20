@@ -345,7 +345,7 @@ describe('a switch that fails', () => {
     const error = (result as { error: string }).error;
     expect(error).toContain('Passwort');
     expect(error).toContain('Implenia-Box-G08');
-    expect(error).toContain('bisherige WLAN ist wiederhergestellt');
+    expect(error).toContain('bleibt im bisherigen WLAN');
 
     const calls = nmcli();
     expect(calls).toContain(`connection delete ${PENDING}`);
@@ -383,6 +383,18 @@ describe('a switch that fails', () => {
     expect(nmcli().some((c) => c.includes('connection up aaaa-1111'))).toBe(true);
   });
 
+  it('says the switch was taken back, so the two halves do not contradict', async () => {
+    // "Verbunden mit „X" … das Gerät ist in keinem WLAN" is two true sentences
+    // in different tenses, and without the undo between them it reads as a
+    // contradiction.
+    const { net } = harness({ broker: false });
+    const result = await net.connect('Nachbar-WLAN', 'geheim123');
+    const error = (result as { error: string }).error;
+    expect(error).toContain('Verbunden mit „Nachbar-WLAN"');
+    expect(error).toContain('zurückgenommen');
+    expect(error.indexOf('zurückgenommen')).toBeGreaterThan(error.indexOf('Verbunden mit'));
+  });
+
   it('does not claim the old network is back when restoring it also failed', async () => {
     const { net } = harness({
       up: { code: 4, stdout: '', stderr: '(7) Secrets were required' },
@@ -390,14 +402,16 @@ describe('a switch that fails', () => {
     });
     const result = await net.connect('Implenia-Box-G08', 'falsch');
     const error = (result as { error: string }).error;
-    expect(error).toContain('mit keinem WLAN verbunden');
-    expect(error).not.toContain('wiederhergestellt');
+    expect(error).toContain('ist in keinem WLAN');
+    expect(error).not.toContain('bisherigen WLAN');
   });
 
-  it('keeps every message inside the five lines the screen reserves', async () => {
-    // The screen's message slot has a fixed height so that a failure cannot
-    // reflow the Verbinden button away. Five lines is about 220 characters at
-    // 1024x768; past that a message is not merely wordy, it is partly unread.
+  it('keeps every message inside the six lines the screen reserves', async () => {
+    // The screen's message box has a fixed height so an arriving message cannot
+    // move anything the technician is reaching for. Six lines is about 260
+    // characters at 1024x768, measured on the rendered page; past that a
+    // message is not merely wordy, it is partly unread. The SSID is the longest
+    // one the standard allows, because nothing stops a site from using it.
     const failures: Scripted[] = [
       { up: { code: 4, stdout: '', stderr: '(7) Secrets were required' } },
       { up: { code: 4, stdout: '', stderr: 'IP configuration could not be reserved' } },
@@ -407,11 +421,12 @@ describe('a switch that fails', () => {
       // the one piece of text here the module does not write itself.
       { up: { code: 4, stdout: '', stderr: 'Error: '.padEnd(400, 'x') } },
     ];
+    const longestLegalSsid = 'X'.repeat(32);
     for (const script of failures) {
       const { net } = harness(script);
-      const result = await net.connect('Implenia-Box-G08', 'geheim123');
+      const result = await net.connect(longestLegalSsid, 'geheim123');
       const error = (result as { error: string }).error;
-      expect(error.length, error).toBeLessThanOrEqual(220);
+      expect(error.length, error).toBeLessThanOrEqual(260);
     }
   });
 
@@ -431,7 +446,7 @@ describe('a switch that fails', () => {
       broker: false,
     });
     const result = await net.connect('Implenia-Box-G08', 'geheim123');
-    expect((result as { error: string }).error).toContain('mit keinem WLAN verbunden');
+    expect((result as { error: string }).error).toContain('ist in keinem WLAN');
     expect(nmcli()).toContain(`connection delete ${PENDING}`);
   });
 });

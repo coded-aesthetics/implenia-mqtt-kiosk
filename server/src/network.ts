@@ -523,8 +523,8 @@ export class LocalNetwork implements NetworkController {
           // server was told a device it has never met was not answering. The
           // port earns its place for the same reason — 1884 against an
           // expected 1883 is invisible without it.
-          `Verbunden mit „${ssid}", aber der MQTT-Broker ${host}:${port} antwortet nicht. ` +
-          'Vermutlich ist es das falsche WLAN — bitte Adresse und Broker prüfen.' +
+          `Verbunden mit „${ssid}", aber der MQTT-Broker ${host}:${port} antwortet dort ` +
+          'nicht — vermutlich das falsche WLAN, sonst die Broker-Adresse prüfen.' +
           this.restoredSuffix(restored),
       };
     }
@@ -591,21 +591,32 @@ export class LocalNetwork implements NetworkController {
     return true;
   }
 
+  /**
+   * Where the machine ended up — and that it got there by being put back.
+   *
+   * The rollback has to be *said*, not implied. "Verbunden mit „X" … Das Gerät
+   * ist mit keinem WLAN verbunden" is two true sentences in different tenses
+   * with nothing between them, and it reads as a contradiction: the first
+   * describes the attempt, the second the state after it was undone. Naming the
+   * undo is what puts the two in order.
+   */
   private restoredSuffix(restored: boolean): string {
     return restored
-      ? ' Das bisherige WLAN ist wiederhergestellt.'
-      : ' Das Gerät ist mit keinem WLAN verbunden.';
+      ? ' Der Wechsel wurde zurückgenommen, das Gerät bleibt im bisherigen WLAN.'
+      : ' Der Wechsel wurde zurückgenommen, das Gerät ist in keinem WLAN.';
   }
 
   /**
    * German, actionable — and short.
    *
-   * The screen shows these in a slot of fixed height, so that it cannot reflow
-   * the Verbinden button out from under the finger about to tap it. That slot
-   * holds five lines at the kiosk's resolution, which is about 220 characters:
-   * a message longer than that is not merely wordy, it is partly unread.
-   * `MAX_DETAIL` is what bounds the one piece of text here that this module
-   * does not write itself.
+   * The screen shows these in a box of fixed height, so that an arriving
+   * message cannot move anything the technician is reaching for. That box holds
+   * seven lines at the kiosk's resolution — 260 characters, with the budget
+   * checked by measuring the rendered page rather than by counting them — and a
+   * message longer than that is not merely wordy, it is partly unread. The
+   * budget has to survive a 32-character SSID, which is the longest the
+   * standard allows and wraps worse than its length suggests. `MAX_DETAIL`
+   * bounds the one piece of text here that this module does not write itself.
    */
   private message(
     code: ConnectFailure, ssid: string, restored: boolean, detail: string,
