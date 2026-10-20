@@ -315,8 +315,21 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
                     {n.ssid}
                     {n.active && <span style={netStyles.rowActive}>aktuell</span>}
                   </span>
+                  {/*
+                    Words, and no padlock.
+
+                    The kiosk has no emoji font — U+1F512 is covered by none of
+                    its 113 fonts, so the lock rendered as a tofu box. Nor is
+                    one worth installing: a padlock small enough to sit in this
+                    row is the kind of fine control CLAUDE.md rules out anyway.
+
+                    Only the open network is marked. Every access point on a
+                    site is secured, so that is the unremarkable case, and
+                    whether a password is needed is answered by the field that
+                    does or does not appear when the row is tapped.
+                  */}
                   <span style={netStyles.rowMeta}>
-                    {n.secured ? '🔒' : 'offen'} {n.signal} %
+                    {n.secured ? '' : 'offen · '}{n.signal} %
                   </span>
                 </button>
               ))}
