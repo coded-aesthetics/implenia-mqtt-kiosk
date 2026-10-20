@@ -341,6 +341,10 @@ wifi_access() {
   if [[ -f "$rules" ]] && grep -q "\"$USER\"" "$rules"; then
     skip "polkit rule for $USER already in place"
   else
+    # polkitd reads this directory but does not ship it: a Debian 13 kiosk has
+    # no /etc/polkit-1/rules.d until something creates one, and `tee` cannot
+    # write into a directory that is not there.
+    sudo mkdir -p "$(dirname "$rules")"
     sudo tee "$rules" >/dev/null <<RULES
 // The kiosk app sets this machine's WLAN from its own settings screen
 // (Einstellungen -> WLAN). The server runs as $USER, not as root.
