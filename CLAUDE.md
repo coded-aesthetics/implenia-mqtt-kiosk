@@ -1009,6 +1009,12 @@ What else must not be broken:
   test is the configured broker answering; `internet` is reported and the switch
   commits either way. The kiosk buffers offline by design — refusing a correct network
   over a sulking LTE modem is the tail wagging the dog.
+- **A cable on the default route does not mean the broker is unreachable.** The
+  box's own subnet is a connected route over the Wi-Fi and beats the cable's
+  default route. What `routedElsewhere` means is that the acceptance test can
+  reach a broker on the *cable's* network and tell you nothing about the Wi-Fi —
+  so the status card states the route as a fact and the consequence lives beside
+  the check it qualifies, not stitched onto the fact as a warning.
 - **A failure names the MQTT broker and its port, never "die Implenia-Box".**
   The probe goes to whatever address the kiosk is configured for; that is the
   box on a site and anything at all on a bench, and naming the box told a kiosk

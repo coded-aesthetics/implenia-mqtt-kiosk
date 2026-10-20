@@ -229,11 +229,21 @@ element) — same guard and same reasoning as `POST /api/update`. The box's AP i
 the data source, so the seconds the new link takes to come up, and the rollback
 on a failed attempt, are measurements nobody can get back.
 
-**The office trap.** With a network cable plugged in, the wired connection wins
-on metric and the MQTT box is unreachable even though the Wi-Fi is up.
-`routedElsewhere` is `ip route show default` naming an interface that is not
-the Wi-Fi, and the screen says so instead of showing "Verbunden" and leaving
-the technician to wonder.
+**The office trap, stated correctly.** `routedElsewhere` is `ip route show
+default` naming an interface that is not the Wi-Fi — on a bench, the network
+cable. What it means is **not** that the broker is unreachable: the box's own
+subnet is a connected route over the Wi-Fi and beats the cable's default route,
+so a cable does not cut the kiosk off from a box it has joined. What it does is
+let the acceptance test reach a broker that lives on the *cable's* network and
+succeed without saying anything about the Wi-Fi at all.
+
+So the screen splits the two. The status card states the fact in the same voice
+as the line above it — `Datenverkehr: über „enp1s0", nicht über das WLAN` — and
+the consequence goes in the message box beside the Verbinden button, which is
+where the check is already explained: *"Solange das Netzwerkkabel steckt, kann
+diese Prüfung über das Kabel laufen und sagt dann nichts über das WLAN — zum
+Test das Kabel abziehen."* The first version put a fact, a false claim and an
+instruction in one sentence, which read as three unrelated assertions.
 
 **Layout.** Two columns: what the machine is on and the connect controls at the
 left, the networks in range and the result message at the right. The message

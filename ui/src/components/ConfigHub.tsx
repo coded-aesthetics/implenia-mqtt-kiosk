@@ -53,15 +53,22 @@ export function ConfigHub({ config, updateAvailable }: Props) {
         // WLAN. A machine that cannot set its own Wi-Fi is not a fault, so the
         // tile stays neutral and says so rather than going red — the wired
         // connection it has instead works perfectly well.
+        // Whether the kiosk is on a WLAN comes first. Leading with the route
+        // meant a machine on a network cable and no WLAN — the normal state of
+        // one being prepared in the office — reported "Verkehr über enp1s0",
+        // which answers a question nobody asked instead of the tile's own.
         let netzwerkTile: TileStatus;
         if (!netzwerk || netzwerk.capability?.available !== true) {
           netzwerkTile = { color: 'var(--text-muted)', summary: 'Nicht verfügbar' };
-        } else if (netzwerk.routedElsewhere) {
-          netzwerkTile = { color: 'var(--color-warning)', summary: `Verkehr über ${netzwerk.defaultRouteDevice}` };
-        } else if (netzwerk.ssid) {
-          netzwerkTile = { color: 'var(--color-success)', summary: netzwerk.ssid };
-        } else {
+        } else if (!netzwerk.ssid) {
           netzwerkTile = { color: 'var(--color-warning)', summary: 'Nicht verbunden' };
+        } else if (netzwerk.routedElsewhere) {
+          netzwerkTile = {
+            color: 'var(--color-warning)',
+            summary: `${netzwerk.ssid} · Verkehr über ${netzwerk.defaultRouteDevice}`,
+          };
+        } else {
+          netzwerkTile = { color: 'var(--color-success)', summary: netzwerk.ssid };
         }
 
         // Verbindung

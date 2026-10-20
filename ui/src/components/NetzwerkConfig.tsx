@@ -53,6 +53,25 @@ const HINT =
   'Nach dem Verbinden prüft der Kiosk, ob der MQTT-Broker erreichbar ist. ' +
   'Schlägt das fehl, wird das bisherige WLAN wiederhergestellt.';
 
+/**
+ * What the check is worth while another interface carries the default route.
+ *
+ * This belongs here and not in the status card. The card's job is to say what
+ * the machine is on; the consequence of that is a statement about *the check*,
+ * and the check is what this box explains — so the fact and what follows from
+ * it finally sit next to each other. The first version put "Netzwerkkabel
+ * steckt" and "der MQTT-Broker ist nicht erreichbar" in one sentence with
+ * "bitte abziehen" after them, which reads as three unrelated assertions. It
+ * was also wrong: the box's own subnet is a connected route over the Wi-Fi and
+ * beats the cable's default route, so a cable does not make the broker
+ * unreachable. What it does is let the check succeed *through the cable* and
+ * say nothing about the Wi-Fi at all.
+ */
+const HINT_ROUTED_ELSEWHERE =
+  'Der Kiosk prüft nach dem Verbinden, ob der MQTT-Broker erreichbar ist. ' +
+  'Solange das Netzwerkkabel steckt, kann diese Prüfung über das Kabel laufen ' +
+  'und sagt dann nichts über das WLAN — zum Test das Kabel abziehen.';
+
 /** Words, not bars: a signal icon small enough to fit is too small to read. */
 function strength(signal: number): string {
   if (signal >= 70) return 'stark';
@@ -197,17 +216,14 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
           )}
 
           {/*
-            The office trap: with a network cable plugged in, the wired
-            connection wins and the MQTT broker is unreachable even though the
-            WLAN is up and this card says "Verbunden".
-
-            Two lines, deliberately: this card also carries the connect
-            controls in the setup wizard, where a third line clips them.
+            A fact about this machine, in the same voice as the line above it,
+            and nothing more: what follows from it is a statement about the
+            connection check, and that lives beside the check — see
+            HINT_ROUTED_ELSEWHERE.
           */}
           {status?.routedElsewhere && (
-            <div style={{ ...styles.blockedNotice, marginBottom: 0 }}>
-              Netzwerkkabel („{status.defaultRouteDevice}") steckt: Der MQTT-Broker ist
-              nicht erreichbar. Bitte abziehen.
+            <div style={netStyles.hostLine}>
+              Datenverkehr: über „{status.defaultRouteDevice}", nicht über das WLAN
             </div>
           )}
 
@@ -348,7 +364,9 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
             and an arriving error does not resize the list either.
           */}
           <div style={{ ...styles.card, ...netStyles.messageCard, ...slotTone(message) }}>
-            {message.kind === 'hint' ? HINT : message.text}
+            {message.kind === 'hint'
+              ? (status?.routedElsewhere ? HINT_ROUTED_ELSEWHERE : HINT)
+              : message.text}
           </div>
         </div>
       )}
@@ -405,7 +423,13 @@ const netStyles: Record<string, CSSProperties> = {
   },
   messageCard: {
     /**
-     * Five lines of --font-base at 1.4, as a fixed height and not a minimum.
+     * Five lines of --font-base at 1.4 (7.7rem) **plus the card's own padding**
+     * (2 x --space-lg), as a fixed height and not a minimum.
+     *
+     * The padding is the part that was missed: this box started life with a
+     * 16px inset of its own, and moving it into a card kept the old height
+     * while adding 48px of padding inside it, which quietly ate two of the five
+     * lines and cut the longest hint off mid-sentence.
      *
      * Fixed in both directions on purpose: a message that arrived and resized
      * the list would move the network rows under the finger reaching for one.
@@ -413,7 +437,7 @@ const netStyles: Record<string, CSSProperties> = {
      * a test — and the scroll is the backstop for the one piece of text it does
      * not write itself.
      */
-    height: '7.7rem',
+    height: 'calc(7.7rem + 2 * var(--space-lg))',
     flexShrink: 0,
     overflowY: 'auto',
     fontSize: 'var(--font-base)',
