@@ -56,6 +56,14 @@ export interface WifiNetwork {
   /** 0–100 as NetworkManager reports it. */
   signal: number;
   secured: boolean;
+  /**
+   * NetworkManager's raw SECURITY field — `WPA2`, `WPA3`, `802.1X`, `WPA1 WPA2`.
+   *
+   * Kept rather than reduced to `secured`, because the key management differs:
+   * a WPA3-only AP needs `sae` and a profile built with `wpa-psk` simply never
+   * associates, which looks exactly like a wrong password.
+   */
+  security: string;
   /** Currently in use by this machine. */
   active: boolean;
 }
@@ -102,12 +110,21 @@ export interface NetworkStatus {
 }
 
 export type ConnectFailure =
+  | 'unsupported'
   | 'unauthorized'
   | 'bad-password'
   | 'no-ip'
   | 'unreachable'
   | 'activation'
   | 'unavailable';
+
+/**
+ * Where the machine ended up after a failed attempt.
+ *
+ * `untouched` is not `restored`: nothing was switched at all, which is the
+ * honest answer when the profile could not even be created.
+ */
+type Outcome = 'untouched' | 'restored' | 'none';
 
 export type ConnectResult =
   | { ok: true; ssid: string; internet: boolean }
@@ -173,6 +190,7 @@ export function parseScan(stdout: string): WifiNetwork[] {
     const network: WifiNetwork = {
       ssid,
       signal: Number.isFinite(signal) ? signal : 0,
+      security: security ?? '',
       // NetworkManager writes an empty field, or the literal `--`, for an open
       // network. Anything else names a key management scheme.
       secured: Boolean(security) && security !== '--',
@@ -198,6 +216,26 @@ export function parseConnections(stdout: string): ConnectionRow[] {
     active: active === 'yes',
     device: device ?? '',
   }));
+}
+
+/**
+ * Which `wifi-sec.key-mgmt` a scanned network needs, or `null` for an open one.
+ *
+ * `unsupported` is its own answer: an 802.1X network needs an identity and a
+ * certificate, and this screen collects a password. Offering it a password
+ * field produces a retype loop against something no password can join.
+ */
+export function keyManagementFor(security: string): 'wpa-psk' | 'sae' | 'unsupported' | null {
+  const text = security.toUpperCase();
+  if (!text || text === '--') return null;
+  // Checked before WPA, because a transitional AP advertises "WPA2 WPA3" and
+  // SAE is what the newer half wants; NetworkManager falls back by itself.
+  if (text.includes('WPA3') || text.includes('SAE')) return 'sae';
+  if (text.includes('802.1X') || text.includes('EAP')) return 'unsupported';
+  if (text.includes('WPA') || text.includes('PSK')) return 'wpa-psk';
+  // WEP and anything unrecognised: wpa-psk is the only thing this screen can
+  // build, and failing at association beats refusing outright.
+  return 'wpa-psk';
 }
 
 /** `nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status`. */
@@ -276,7 +314,11 @@ export const realExec: Exec = (cmd, args, timeoutMs) =>
           : err
             ? 127
             : 0;
-      resolve({ code, stdout: stdout ?? '', stderr: stderr ?? (err ? err.message : '') });
+      // `||`, not `??`: execFile always hands the callback a string, so the
+      // nullish branch never ran and an ENOENT or a timeout kill arrived with
+      // an empty stderr — "nmcli … failed (127):" with nothing after the colon,
+      // on exactly the failures this fallback was written for.
+      resolve({ code, stdout: stdout || '', stderr: stderr || (err ? err.message : '') });
     });
   });
 
@@ -364,8 +406,9 @@ export class LocalNetwork implements NetworkController {
           'Sache des Betriebssystems.',
       };
     }
-    const iface = wifiInterface(parseDevices(result.stdout));
-    if (!iface) {
+    const devices = parseDevices(result.stdout);
+    const wifi = devices.find((d) => d.type === 'wifi');
+    if (!wifi) {
       return {
         available: false,
         reason:
@@ -374,7 +417,30 @@ export class LocalNetwork implements NetworkController {
           'nur die Verbindung über Netzwerkkabel.',
       };
     }
-    return { available: true, iface };
+
+    // A device that exists is not the same as a device that can be used, and
+    // the difference is invisible from here without the state: both of these
+    // leave `scan()` returning an empty list, and the screen then blames the
+    // access point for a problem on the kiosk — with nothing to act on.
+    if (wifi.state === 'unmanaged') {
+      return {
+        available: false,
+        reason:
+          `Die WLAN-Schnittstelle „${wifi.device}" wird nicht von NetworkManager verwaltet, ` +
+          'meist weil sie in /etc/network/interfaces eingetragen ist. Dieses Gerät muss neu ' +
+          'provisioniert werden (scripts/provision-kiosk.sh).',
+      };
+    }
+    if (wifi.state === 'unavailable') {
+      return {
+        available: false,
+        reason:
+          `Die WLAN-Schnittstelle „${wifi.device}" ist abgeschaltet. Bitte prüfen, ob es am ` +
+          'Gerät einen WLAN-Schalter gibt oder ob das WLAN im BIOS deaktiviert ist, und das ' +
+          'Gerät neu starten.',
+      };
+    }
+    return { available: true, iface: wifi.device };
   }
 
   async status(): Promise<NetworkStatus> {
@@ -387,22 +453,43 @@ export class LocalNetwork implements NetworkController {
       };
     }
 
-    const [wifi, route] = await Promise.all([
-      this.nmcli(['-t', '-f', 'SSID,SIGNAL,SECURITY,IN-USE', 'device', 'wifi', 'list']),
+    const [wifi, route, connections] = await Promise.all([
+      // `--rescan no` on purpose. The default is `auto`, which asks the radio
+      // for a fresh scan whenever NetworkManager's cache is older than 30 s —
+      // so merely *reading* the status triggered a scan, and the settings hub
+      // waits on this call before it paints any of its five tiles.
+      this.nmcli(['-t', '-f', 'SSID,SIGNAL,SECURITY,IN-USE', 'device', 'wifi', 'list', '--rescan', 'no']),
       this.exec('ip', ['route', 'show', 'default'], QUERY_TIMEOUT_MS),
+      this.connections(),
     ]);
 
     const current = wifi.code === 0 ? parseScan(wifi.stdout).find((n) => n.active) ?? null : null;
     const defaultRouteDevice = route.code === 0 ? parseDefaultRouteDevice(route.stdout) : null;
 
+    // The scan list answers the signal strength and nothing else authoritative:
+    // it can be empty or stale, and a failed one used to report a perfectly
+    // connected kiosk as "Nicht verbunden" — amber tile, and a wizard button
+    // reading "Ohne WLAN fortfahren". What the machine is actually on is the
+    // active connection on this interface.
+    const activeProfile = connections.find(
+      (c) => c.active && c.type === '802-11-wireless' && c.device === capability.iface,
+    );
+
     return {
       hostname,
       capability,
-      ssid: current?.ssid ?? null,
+      ssid: current?.ssid ?? activeProfile?.name ?? null,
       signal: current?.signal ?? null,
       defaultRouteDevice,
       routedElsewhere: defaultRouteDevice !== null && defaultRouteDevice !== capability.iface,
     };
+  }
+
+  private async connections(): Promise<ConnectionRow[]> {
+    const result = await this.nmcli([
+      '-t', '-f', 'NAME,UUID,TYPE,AUTOCONNECT-PRIORITY,ACTIVE,DEVICE', 'connection', 'show',
+    ]);
+    return result.code === 0 ? parseConnections(result.stdout) : [];
   }
 
   /**
@@ -422,13 +509,6 @@ export class LocalNetwork implements NetworkController {
       return [];
     }
     return parseScan(result.stdout);
-  }
-
-  private async connections(): Promise<ConnectionRow[]> {
-    const result = await this.nmcli([
-      '-t', '-f', 'NAME,UUID,TYPE,AUTOCONNECT-PRIORITY,ACTIVE,DEVICE', 'connection', 'show',
-    ]);
-    return result.code === 0 ? parseConnections(result.stdout) : [];
   }
 
   /**
@@ -471,6 +551,30 @@ export class LocalNetwork implements NetworkController {
     // process list of a machine only service personnel can log into. It is
     // never logged, which is the part that would otherwise leave it on disk and
     // in `GET /api/logs`.
+    // What key management this network needs, from the scan NetworkManager has
+    // already cached — `wpa-psk` against a WPA3-only AP never associates, and
+    // the failure is indistinguishable from a wrong password, so the technician
+    // retypes a correct one until they give up. `--rescan no` keeps this off
+    // the radio: a network the operator just tapped is in the cache by
+    // definition.
+    const seen = await this.nmcli([
+      '-t', '-f', 'SSID,SIGNAL,SECURITY,IN-USE', 'device', 'wifi', 'list', '--rescan', 'no',
+    ]);
+    const security = seen.code === 0
+      ? parseScan(seen.stdout).find((n) => n.ssid === ssid)?.security ?? ''
+      : '';
+    const keyMgmt = keyManagementFor(security);
+    if (keyMgmt === 'unsupported') {
+      return {
+        ok: false,
+        code: 'unsupported',
+        error:
+          `„${ssid}" ist ein Firmennetz mit Benutzeranmeldung (${security}). Dieser Kiosk ` +
+          'kann sich nur mit einem WLAN-Passwort anmelden. Bitte das WLAN der Implenia-Box ' +
+          'verwenden.',
+      };
+    }
+
     const addArgs = [
       'connection', 'add',
       'type', 'wifi',
@@ -479,14 +583,16 @@ export class LocalNetwork implements NetworkController {
       'ssid', ssid,
       'autoconnect', 'no',
     ];
-    if (psk) {
-      addArgs.push('wifi-sec.key-mgmt', 'wpa-psk', 'wifi-sec.psk', psk);
+    if (psk && keyMgmt) {
+      addArgs.push('wifi-sec.key-mgmt', keyMgmt, 'wifi-sec.psk', psk);
     }
     const added = await this.nmcli(addArgs);
     if (added.code !== 0) {
       const code = classifyActivationFailure(added.stderr);
       log.error('Creating the pending Wi-Fi profile failed (%d): %s', added.code, added.stderr.trim());
-      return { ok: false, code, error: this.message(code, ssid, false, added.stderr) };
+      // No `connection up` ran and nothing was brought down, so the machine is
+      // still on whatever it was on.
+      return { ok: false, code, error: this.message(code, ssid, 'untouched', added.stderr) };
     }
 
     // Step 3.
@@ -497,8 +603,8 @@ export class LocalNetwork implements NetworkController {
     if (up.code !== 0) {
       const code = classifyActivationFailure(up.stderr);
       log.warn('Wi-Fi activation for "%s" failed (%d): %s', ssid, up.code, up.stderr.trim());
-      const restored = await this.rollback(previous);
-      return { ok: false, code, error: this.message(code, ssid, restored, up.stderr) };
+      const outcome = await this.rollback(previous);
+      return { ok: false, code, error: this.message(code, ssid, outcome, up.stderr) };
     }
 
     // Step 4. The configured MQTT broker is the acceptance test, and the
@@ -510,7 +616,7 @@ export class LocalNetwork implements NetworkController {
     const reachable = await this.probe(host, port, PROBE_TIMEOUT_MS);
     if (!reachable) {
       log.warn('Joined "%s" but the MQTT broker at %s:%d did not answer', ssid, host, port);
-      const restored = await this.rollback(previous);
+      const outcome = await this.rollback(previous);
       return {
         ok: false,
         code: 'unreachable',
@@ -525,12 +631,26 @@ export class LocalNetwork implements NetworkController {
           // expected 1883 is invisible without it.
           `Verbunden mit „${ssid}", aber der MQTT-Broker ${host}:${port} antwortet dort ` +
           'nicht — vermutlich das falsche WLAN, sonst die Broker-Adresse prüfen.' +
-          this.restoredSuffix(restored),
+          this.restoredSuffix(outcome),
       };
     }
 
     // Step 5.
-    await this.commit(ssid, before);
+    //
+    // A commit that fails is rolled back like any other failure rather than
+    // reported as a success with a caveat: the half-committed state is the one
+    // that strands the machine, and putting it back where it started leaves
+    // something a second attempt can work from.
+    if (!await this.commit(ssid, before)) {
+      const outcome = await this.rollback(previous);
+      return {
+        ok: false,
+        code: 'activation',
+        error:
+          `Verbunden mit „${ssid}", aber die Einstellung ließ sich nicht dauerhaft ` +
+          'speichern.' + this.restoredSuffix(outcome) + ' Bitte erneut versuchen.',
+      };
+    }
     const internet = await this.probe('8.8.8.8', 53, PROBE_TIMEOUT_MS);
     log.info('Wi-Fi switched to "%s" (Internet: %s)', ssid, internet ? 'ja' : 'nein');
     return { ok: true, ssid, internet };
@@ -544,15 +664,29 @@ export class LocalNetwork implements NetworkController {
    * when several are in range — which is exactly what happens when a kiosk that
    * knows the office Wi-Fi is carried onto a site.
    */
-  private async commit(ssid: string, before: ConnectionRow[]): Promise<void> {
+  private async commit(ssid: string, before: ConnectionRow[]): Promise<boolean> {
     const highest = before.reduce((max, c) => Math.max(max, c.priority), 0);
 
-    await this.nmcli([
+    const renamed = await this.nmcli([
       'connection', 'modify', PENDING_CON_NAME,
       'connection.id', ssid,
       'connection.autoconnect', 'yes',
       'connection.autoconnect-priority', String(highest + 1),
     ]);
+    // Checked, and the stale profile is not touched unless it succeeded.
+    //
+    // An unchecked failure here is the one state this whole design exists to
+    // avoid, reached from the inside: the live connection stays named
+    // `implenia-pending` with `autoconnect no` while the real profile for the
+    // SSID has just been deleted, so the next reboot comes back on nothing —
+    // and the next attempt is worse. `connections()` would then report the
+    // pending profile as the *previous* one, step 1 would delete it out from
+    // under the live connection, and a rollback would try to bring up a uuid
+    // that no longer exists.
+    if (renamed.code !== 0) {
+      log.error('Committing the Wi-Fi profile failed (%d): %s', renamed.code, renamed.stderr.trim());
+      return false;
+    }
 
     // A profile for this SSID from an earlier setup would otherwise sit there
     // with its own autoconnect and its own password. Matched by name, which is
@@ -564,6 +698,7 @@ export class LocalNetwork implements NetworkController {
         await this.nmcli(['connection', 'delete', stale.uuid]);
       }
     }
+    return true;
   }
 
   /**
@@ -573,10 +708,10 @@ export class LocalNetwork implements NetworkController {
    * into the error message: "das Gerät ist weiter verbunden" is worth saying,
    * and saying it when it is not true is worse than saying nothing.
    */
-  private async rollback(previous: ConnectionRow | undefined): Promise<boolean> {
+  private async rollback(previous: ConnectionRow | undefined): Promise<Outcome> {
     await this.nmcli(['connection', 'down', PENDING_CON_NAME]);
     await this.nmcli(['connection', 'delete', PENDING_CON_NAME]);
-    if (!previous) return false;
+    if (!previous) return 'none';
     const back = await this.nmcli(
       ['-w', String(ACTIVATION_TIMEOUT_S), 'connection', 'up', previous.uuid],
       (ACTIVATION_TIMEOUT_S + 10) * 1000,
@@ -585,10 +720,10 @@ export class LocalNetwork implements NetworkController {
       log.error(
         'Could not restore the previous Wi-Fi "%s": %s', previous.name, back.stderr.trim(),
       );
-      return false;
+      return 'none';
     }
     log.info('Previous Wi-Fi "%s" restored after a failed switch', previous.name);
-    return true;
+    return 'restored';
   }
 
   /**
@@ -600,10 +735,20 @@ export class LocalNetwork implements NetworkController {
    * describes the attempt, the second the state after it was undone. Naming the
    * undo is what puts the two in order.
    */
-  private restoredSuffix(restored: boolean): string {
-    return restored
-      ? ' Der Wechsel wurde zurückgenommen, das Gerät bleibt im bisherigen WLAN.'
-      : ' Der Wechsel wurde zurückgenommen, das Gerät ist in keinem WLAN.';
+  private restoredSuffix(outcome: Outcome): string {
+    switch (outcome) {
+      case 'untouched':
+        // Nothing was switched, so there is nothing to have taken back. Saying
+        // "der Wechsel wurde zurückgenommen, das Gerät ist in keinem WLAN" here
+        // told a technician their kiosk had no network while it sat on the one
+        // it started with — the same self-contradiction this suffix exists to
+        // prevent, from the opposite direction.
+        return ' Am bisherigen WLAN hat sich nichts geändert.';
+      case 'restored':
+        return ' Der Wechsel wurde zurückgenommen, das Gerät bleibt im bisherigen WLAN.';
+      case 'none':
+        return ' Der Wechsel wurde zurückgenommen, das Gerät ist in keinem WLAN.';
+    }
   }
 
   /**
@@ -619,9 +764,9 @@ export class LocalNetwork implements NetworkController {
    * bounds the one piece of text here that this module does not write itself.
    */
   private message(
-    code: ConnectFailure, ssid: string, restored: boolean, detail: string,
+    code: ConnectFailure, ssid: string, outcome: Outcome, detail: string,
   ): string {
-    const suffix = this.restoredSuffix(restored);
+    const suffix = this.restoredSuffix(outcome);
     switch (code) {
       case 'unauthorized':
         return (

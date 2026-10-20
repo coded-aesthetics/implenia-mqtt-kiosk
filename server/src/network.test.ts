@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  LocalNetwork, classifyActivationFailure, parseConnections, parseDefaultRouteDevice,
-  parseDevices, parseScan, splitTerse, wifiInterface, type ExecResult,
+  LocalNetwork, classifyActivationFailure, keyManagementFor, parseConnections,
+  parseDefaultRouteDevice, parseDevices, parseScan, splitTerse, wifiInterface,
+  type ExecResult,
 } from './network.js';
 
 /**
@@ -45,6 +46,8 @@ interface Scripted {
   /** `connection up <uuid of the previous profile>` */
   restore?: ExecResult;
   route?: ExecResult;
+  /** `connection modify` — the commit. */
+  modify?: ExecResult;
   /** Does the MQTT box answer on the new link? */
   broker?: boolean;
   /** Does the internet answer? */
@@ -77,6 +80,7 @@ function harness(script: Scripted = {}) {
         return script.connectionShow ?? { code: 0, stdout: CONNECTION_SHOW, stderr: '' };
       }
       if (args[0] === 'connection' && args[1] === 'add') return script.add ?? OK;
+      if (args[0] === 'connection' && args[1] === 'modify') return script.modify ?? OK;
       if (args.includes('up')) {
         return args.includes(PENDING) ? script.up ?? OK : script.restore ?? OK;
       }
@@ -105,8 +109,8 @@ describe('nmcli terse output', () => {
 describe('parseScan', () => {
   it('reads signal, security and the active network', () => {
     expect(parseScan(WIFI_LIST)).toEqual([
-      { ssid: 'Implenia-Box-G08', signal: 84, secured: true, active: false },
-      { ssid: 'Buero-WLAN', signal: 71, secured: true, active: true },
+      { ssid: 'Implenia-Box-G08', signal: 84, secured: true, security: 'WPA2', active: false },
+      { ssid: 'Buero-WLAN', signal: 71, secured: true, security: 'WPA2', active: true },
     ]);
   });
 
@@ -124,7 +128,7 @@ describe('parseScan', () => {
     // screen shows the network the kiosk is on as one it is not.
     const rows = parseScan('Implenia-Box-G08:84:WPA2:\nImplenia-Box-G08:40:WPA2:*');
     expect(rows).toEqual([
-      { ssid: 'Implenia-Box-G08', signal: 84, secured: true, active: true },
+      { ssid: 'Implenia-Box-G08', signal: 84, secured: true, security: 'WPA2', active: true },
     ]);
   });
 });
@@ -190,6 +194,30 @@ describe('classifyActivationFailure', () => {
   });
 });
 
+describe('keyManagementFor', () => {
+  it('asks for SAE on a WPA3 network', () => {
+    // A wpa-psk profile against a WPA3-only AP never associates, and the
+    // failure is indistinguishable from a wrong password — so the technician
+    // retypes a correct one until they give up.
+    expect(keyManagementFor('WPA3')).toBe('sae');
+    expect(keyManagementFor('WPA2 WPA3')).toBe('sae');
+  });
+
+  it('asks for a PSK on WPA1/WPA2', () => {
+    expect(keyManagementFor('WPA2')).toBe('wpa-psk');
+    expect(keyManagementFor('WPA1 WPA2')).toBe('wpa-psk');
+  });
+
+  it('refuses an enterprise network rather than offering it a password', () => {
+    expect(keyManagementFor('WPA2 802.1X')).toBe('unsupported');
+  });
+
+  it('answers null for an open network', () => {
+    expect(keyManagementFor('')).toBeNull();
+    expect(keyManagementFor('--')).toBeNull();
+  });
+});
+
 // ── capability ──────────────────────────────────────────────────────────────
 
 describe('a machine that cannot do this', () => {
@@ -209,6 +237,31 @@ describe('a machine that cannot do this', () => {
     expect(status.capability).toMatchObject({
       available: false,
       reason: expect.stringContaining('WLAN-Schnittstelle'),
+    });
+  });
+
+  it('reports a wireless interface NetworkManager does not manage', async () => {
+    // A device that exists is not a device that can be used: both this and a
+    // switched-off radio leave the scan empty, and the screen then blamed the
+    // access point for a problem on the kiosk.
+    const { net } = harness({
+      deviceStatus: { code: 0, stdout: 'wlan0:wifi:unmanaged:', stderr: '' },
+    });
+    const status = await net.status();
+    expect(status.capability).toMatchObject({
+      available: false,
+      reason: expect.stringContaining('nicht von NetworkManager verwaltet'),
+    });
+  });
+
+  it('reports a radio that is switched off', async () => {
+    const { net } = harness({
+      deviceStatus: { code: 0, stdout: 'wlan0:wifi:unavailable:', stderr: '' },
+    });
+    const status = await net.status();
+    expect(status.capability).toMatchObject({
+      available: false,
+      reason: expect.stringContaining('abgeschaltet'),
     });
   });
 
@@ -236,6 +289,27 @@ describe('status', () => {
       hostname: 'kiosk-g08', ssid: 'Buero-WLAN', signal: 71, defaultRouteDevice: 'wlan0',
       routedElsewhere: false,
     });
+  });
+
+  it('falls back to the active profile when the scan says nothing', async () => {
+    // The scan list is not authoritative about what the machine is on: it can
+    // be empty, stale or time out on a J1900, and a failed one reported a
+    // perfectly connected kiosk as "Nicht verbunden" — amber tile, and a wizard
+    // button offering to carry on without WLAN.
+    const { net } = harness({ wifiList: { code: 1, stdout: '', stderr: 'timeout' } });
+    const status = await net.status();
+    expect(status.ssid).toBe('Buero-WLAN');
+    expect(status.signal).toBeNull();
+  });
+
+  it('does not make the radio scan just to read the status', async () => {
+    // The default is --rescan auto, which scans whenever the cache is older
+    // than 30 s — and the settings hub waits on this call before painting any
+    // of its five tiles.
+    const { net, nmcli } = harness();
+    await net.status();
+    const list = nmcli().find((c) => c.includes('device wifi list'))!;
+    expect(list).toContain('--rescan no');
   });
 
   it('flags a default route that is not on the Wi-Fi', async () => {
@@ -428,6 +502,73 @@ describe('a switch that fails', () => {
       const error = (result as { error: string }).error;
       expect(error.length, error).toBeLessThanOrEqual(260);
     }
+  });
+
+  it('says nothing changed when the profile could not even be created', async () => {
+    // No `connection up` ran and nothing was brought down, so the machine is
+    // still on what it started with. Claiming a rollback here told a technician
+    // their kiosk had no network while it sat on the office WLAN — the same
+    // self-contradiction the suffix exists to prevent, from the other side.
+    // The polkit case returns before the suffix, so this path needs its own
+    // test: a PSK nmcli rejects locally is the realistic way in.
+    const { net, nmcli } = harness({
+      add: {
+        code: 2, stdout: '',
+        stderr: "Error: failed to modify 802-11-wireless-security.psk: '802-11-wireless-security.psk: property is invalid'.",
+      },
+    });
+    const result = await net.connect('Implenia-Box-G08', 'kurz');
+
+    const error = (result as { error: string }).error;
+    expect(error).toContain('Am bisherigen WLAN hat sich nichts geändert');
+    expect(error).not.toContain('zurückgenommen');
+    expect(error).not.toContain('in keinem WLAN');
+    // And nothing was torn down to make that true.
+    expect(nmcli().some((c) => c.startsWith('connection down'))).toBe(false);
+  });
+
+  it('rolls back a commit that fails instead of reporting success', async () => {
+    // The half-committed state is the one this whole design exists to avoid,
+    // reached from the inside: the live connection would stay named
+    // implenia-pending with autoconnect off while the real profile for the SSID
+    // had just been deleted, so the next reboot comes back on nothing.
+    const { net, nmcli } = harness({
+      connectionShow: {
+        code: 0,
+        stdout: 'Implenia-Box-G08:cccc-3333:802-11-wireless:1:no:\n' + CONNECTION_SHOW,
+        stderr: '',
+      },
+      modify: { code: 1, stdout: '', stderr: 'Error: unknown connection' },
+    });
+    const result = await net.connect('Implenia-Box-G08', 'geheim123');
+
+    expect(result).toMatchObject({ ok: false });
+    const calls = nmcli();
+    // The stale profile for this SSID survives: deleting it is what would have
+    // left the machine with nothing to come back to.
+    expect(calls).not.toContain('connection delete cccc-3333');
+    // And the pending profile is gone again.
+    expect(calls).toContain(`connection delete ${PENDING}`);
+  });
+
+  it('refuses an enterprise network with an actionable reason', async () => {
+    const { net, nmcli } = harness({
+      wifiList: { code: 0, stdout: 'Firmen-WLAN:70:WPA2 802.1X:', stderr: '' },
+    });
+    const result = await net.connect('Firmen-WLAN', 'geheim123');
+
+    expect(result).toMatchObject({ ok: false, code: 'unsupported' });
+    expect((result as { error: string }).error).toContain('Benutzeranmeldung');
+    // Refused before anything was created.
+    expect(nmcli().some((c) => c.startsWith('connection add'))).toBe(false);
+  });
+
+  it('builds a WPA3 profile for a WPA3 network', async () => {
+    const { net, nmcli } = harness({
+      wifiList: { code: 0, stdout: 'Neu-WLAN:70:WPA3:', stderr: '' },
+    });
+    await net.connect('Neu-WLAN', 'geheim123');
+    expect(nmcli().find((c) => c.startsWith('connection add'))).toContain('wifi-sec.key-mgmt sae');
   });
 
   it('reports a polkit refusal as a provisioning problem', async () => {

@@ -1021,9 +1021,30 @@ What else must not be broken:
   pointed at a replay server that a device it has never met was not answering.
   The port is there because `1884` against an expected `1883` is invisible
   without it.
-- **A failure message says whether the old network came back**, because
-  `rollback()` can itself fail. Claiming "das bisherige WLAN ist
-  wiederhergestellt" when it is not is worse than saying nothing.
+- **A failure message says where the machine actually ended up** — restored,
+  on nothing, or *untouched*. All three are distinct: `rollback()` can itself
+  fail, and a profile that could not even be created means nothing was switched
+  at all, so claiming a rollback there told a technician their kiosk had no
+  network while it sat on the one it started with.
+- **The commit is checked, and the stale profile outlives a failed one.** An
+  unchecked `connection modify` reaches the exact state the staging exists to
+  prevent, from the inside: the live connection keeps the pending name and
+  `autoconnect no` while the real profile for that SSID has just been deleted,
+  so the next reboot comes back on nothing — and the next attempt deletes the
+  live profile as if it were the previous one and rolls back to a uuid that no
+  longer exists. A failed commit is rolled back like any other failure.
+- **The profile is built for the security the AP advertises.** `wpa-psk`
+  against a WPA3-only network never associates and looks exactly like a wrong
+  password, so the operator retypes a correct one until they give up;
+  `keyManagementFor` reads NetworkManager's own SECURITY field, and an 802.1X
+  network is refused outright rather than offered a password box it can never
+  satisfy.
+- **Reading the status never drives the radio.** `device wifi list` defaults to
+  `--rescan auto`, which scans whenever the cache is older than 30 s — so the
+  settings hub waited on a radio scan before painting any of its five tiles.
+  The scan list is also not authoritative about what the machine is on: a
+  failed one reported a connected kiosk as "Nicht verbunden". The active
+  connection answers that.
 - **Every message fits the screen's message box** — 260 characters, pinned by a
   test, with a 32-character SSID (the longest the standard allows) in it. The
   box sits under the *network list*, in the other column from the button it

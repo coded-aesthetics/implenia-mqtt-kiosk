@@ -74,9 +74,13 @@ export function registerNetworkConfigRoutes(
 
     if (!result.ok) {
       // 409 for a machine that cannot do this at all — the state of the machine
-      // is in the way, and nothing about the request would fix it. 502 for a
-      // network that refused us: the request was fine, the other end was not.
-      const status = result.code === 'unavailable' ? 409 : 502;
+      // is in the way, and nothing about the request would fix it. 400 for a
+      // network this kiosk cannot join whatever it sends, which is a problem
+      // with what was asked for. 502 for a network that refused us: the
+      // request was fine, the other end was not.
+      const status = result.code === 'unavailable' ? 409
+        : result.code === 'unsupported' ? 400
+        : 502;
       return reply.status(status).send({ error: result.error, code: result.code });
     }
 

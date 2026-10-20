@@ -172,6 +172,7 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
   }
 
   const unavailable = status && !status.capability.available ? status.capability.reason : null;
+  const canConnect = !!selected && !connecting && (!selected.secured || psk.length > 0);
 
   return (
     <div style={{ ...styles.container, ...netStyles.fill }}>
@@ -251,13 +252,21 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
             )}
 
             <div style={styles.buttonRow}>
+              {/*
+                A secured network with an empty password is not a request worth
+                sending: the server guards its security settings with `if (psk)`
+                and would build an *open* profile against a WPA access point, so
+                the attempt fails with a generic activation message instead of
+                "Bitte Passwort eingeben". The on-screen keyboard makes an empty
+                field easier to arrive at than it looks.
+              */}
               <button
                 onClick={connect}
-                disabled={!selected || connecting}
+                disabled={!canConnect}
                 style={{
                   ...styles.button,
                   ...styles.saveButton,
-                  opacity: !selected || connecting ? 0.5 : 1,
+                  opacity: canConnect ? 1 : 0.5,
                 }}
               >
                 {connecting ? 'Verbinde …' : 'Verbinden'}
