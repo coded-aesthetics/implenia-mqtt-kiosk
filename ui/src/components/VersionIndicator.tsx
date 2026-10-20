@@ -16,6 +16,15 @@ import type { CSSProperties } from 'react';
  *
  * With no update known, a tap checks for one — which is also the only way to
  * verify the updater without waiting out the poll interval.
+ *
+ * **While a recording runs it shrinks to the version and a dot.** The offer is
+ * two lines of accent-coloured text wide enough to crowd the header, and during
+ * a recording the header is also carrying the phase stepper — but the reason it
+ * goes is not the space. `POST /api/update` refuses outright while an element
+ * is being recorded, so the button offers an action the server will decline:
+ * a dead end in the sense CLAUDE.md means, and the dot says the same thing
+ * ("something is waiting") without promising anything it cannot deliver. The
+ * full offer comes back by itself when the recording ends.
  */
 
 interface Props {
@@ -38,11 +47,22 @@ interface Props {
    * that was tapped, and the only one that claimed a restart was coming.
    */
   failure?: string | null;
+  /**
+   * An element is being recorded, so an update cannot be installed now.
+   *
+   * Only suppresses the *offer*. A failure note and the applying state still
+   * show in full: both report something that already happened, and the second
+   * one means the app is about to restart, which nobody should have to infer
+   * from a dot.
+   */
+  recording?: boolean;
 }
 
 type Mode = 'idle' | 'checking' | 'confirming';
 
-export function VersionIndicator({ version, available, applying, source = null, failure = null }: Props) {
+export function VersionIndicator({
+  version, available, applying, source = null, failure = null, recording = false,
+}: Props) {
   const [mode, setMode] = useState<Mode>('idle');
   const [message, setMessage] = useState<string | null>(null);
   // Which failure text has been read and waved away. Keyed by the text so a
@@ -110,6 +130,25 @@ export function VersionIndicator({ version, available, applying, source = null, 
       <div style={{ ...styles.box, ...styles.applying }} aria-live="polite">
         <span style={styles.line}>Update läuft</span>
         <span style={styles.lineSmall}>App startet neu</span>
+      </div>
+    );
+  }
+
+  if (available && recording) {
+    return (
+      <div ref={boxRef} style={styles.wrap}>
+        {/*
+          Not a button. The action behind it is refused while a recording runs,
+          and a tap target here would compete with the phase stepper for the
+          same gloved hand.
+        */}
+        <div style={{ ...styles.box, ...styles.plain }} title={`Update auf v${available} verfügbar`}>
+          <span style={styles.versionWithDot}>
+            v{version}
+            <span style={styles.updateDot} aria-label={`Update auf v${available} verfügbar`} />
+          </span>
+        </div>
+        {shownFailure && <FailureNote text={shownFailure} onDismiss={() => setDismissed(shownFailure)} />}
       </div>
     );
   }
@@ -223,6 +262,26 @@ const styles: Record<string, CSSProperties> = {
   lineSmall: { fontSize: '1rem', color: 'rgba(255,255,255,0.85)', whiteSpace: 'nowrap' },
   lineMuted: { fontSize: '1rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' },
   lineAccent: { fontSize: '1rem', fontWeight: 700, color: 'var(--color-accent)', whiteSpace: 'nowrap' },
+  versionWithDot: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.4rem',
+    fontSize: '1rem',
+    color: 'var(--text-muted)',
+    whiteSpace: 'nowrap',
+  },
+  /**
+   * Decoration, not information, so it is allowed to be this small — the
+   * version beside it is the text, and the dot only says "there is something
+   * here". A worker never acts on it; the next person in Einstellungen does.
+   */
+  updateDot: {
+    width: '0.6rem',
+    height: '0.6rem',
+    borderRadius: '50%',
+    backgroundColor: 'var(--color-danger)',
+    flexShrink: 0,
+  },
   messageFailure: {
     borderColor: 'var(--color-danger)',
     color: 'var(--color-danger)',
