@@ -69,7 +69,31 @@ git push origin v0.1.0
 
 GitHub Actions builds, stamps the tag version into package.json, bundles `server/dist/` + `ui/dist/` into a `.tar.gz`, generates a SHA256 checksum, and publishes both as a GitHub Release.
 
-The self-updater polls GitHub Releases every five minutes (`UPDATE_CHECK_INTERVAL_MS`), comparing semver against the root `package.json` version. **It only detects.** An update is announced by the version indicator in the header — two lines, `vX installiert` over `vY verfügbar` — and applying it takes two taps there, the second confirming "Wirklich updaten?". There is no banner: an update is never urgent, since the kiosk keeps recording and uploading on the version it has, and installing one restarts the app. `POST /api/update` refuses while a recording is running.
+The self-updater polls GitHub Releases every five minutes (`UPDATE_CHECK_INTERVAL_MS`), comparing semver against the root `package.json` version. An update is announced by the version indicator in the header — two lines, `von vX` over `auf vY upgraden` — and applying it takes two taps there, the second confirming "Wirklich upgraden?". There is no banner: an update is never urgent, since the kiosk keeps recording and uploading on the version it has, and installing one restarts the app. `POST /api/update` refuses while a recording is running.
+
+**Release assets need `Accept: application/octet-stream`.** The assets hang off
+`/releases/assets/<id>`, which serves the asset's **JSON metadata** under the
+API's `application/vnd.github.v3+json` and its bytes only under octet-stream.
+Downloading with the API headers succeeds — 200, a body, a plausible size — and
+writes a JSON document into `app-vX.tar.gz`. The updater did exactly that until
+2026-10-19, for both the tarball and the checksum, so every GitHub update on
+every kiosk died at "Checksum mismatch" comparing the hash of one metadata blob
+against a token parsed out of another. Nothing else failed and nothing else
+said so; the USB path reads files off the stick and was never affected, which is
+why it survived so long. `githubAssetHeaders` is the one place this lives and
+`updater.test.ts` pins it. `browser_download_url` also serves bytes, but it
+redirects to a signed URL that rejects the request if the Authorization header
+follows — for a private repo the asset API plus that Accept is the only
+combination that works.
+
+**An apply that gives up has to say so.** `update-applying` is emitted before
+the download and was never cleared, so a failure left the indicator announcing a
+restart that was not coming, recoverable only by reloading the page. Every
+failure path now calls `failApply`, which logs the technical detail and
+broadcasts `update-failed` with a German, actionable reason the indicator shows
+until it is tapped away. The two guards at the top of `applyFromGitHub` — no
+GitHub configured, no connectivity — go through it too: they returned *before*
+the `update-applying`, so the tap landed and the UI never moved at all.
 
 ## CI Quirks
 

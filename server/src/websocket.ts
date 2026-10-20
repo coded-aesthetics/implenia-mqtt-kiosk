@@ -149,6 +149,12 @@ export function setupWebSocket(app: FastifyInstance): void {
     broadcast({ type: 'update-applying' });
   });
 
+  // Without this the indicator would keep announcing a restart that is not
+  // coming. The reason is German and actionable — see `failApply`.
+  updater.on('update-failed', (reason: string) => {
+    broadcast({ type: 'update-failed', reason });
+  });
+
   // Raw frames drive the channel picker, which needs values by index. The
   // mapped readings arrive via ingestion's 'reading' event above — the same
   // path MQTT takes — so they are not re-broadcast here.
