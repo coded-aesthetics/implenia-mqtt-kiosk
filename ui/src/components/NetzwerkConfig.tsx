@@ -155,11 +155,11 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
   const unavailable = status && !status.capability.available ? status.capability.reason : null;
 
   return (
-    <div style={styles.container}>
-      <div style={styles.column}>
+    <div style={{ ...styles.container, ...netStyles.fill }}>
+      <div style={{ ...styles.column, ...netStyles.leftColumn }}>
         {/* ── what this machine is on ─────────────────────────────────── */}
         <div style={styles.card}>
-          <div style={styles.statusRow}>
+          <div style={{ ...styles.statusRow, marginBottom: 'var(--space-sm)' }}>
             <span style={styles.label}>WLAN</span>
             {status && (
               <span
@@ -200,16 +200,18 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
             The office trap: with a network cable plugged in, the wired
             connection wins and the Implenia-Box is unreachable even though the
             WLAN is up and this card says "Verbunden".
+
+            Two lines, deliberately: this card also carries the connect
+            controls in the setup wizard, where a third line clips them.
           */}
           {status?.routedElsewhere && (
-            <div style={styles.blockedNotice}>
-              Der Datenverkehr läuft derzeit über „{status.defaultRouteDevice}", nicht über das
-              WLAN. Solange das Netzwerkkabel steckt, ist die Implenia-Box nicht erreichbar.
-              Bitte das Kabel abziehen.
+            <div style={{ ...styles.blockedNotice, marginBottom: 0 }}>
+              Netzwerkkabel („{status.defaultRouteDevice}") steckt: Die Implenia-Box ist
+              nicht erreichbar. Bitte abziehen.
             </div>
           )}
 
-          {unavailable && <div style={styles.blockedNotice}>{unavailable}</div>}
+          {unavailable && <div style={{ ...styles.blockedNotice, marginBottom: 0 }}>{unavailable}</div>}
         </div>
 
         {/* ── the action ──────────────────────────────────────────────── */}
@@ -231,15 +233,6 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
                 style={styles.input}
               />
             )}
-
-            {/*
-              Reserved: the box is here whether or not there is something to
-              report, so a three-line failure cannot push the button away from
-              the finger about to tap it.
-            */}
-            <div style={{ ...netStyles.messageSlot, ...slotTone(message) }}>
-              {message.kind === 'hint' ? HINT : message.text}
-            </div>
 
             <div style={styles.buttonRow}>
               <button
@@ -266,12 +259,21 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
         )}
       </div>
 
-      {/* ── the networks in range ──────────────────────────────────────── */}
+      {/* ── the networks in range, and what the kiosk has to say ───────── */}
       {!unavailable && (
-        <div style={styles.column}>
-          <div style={styles.card}>
+        <div style={{ ...styles.column, minHeight: 0 }}>
+          <div style={{ ...styles.card, ...netStyles.listCard }}>
             <div style={styles.statusRow}>
-              <span style={styles.label}>In Reichweite</span>
+              {/*
+                The count, because the list's height is now whatever is left
+                over and can land on a clean row boundary — which hides the
+                half-cut row that used to be the only sign it scrolls. It also
+                says the scan found something when the box is not among the
+                first few.
+              */}
+              <span style={styles.label}>
+                In Reichweite{networks.length > 0 ? ` (${networks.length})` : ''}
+              </span>
               <button
                 onClick={scan}
                 disabled={scanning || connecting}
@@ -320,6 +322,21 @@ export function NetzwerkConfig({ onConnected }: Props = {}) {
               ))}
             </div>
           </div>
+
+          {/*
+            Under the list, not under the button.
+            
+            It belongs to the Verbinden action, and sitting there is where it
+            reads best — but the left column also carries the status card, and
+            that card grows: a kiosk still on its network cable shows a
+            three-line warning about it, which pushed the button below the fold
+            on the real machine. Here the height is reserved out of the list's
+            share instead, so nothing the status card does can move the button,
+            and an arriving error does not resize the list either.
+          */}
+          <div style={{ ...styles.card, ...netStyles.messageCard, ...slotTone(message) }}>
+            {message.kind === 'hint' ? HINT : message.text}
+          </div>
         </div>
       )}
     </div>
@@ -340,24 +357,54 @@ function slotTone(message: Message): CSSProperties {
 }
 
 const netStyles: Record<string, CSSProperties> = {
-  messageSlot: {
+  /**
+   * The screen lays itself out against the height it is given rather than
+   * growing past it. `flex: 1` and not `height: 100%`, so it works in both
+   * places it appears: on the config page it fills `main`, and in the setup
+   * wizard it takes what is left after the step's continue button.
+   */
+  fill: {
+    flex: 1,
+    minHeight: 0,
+    // Without an explicit row the grid sizes to its content and the right
+    // column never learns how tall it is allowed to be.
+    gridTemplateRows: 'minmax(0, 1fr)',
+    alignItems: 'stretch',
+  },
+  /**
+   * Bounded like the right one.
+   *
+   * Without this the column simply grows past the height the screen was given
+   * and draws over whatever comes after it — in the setup wizard, over the
+   * step's own continue button. It normally has slack; it runs out only on a
+   * kiosk that is still showing the warning about its network cable, which is
+   * exactly the state a machine is in while being set up on a bench.
+   */
+  leftColumn: {
+    minHeight: 0,
+    overflowY: 'auto',
+  },
+  listCard: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  messageCard: {
     /**
      * Five lines of --font-base at 1.4, as a fixed height and not a minimum.
      *
-     * A minimum still grows, and the left column has about twenty pixels of
-     * slack above the recording bar — so a long failure would have pushed the
-     * Verbinden button underneath the bar, on the one screen whose whole job is
-     * recovering from a failure. The server keeps its messages inside this; the
-     * scroll is the backstop for the one message it does not write itself.
+     * Fixed in both directions on purpose: a message that arrived and resized
+     * the list would move the network rows under the finger reaching for one.
+     * The server keeps every message it can send inside five lines — pinned by
+     * a test — and the scroll is the backstop for the one piece of text it does
+     * not write itself.
      */
     height: '7.7rem',
+    flexShrink: 0,
     overflowY: 'auto',
     fontSize: 'var(--font-base)',
     lineHeight: 1.4,
-    padding: 'var(--space-md)',
-    marginTop: 'var(--space-md)',
-    backgroundColor: 'var(--surface-0)',
-    borderRadius: 'var(--radius-md)',
     borderLeft: '3px solid var(--border)',
     boxSizing: 'border-box',
   },
@@ -384,13 +431,11 @@ const netStyles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     gap: 'var(--space-sm)',
-    /**
-     * About four and a half rows, which is what the taller of the two places
-     * this screen appears can give it: embedded in the setup wizard, a list
-     * this tall already puts the step's continue button at the very bottom of
-     * a 768px display. A site sees one to three networks.
-     */
-    maxHeight: '336px',
+    // Whatever is left after the card header and the message box. No fixed
+    // height: the two places this screen appears give it different room, and
+    // so does a kiosk that is showing a warning about its network cable.
+    flex: 1,
+    minHeight: 0,
     overflowY: 'auto',
   },
   row: {

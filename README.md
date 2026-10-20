@@ -235,6 +235,17 @@ on metric and the MQTT box is unreachable even though the Wi-Fi is up.
 the Wi-Fi, and the screen says so instead of showing "Verbunden" and leaving
 the technician to wonder.
 
+**Layout.** Two columns: what the machine is on and the connect controls at the
+left, the networks in range and the result message at the right. The message
+belongs to the button and reads best beside it — but the status card above the
+button grows (that cable warning is three lines), and the first version put the
+two in one column, where they pushed the button off a 768px screen. Under the
+list the height is reserved out of the list's share instead, so nothing the
+status card does can move the button and an arriving error does not resize the
+list either. Both columns are bounded and the screen sizes itself with
+`flex: 1`, because it also renders inside the setup wizard, where it gets what
+is left after the step's continue button rather than the whole of `main`.
+
 ### On the machine
 
 `provision-kiosk.sh` installs `network-manager` and writes a polkit rule

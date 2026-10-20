@@ -272,7 +272,7 @@ export function SetupWizard({ step: rawStep, onFinish, config }: Props) {
                 padding of its own, so without this the button is full-bleed. */}
             <button
               onClick={() => goto('verfahren')}
-              style={{ ...styles.confirmButton, margin: '0 var(--space-xl)' }}
+              style={{ ...styles.confirmButton, margin: '0 var(--space-xl) var(--space-md)' }}
             >
               {wifiSsid ? 'Weiter' : 'Ohne WLAN fortfahren'}
             </button>
@@ -575,11 +575,12 @@ const styles: Record<string, React.CSSProperties> = {
     // the step 1088px wide and pushes the layout off the side of the screen.
     boxSizing: 'border-box' as const,
     // The embedded screen brings its own padding on all four sides, so the
-    // wizard's own is pure duplication here. Vertically it is what put the
-    // continue button below a 768px display; horizontally it narrowed the step
-    // to 896px, one pixel under what the screen's two card columns need — and
-    // they silently collapsed into one, which is twice as tall.
-    padding: 'var(--space-md) 0',
+    // wizard's own is pure duplication here — and it is not free. Vertically it
+    // is what put the continue button below a 768px display and then clipped
+    // the screen's own buttons; horizontally it narrowed the step to 896px, one
+    // pixel under what the two card columns need, and they silently collapsed
+    // into one — which is twice as tall again.
+    padding: 0,
     justifyContent: 'flex-start',
     overflowY: 'auto' as const,
   },

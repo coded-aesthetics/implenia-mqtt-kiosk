@@ -1012,10 +1012,21 @@ What else must not be broken:
   `rollback()` can itself fail. Claiming "das bisherige WLAN ist
   wiederhergestellt" when it is not is worse than saying nothing.
 - **Every message fits the screen's fixed-height slot** — five lines, about 220
-  characters, pinned by a test. The slot's height is fixed rather than a
-  minimum: the left column has about twenty pixels of slack above the recording
-  bar, so a long failure would otherwise push the Verbinden button underneath
-  it, on the one screen whose whole job is recovering from a failure.
+  characters, pinned by a test. The slot sits under the *network list*, in the
+  other column from the button it reports on, and its height is fixed rather
+  than a minimum. Both of those are load-bearing: the status card above the
+  button grows (a kiosk still on its network cable shows a warning about it,
+  which is the state a machine is in while being set up on a bench), and the
+  first version put the message under the button, where the two together pushed
+  it off the screen — on the one screen whose whole job is recovering from a
+  failure. Fixed height also keeps an arriving error from resizing the list
+  under the finger reaching for a network.
+- **Both columns are bounded** (`minHeight: 0` and their own scroll), and the
+  screen takes its height with `flex: 1` rather than `height: 100%`, because it
+  renders in two places with different room: the config page, where it fills
+  `main`, and the setup wizard, where it gets what is left after the step's
+  continue button. An unbounded column does not scroll, it draws over whatever
+  comes after it — which in the wizard is that button.
 - **No free-text SSID field.** Only networks the machine can see are offered,
   which answers "does this network exist" for free.
 - **A switch is refused while a recording runs**, 409 and German, same guard as
