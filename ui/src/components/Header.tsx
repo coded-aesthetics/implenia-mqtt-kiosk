@@ -60,9 +60,11 @@ interface Props {
   updateAvailable?: string | null;
   updateApplying?: boolean;
   updateSource?: 'github' | 'usb' | null;
+  /** Why the last apply gave up. The indicator shows it; nothing else does. */
+  updateFailure?: string | null;
 }
 
-export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode, onModeChange, hidePhaseStepper, ausrichten, updateAvailable = null, updateApplying = false, updateSource = null }: Props) {
+export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, operatingMode, onModeChange, hidePhaseStepper, ausrichten, updateAvailable = null, updateApplying = false, updateSource = null, updateFailure = null }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -124,7 +126,7 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
         <span style={{ ...styles.dot, backgroundColor: connColor }} />
         <span style={styles.statusText}>{connLabel}</span>
         <span style={styles.divider} />
-        <VersionIndicator version={version} available={updateAvailable} applying={updateApplying} source={updateSource} />
+        <VersionIndicator version={version} available={updateAvailable} applying={updateApplying} source={updateSource} failure={updateFailure} />
         {voiceSupported && (
           <button
             onPointerDown={onMicPress}

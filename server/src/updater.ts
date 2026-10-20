@@ -33,6 +33,42 @@ interface GitHubRelease {
 
 const TAR_PATTERN = /^app-v(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?)\.tar\.gz$/;
 
+/** Headers for reading the GitHub API — releases, tags, metadata. */
+export function githubApiHeaders(token?: string): Record<string, string> {
+  const h: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json',
+    'User-Agent': 'implenia-kiosk-updater',
+  };
+  if (token) h['Authorization'] = `token ${token}`;
+  return h;
+}
+
+/**
+ * Headers for downloading a release *asset*, which is not the same request as
+ * reading the release.
+ *
+ * The assets live at `/releases/assets/<id>`, and that endpoint serves two
+ * different things depending on Accept: with the v3+json above it answers the
+ * asset's **metadata**, and only `application/octet-stream` gets its bytes.
+ * Downloading with the API headers therefore succeeds — 200, a body, a
+ * plausible size — and writes a JSON document into `app-vX.tar.gz`.
+ *
+ * That is how this shipped, and the checksum is what caught it: the expected
+ * hash was parsed out of the checksum asset's metadata (a JSON blob, so the
+ * first whitespace-delimited token of it) and compared against the hash of the
+ * tar asset's metadata. Both halves wrong, mismatching, and every GitHub
+ * update on every kiosk stopped there — the USB path, which reads the file off
+ * the stick, was unaffected and is why this went unnoticed.
+ *
+ * `browser_download_url` would also serve the bytes, but it redirects to a
+ * signed S3 URL that rejects the request if the Authorization header follows
+ * it, so the asset API plus this Accept is the one combination that works for
+ * a private repo.
+ */
+export function githubAssetHeaders(token?: string): Record<string, string> {
+  return { ...githubApiHeaders(token), Accept: 'application/octet-stream' };
+}
+
 export function parseVersionFromTarName(filename: string): string | null {
   const match = TAR_PATTERN.exec(filename);
   return match ? match[1] : null;
@@ -131,14 +167,30 @@ class UpdateManager extends EventEmitter {
   }
 
   private get apiHeaders(): Record<string, string> {
-    const h: Record<string, string> = {
-      Accept: 'application/vnd.github.v3+json',
-      'User-Agent': 'implenia-kiosk-updater',
-    };
-    if (config.GITHUB_TOKEN) {
-      h['Authorization'] = `token ${config.GITHUB_TOKEN}`;
-    }
-    return h;
+    return githubApiHeaders(config.GITHUB_TOKEN);
+  }
+
+  private get assetHeaders(): Record<string, string> {
+    return githubAssetHeaders(config.GITHUB_TOKEN);
+  }
+
+  /**
+   * Give up on an apply, and say so.
+   *
+   * `update-applying` was a one-way latch: it is emitted before the download
+   * and nothing ever cleared it, so a failure left the version indicator
+   * reading "Update läuft — App startet neu" until somebody reloaded the page.
+   * The kiosk was fine; the header was lying, and the only honest-looking
+   * recovery was to wait for a restart that was never coming. That is the dead
+   * end the resilience rules exist to forbid — and with the asset-header bug
+   * above it was the *normal* outcome of tapping the update.
+   *
+   * The reason is German and user-facing: whoever tapped is standing in front
+   * of the machine, and the next step differs per failure.
+   */
+  private failApply(reason: string, detail?: string): void {
+    log.error('Update failed: %s%s', reason, detail ? ` — ${detail}` : '');
+    this.emit('update-failed', reason);
   }
 
   private setUpdate(info: UpdateInfo): void {
@@ -252,8 +304,9 @@ class UpdateManager extends EventEmitter {
 
       return { ok: true, version };
     } catch (err) {
-      log.error('Upload update failed: %s', (err as Error).message);
-      return { ok: false, error: 'Update konnte nicht entpackt werden. Datei möglicherweise beschädigt.' };
+      const reason = 'Update konnte nicht entpackt werden. Datei möglicherweise beschädigt.';
+      this.failApply(reason, (err as Error).message);
+      return { ok: false, error: reason };
     }
   }
 
@@ -263,14 +316,20 @@ class UpdateManager extends EventEmitter {
 
     try {
       if (!fs.existsSync(tarPath)) {
-        log.error('USB update file not found: %s — was the drive removed?', tarPath);
+        this.failApply(
+          'Die Update-Datei ist nicht mehr da. Bitte den USB-Stick wieder einstecken.',
+          `missing ${tarPath}`,
+        );
         return;
       }
 
       if (checksumPath) {
         log.info('Verifying checksum...');
         if (!verifyChecksum(tarPath, checksumPath)) {
-          log.error('Checksum mismatch — update file may be corrupted');
+          this.failApply(
+            'Die Update-Datei auf dem Stick ist beschädigt. Bitte den Stick neu beschreiben.',
+            'checksum mismatch',
+          );
           return;
         }
         log.info('Checksum verified');
@@ -288,13 +347,29 @@ class UpdateManager extends EventEmitter {
         process.exit(0);
       }, 1000);
     } catch (err) {
-      log.error('USB update failed: %s', (err as Error).message);
+      this.failApply(
+        'Das Update konnte nicht entpackt werden. Bitte den Stick neu beschreiben.',
+        (err as Error).message,
+      );
     }
   }
 
   private async applyFromGitHub(version: string): Promise<void> {
-    if (!this.githubConfigured) return;
-    if (!connectivity.isOnline()) return;
+    // Both of these used to return silently, before the `update-applying` the
+    // UI listens for — so the tap landed, the server agreed to apply, and the
+    // indicator sat there unchanged. "Nothing happened" is the one answer a
+    // button may never give.
+    if (!this.githubConfigured) {
+      this.failApply(
+        'Dieser Kiosk weiß nicht, woher Updates kommen. Das muss im Setup eingetragen werden.',
+        'GITHUB_OWNER/GITHUB_REPO unset',
+      );
+      return;
+    }
+    if (!connectivity.isOnline()) {
+      this.failApply('Keine Internetverbindung. Das Update braucht eine Verbindung.');
+      return;
+    }
 
     this.emit('update-applying');
     log.info('Starting download for v%s...', version);
@@ -308,7 +383,10 @@ class UpdateManager extends EventEmitter {
       const checksumAsset = release.assets.find((a) => a.name === 'checksum.sha256');
 
       if (!tarAsset) {
-        log.error('No .tar.gz asset found in release');
+        this.failApply(
+          `Die Version ${version} enthält kein installierbares Paket. Bitte Bescheid geben.`,
+          'no .tar.gz asset in release',
+        );
         return;
       }
 
@@ -318,11 +396,14 @@ class UpdateManager extends EventEmitter {
       log.info('Downloading %s...', tarAsset.name);
       const downloadRes = await fetch(tarAsset.url, {
         redirect: 'follow',
-        headers: this.apiHeaders,
+        headers: this.assetHeaders,
       });
 
       if (!downloadRes.ok || !downloadRes.body) {
-        log.error('Download failed: %d %s', downloadRes.status, downloadRes.statusText);
+        this.failApply(
+          'Das Update konnte nicht geladen werden. Bitte die Internetverbindung prüfen und erneut versuchen.',
+          `HTTP ${downloadRes.status} ${downloadRes.statusText}`,
+        );
         return;
       }
 
@@ -336,7 +417,7 @@ class UpdateManager extends EventEmitter {
         log.info('Verifying checksum...');
         const checksumRes = await fetch(checksumAsset.url, {
           redirect: 'follow',
-          headers: this.apiHeaders,
+          headers: this.assetHeaders,
         });
         const expectedChecksum = (await checksumRes.text()).trim().split(/\s+/)[0];
 
@@ -344,8 +425,11 @@ class UpdateManager extends EventEmitter {
         const actualChecksum = createHash('sha256').update(fileBuffer).digest('hex');
 
         if (actualChecksum !== expectedChecksum) {
-          log.error('Checksum mismatch! Expected %s, got %s', expectedChecksum, actualChecksum);
           fs.unlinkSync(tarPath);
+          this.failApply(
+            'Das Update wurde unvollständig geladen. Bitte erneut versuchen.',
+            `checksum mismatch: expected ${expectedChecksum}, got ${actualChecksum}`,
+          );
           return;
         }
         log.info('Checksum verified');
@@ -363,7 +447,10 @@ class UpdateManager extends EventEmitter {
         process.exit(0);
       }, 1000);
     } catch (err) {
-      log.error('Update failed: %s', (err as Error).message);
+      this.failApply(
+        'Das Update konnte nicht installiert werden. Bitte erneut versuchen.',
+        (err as Error).message,
+      );
     }
   }
 

@@ -31,14 +31,27 @@ interface Props {
    * arriving from GitHub on its own.
    */
   source?: 'github' | 'usb' | null;
+  /**
+   * Why the last apply gave up, in German, straight from the server.
+   *
+   * It belongs here rather than anywhere else on screen: this is the control
+   * that was tapped, and the only one that claimed a restart was coming.
+   */
+  failure?: string | null;
 }
 
 type Mode = 'idle' | 'checking' | 'confirming';
 
-export function VersionIndicator({ version, available, applying, source = null }: Props) {
+export function VersionIndicator({ version, available, applying, source = null, failure = null }: Props) {
   const [mode, setMode] = useState<Mode>('idle');
   const [message, setMessage] = useState<string | null>(null);
+  // Which failure text has been read and waved away. Keyed by the text so a
+  // *second*, different failure speaks up again rather than inheriting the
+  // dismissal of the first.
+  const [dismissed, setDismissed] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
+
+  const shownFailure = failure && failure !== dismissed ? failure : null;
 
   // "Tapping anything else cancels" — the same escape the destructive buttons
   // elsewhere give, so an accidental first tap costs nothing.
@@ -78,6 +91,7 @@ export function VersionIndicator({ version, available, applying, source = null }
 
   async function install() {
     setMode('idle');
+    setDismissed(failure);
     try {
       const res = await fetch('/api/update', { method: 'POST' });
       if (!res.ok) {
@@ -104,8 +118,10 @@ export function VersionIndicator({ version, available, applying, source = null }
     return (
       <div ref={boxRef} style={styles.wrap}>
         <button type="button" onClick={install} style={{ ...styles.box, ...styles.confirm }}>
-          <span style={styles.line}>Wirklich updaten?</span>
-          <span style={styles.lineSmall}>v{available}{source === 'usb' ? ' (USB)' : ''} · App startet neu</span>
+          {/* "Wirklich {verb}?" per the house pattern, and the verb is the one
+              the offer used — upgraden, not updaten. */}
+          <span style={styles.line}>Wirklich upgraden?</span>
+          <span style={styles.lineSmall}>App startet neu</span>
         </button>
       </div>
     );
@@ -119,10 +135,15 @@ export function VersionIndicator({ version, available, applying, source = null }
           onClick={() => setMode('confirming')}
           style={{ ...styles.box, ...styles.offered }}
         >
-          <span style={styles.lineMuted}>v{version} installiert</span>
-          <span style={styles.lineAccent}>v{available} verfügbar{source === 'usb' ? ' (USB)' : ''}</span>
+          {/* Broken at the preposition pair, so the second line carries the
+              action and the version it leads to. One line fitted, but at this
+              font size it crowded the header's other controls. */}
+          <span style={styles.lineAccent}>von v{version}</span>
+          <span style={styles.lineAccent}>
+            auf v{available} upgraden{source === 'usb' ? ' (USB)' : ''}
+          </span>
         </button>
-        {message && <span style={styles.message}>{message}</span>}
+        {shownFailure ? <FailureNote text={shownFailure} onDismiss={() => setDismissed(shownFailure)} /> : message && <span style={styles.message}>{message}</span>}
       </div>
     );
   }
@@ -137,9 +158,30 @@ export function VersionIndicator({ version, available, applying, source = null }
         title="Nach Updates suchen"
       >
         <span style={styles.lineMuted}>{mode === 'checking' ? 'Suche…' : `v${version}`}</span>
-        {message && <span style={styles.lineSmall}>{message}</span>}
+        {message && <span style={styles.lineMuted}>{message}</span>}
       </button>
+      {shownFailure && <FailureNote text={shownFailure} onDismiss={() => setDismissed(shownFailure)} />}
     </div>
+  );
+}
+
+/**
+ * The reason an update did not install, below the indicator.
+ *
+ * Not a toast: it stays until it is read and tapped away, because the person it
+ * is for walked over to the machine to press the button. It is also the whole
+ * tap target — no small close control, per the house rules.
+ */
+function FailureNote({ text, onDismiss }: { text: string; onDismiss: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onDismiss}
+      style={{ ...styles.message, ...styles.messageFailure }}
+      role="status"
+    >
+      {text}
+    </button>
   );
 }
 
@@ -152,7 +194,7 @@ const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     minHeight: '48px',
     padding: '0 0.75rem',
     gap: '1px',
@@ -161,7 +203,7 @@ const styles: Record<string, CSSProperties> = {
     background: 'transparent',
     cursor: 'pointer',
     fontFamily: 'inherit',
-    textAlign: 'right',
+    textAlign: 'center',
   },
   plain: {},
   offered: {
@@ -181,6 +223,14 @@ const styles: Record<string, CSSProperties> = {
   lineSmall: { fontSize: '1rem', color: 'rgba(255,255,255,0.85)', whiteSpace: 'nowrap' },
   lineMuted: { fontSize: '1rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' },
   lineAccent: { fontSize: '1rem', fontWeight: 700, color: 'var(--color-accent)', whiteSpace: 'nowrap' },
+  messageFailure: {
+    borderColor: 'var(--color-danger)',
+    color: 'var(--color-danger)',
+    fontWeight: 700,
+    textAlign: 'left',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
   message: {
     position: 'absolute',
     top: '100%',
