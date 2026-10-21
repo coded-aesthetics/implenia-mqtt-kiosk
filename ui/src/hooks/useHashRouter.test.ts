@@ -182,3 +182,12 @@ describe('element names that would have thrown', () => {
     expect(parseRoute('#/element/P-50%').params.name).toBe('P-50%');
   });
 });
+
+describe('a malformed escape anywhere in the hash', () => {
+  it('does not throw from the query string either', () => {
+    // parseRoute must not be able to throw at all: it runs inside
+    // getSnapshot(), so one URIError blanks the app rather than failing a route.
+    expect(() => parseRoute('#/geologie/P-01?kommentar=50%')).not.toThrow();
+    expect(parseRoute('#/geologie/P-01?kommentar=50%').query.kommentar).toBe('50%');
+  });
+});

@@ -77,7 +77,12 @@ function chartScale(points: HistoryPoint[]): { scale: ChartScale; decimals: numb
 
 export function DatenstromDetail({ topic, readings }: Props) {
   const [channel, setChannel] = useState<Channel | null>(null);
-  const [known, setKnown] = useState(false);
+  /**
+   * `absent` and `error` are deliberately different states. A failed request
+   * rendered as "nothing has arrived for this topic" sends a technician to the
+   * machine to look for a fault that is in front of them, on the kiosk.
+   */
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [minutes, setMinutes] = useState<number>(WINDOWS[0]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [windowMs, setWindowMs] = useState(3_600_000);
@@ -91,17 +96,21 @@ export function DatenstromDetail({ topic, readings }: Props) {
     if (d.windowMs) setWindowMs(d.windowMs);
     const found = d.channels?.find((c) => c.topic === topic) ?? null;
     setChannel(found);
-    setKnown(true);
+    setStatus('ready');
     if (withDrafts && found) {
       setDrafts({ scale: germanNumber(found.scale), offset: germanNumber(found.offset) });
     }
   }, [topic]);
 
   const load = useCallback((withDrafts: boolean) => {
+    // Only the first failure downgrades the screen: once a channel is on
+    // screen, a dropped poll must leave the last values up rather than blank
+    // them — the same bargain every other screen on this kiosk makes.
+    const fail = () => setStatus((s) => (s === 'ready' ? s : 'error'));
     fetch('/api/config/datenstrom')
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d) apply(d, withDrafts); else setKnown(true); })
-      .catch(() => setKnown(true));
+      .then((d) => { if (d) apply(d, withDrafts); else fail(); })
+      .catch(fail);
   }, [apply]);
 
   useEffect(() => { load(true); }, [load]);
@@ -208,7 +217,19 @@ export function DatenstromDetail({ topic, readings }: Props) {
     { method: 'DELETE' },
   ).then(() => setDrafts({ scale: '1', offset: '0' }));
 
-  if (known && !channel) {
+  if (!channel && status === 'error') {
+    return (
+      <div style={styles.notice}>
+        Der Datenstrom konnte nicht geladen werden. Der Bildschirm versucht es
+        alle 10 Sekunden erneut — die Maschine und ihre Aufzeichnung sind davon
+        nicht betroffen.
+        <button style={styles.linkButton} onClick={() => navigate('datenstrom')}>
+          Zurück zum Datenstrom
+        </button>
+      </div>
+    );
+  }
+  if (!channel && status === 'ready') {
     return (
       <div style={styles.notice}>
         Für „{topic}" ist in der letzten Stunde nichts angekommen. Sobald wieder

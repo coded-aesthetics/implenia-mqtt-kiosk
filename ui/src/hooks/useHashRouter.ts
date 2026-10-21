@@ -34,7 +34,7 @@ export function parseRoute(hash: string): Route {
   if (qs) {
     for (const pair of qs.split('&')) {
       const [k, v] = pair.split('=', 2);
-      if (k) query[decodeURIComponent(k)] = decodeURIComponent(v ?? '');
+      if (k) query[safeDecode(k)] = safeDecode(v ?? '');
     }
   }
 
