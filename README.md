@@ -338,6 +338,46 @@ PUT  /api/verfahren/active      → { verfahren } — write-once, 409 if already
 
 **Write-once by design.** Recorded sessions, serial channel mappings and stream-export columns are all interpreted through the active Verfahren, so switching it under existing data would silently reinterpret that data. Changing it requires a full reset. Until it is set, sensor metadata enrichment is skipped — the live view still works, just without CSV-derived priorities, roles and units.
 
+### Element list cache — an unreachable backend does not empty the screen
+
+The element list is the screen a worker starts from, and it was the one piece
+of the shift assignment the kiosk kept nowhere: the Vorgaben have been cached
+per element since `element_vorgaben`, an imported file survives a restart, but
+a *fetched* list lived only in the browser tab. A kiosk that listed its
+elements yesterday evening and met a backend that was down this morning showed
+„Verbindungsproblem" and an import button — for a list it had read successfully
+fifteen hours earlier.
+
+Every successful fetch now also writes the list itself to
+`meta.last_shift_assignment` (devices and their `vorgaben`, verbatim, plus the
+instant it was taken). When the platform cannot be reached the route answers
+**200** from that cache with `source: 'cache'` and `cachedAt`, and the element
+list shows the grid as usual with a badge beside the import button:
+*„Implenia-Server nicht erreichbar — Liste vom 20.10., 17:43"*.
+
+Two rules decide whether the cache may answer, and they are the same
+distinction the rest of this kiosk makes between *the platform said no* and
+*the platform said nothing*:
+
+- **Only an unanswered request falls back** — a network failure or a 5xx. A
+  404 means there is no shift assignment for today, which is an answer, and
+  yesterday's list over the top of it would invent a shift. A 401 means a key a
+  technician has to fix, and a list over the top of it hides the only message
+  that leads anywhere. `cacheServesFailure` is the one place this is decided,
+  and it reuses the classification the connection indicator runs on.
+- **The kiosk prunes what it knows is finished.** The platform's list is
+  "unfinished elements" *as of* `cachedAt`; an element this kiosk has uploaded
+  since then is complete and would otherwise sit in the grid this morning
+  looking like work to do. Dropped elements are not hidden — the list's
+  „Begonnene Elemente" row is built from those same local completions, with
+  their date, and resuming one still works.
+
+An import still outranks the cache, the cache is only ever written from a
+platform response (so serving it cannot re-date it), and an unreadable cache
+reads as no cache. When the backend comes back the list refreshes itself: the
+UI refetches on `apiHealth` going `unreachable → ok`, which the internet
+watchdog cannot see because the internet never went anywhere.
+
 ### The connection indicator reports three things, one at a time
 
 `CONNECTIVITY_PROBE_HOST` is a DNS lookup against 8.8.8.8 — it answers "does
@@ -1240,6 +1280,7 @@ server/src/
   connectivity.ts     — Online/offline watchdog, and the throttled API probe
   api-health.ts       — Is the *platform* answering, as opposed to the internet
   source-health.ts    — Is sensor data *arriving*; polled in the ingestion seam
+  shift-cache.ts      — Last element list the platform served (pure: store, prune)
   network.ts          — WLAN: scan, and the staged switch that cannot lock the kiosk out
   updater.ts          — Self-update from GitHub Releases
   device-manager.ts   — Device lifecycle management

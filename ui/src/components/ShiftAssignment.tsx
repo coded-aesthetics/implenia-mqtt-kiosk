@@ -72,6 +72,37 @@ function ImportBadge({ onClear }: { onClear: () => Promise<void> }) {
   );
 }
 
+/**
+ * Says that the list on screen is the platform's last word, not today's.
+ *
+ * Beside the import button rather than instead of the grid: the list is the
+ * screen a worker starts from and an unreachable backend must not take it away
+ * (see shift-cache.ts). But a day-old list of unfinished elements that looked
+ * live would be worse than the error screen it replaces, so the date it was
+ * taken is on screen, in the same place the „Importiert aus Datei" badge sits.
+ *
+ * The date is written out as a day and a time, never as „vor 15 Stunden": the
+ * question the operator has is whether this is from *this shift*, and a
+ * relative age makes them do arithmetic to find out.
+ */
+function CacheBadge({ cachedAt }: { cachedAt: number | null }) {
+  const stand = cachedAt === null
+    ? null
+    : new Date(cachedAt).toLocaleString('de-DE', {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
+
+  return (
+    <div style={styles.cacheBadge}>
+      <span style={styles.cacheBadgeIcon}>⚠</span>
+      <div>
+        <div style={styles.cacheBadgeText}>Implenia-Server nicht erreichbar</div>
+        {stand && <div style={styles.cacheBadgeSub}>Liste vom {stand}</div>}
+      </div>
+    </div>
+  );
+}
+
 function useCompletedElements() {
   const [elements, setElements] = useState<CompletedElement[]>([]);
 
@@ -108,6 +139,7 @@ export function ShiftAssignment({
   shift, hasApiKey, onImport, onClearImport, recordingElement,
 }: Props) {
   const isImported = shift.source === 'import';
+  const isCached = shift.source === 'cache';
   const [search, setSearch] = useState('');
   const completedElements = useCompletedElements();
 
@@ -343,7 +375,12 @@ export function ShiftAssignment({
         <div style={styles.bottomBar}>
           {isImported
             ? <ImportBadge onClear={onClearImport} />
-            : <ImportButton onImport={onImport} />}
+            : (
+              <>
+                {isCached && <CacheBadge cachedAt={shift.cachedAt} />}
+                <ImportButton onImport={onImport} />
+              </>
+            )}
         </div>
       </div>
     </div>
@@ -390,9 +427,35 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
+    // The staleness badge sits beside the import button, not above it: the
+    // screen is 13px short of fitting with the recording bar up (see `page`),
+    // so a second row here would push the button off the bottom.
+    gap: '1rem',
     flexShrink: 0,
     minHeight: '72px',
     marginTop: '1rem',
+  },
+  cacheBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.75rem',
+    padding: '0.5rem 1rem',
+    backgroundColor: 'var(--color-warning-tint)',
+    borderRadius: '8px',
+  },
+  cacheBadgeIcon: {
+    fontSize: '1.5rem',
+    color: 'var(--color-warning)',
+    lineHeight: 1,
+  },
+  cacheBadgeText: {
+    fontSize: '1rem',
+    fontWeight: 600,
+    color: 'var(--color-warning-text)',
+  },
+  cacheBadgeSub: {
+    fontSize: '1rem',
+    color: 'var(--color-warning-text)',
   },
   searchInput: {
     width: '100%',
