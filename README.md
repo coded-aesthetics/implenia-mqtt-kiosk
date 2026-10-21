@@ -1064,7 +1064,7 @@ is idempotent — re-running it repairs a machine without touching `kiosk.db`,
 `.env` or recorded data. `--version` pins a release, `--bundle` installs a local
 archive, and an archive beside the script is the fallback when GitHub is
 unreachable. The stick deliberately carries no release: one that did would age
-into installing old code silently. Three
+into installing old code silently. Four
 things it handles that are easy to miss when installing by hand:
 
 - The release bundle carries no `.npmrc`, and `@coded-aesthetics/din4023` is a
@@ -1073,6 +1073,13 @@ things it handles that are easy to miss when installing by hand:
 - `npm install` runs inside `server/` with `--no-workspaces`: the bundle's root
   `package.json` declares `workspaces: ["server","ui"]` but ships no
   `ui/package.json`
+- **`TranslateEnabled: false` in `/etc/chromium/policies/managed/kiosk.json`** —
+  the UI is German and Debian installs with an English locale, so Chromium
+  otherwise floats its translation offer over a kiosk screen that has no window
+  chrome to dismiss it from. `--disable-features=Translate,TranslateUI` is on
+  the command line too but does not reliably hold; the page also carries
+  `<meta name="google" content="notranslate">`, which is the half that reaches a
+  machine already in the field through a normal update
 - **The Vosk speech model is not installed by default** — voice control is out
   of scope for the MVP, and `--with-vosk` brings it back. It is also in no
   release (gitignored, and CI never runs `download-vosk-model.sh`), so it can

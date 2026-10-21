@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#f2f4f6" />
+    <!-- The UI is German by design; a Chromium whose own locale is not German
+         offers to translate it, and the offer bubble sits over the UI on a screen
+         nobody can dismiss it on. This is the half that reaches a kiosk already in
+         the field, since it ships with the UI through the normal update. The
+         managed policy in provision-kiosk.sh is the other half. -->
+    <meta name="google" content="notranslate" />
     <title>Implenia Kiosk</title>
     <style>html, body, #root { margin: 0; padding: 0; height: 100%; overflow: hidden; }</style>
   </head>
