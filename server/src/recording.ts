@@ -32,6 +32,7 @@ import {
   markSessionReadingsUploaded,
   markSessionReadingsFailed,
   resetFailedReadings,
+  setDrillingEndedAt,
   setOperatingModeRow,
   updateSessionStatus,
   type Session,
@@ -213,7 +214,33 @@ export async function beginRecording(
   }
 
   const sessionId = createSession(elementName, JSON.stringify(sensorMapJson));
-  if (openingMode && openingMode !== 'bohren') setOperatingModeRow(sessionId, openingMode);
+  if (openingMode && openingMode !== 'bohren') {
+    setOperatingModeRow(sessionId, openingMode);
+    /*
+     * A session that opens past `bohren` has already finished drilling, so its
+     * geology window is closed from the first reading on.
+     *
+     * `drilling_ended_at` is otherwise stamped by the step out of `bohren`
+     * (`PUT /api/recording/mode`), which a session resumed straight into
+     * Auffüllen never makes. Without it every reading such a session holds
+     * counts as drilling data — `session_readings.phase` is only ever `bohren`
+     * or `rohrwechsel`, never the operating mode — so `drilledDepth` is the
+     * whole hole, `commitDefaultGeology` at the stop finds `gebohrt`, and the
+     * element gets a second, entirely back-filled Schichtauftrag profile dated
+     * against the retraction, over the one the drilling session signed off.
+     * `alignBoundaries` catches a *pure* retraction, every boundary being
+     * shallower than the first reading and going to `aboveHole`, which is why
+     * this looks harmless; one reading before the rig starts pulling is enough
+     * to defeat that and write the fabricated layers. It uploads cleanly, into
+     * a Herstellprotokoll that is signed and archived.
+     *
+     * Stamped at the session's own start, which leaves the window empty: this
+     * session drilled nothing, `gebohrt` is false, and nothing is committed. A
+     * step back into `bohren` clears it again, so an operator who does resume
+     * drilling gets their window back.
+     */
+    setDrillingEndedAt(sessionId, Date.now());
+  }
   ingestion.startRecording(sessionId, sensorMap);
   attachLogSensor(sessionId, sensorMap);
 

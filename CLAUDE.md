@@ -617,7 +617,11 @@ Three things make it correct rather than merely kinder, and none may be broken:
   drilling data. Without the bound, retraction widens `alignBoundaries`'
   tolerance (the only guard against the fabricated `zuFlach` layers), lets a
   boundary be dated on the way back up, and inflates `drilledDepth`, which is
-  `max − min`. `drillingWindowEnd` in geology.ts owns it.
+  `max − min`. `drillingWindowEnd` in geology.ts owns it. A session that
+  *opens* past `bohren` — a resumed element reopening on Auffüllen — never
+  makes that step, so `beginRecording` stamps it at the session's own start:
+  the window is empty, the session is credited with no drilling, and the stop
+  commits nothing rather than a Vorgabe profile dated against the retraction.
 - **The mode is switched before the screen opens.** The rig may start
   retracting the moment the operator taps, and a server that still thinks
   `bohren` reads the Klemmbacke as a pipe change and records the retraction as

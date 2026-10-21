@@ -33,6 +33,7 @@ vi.mock('./websocket.js', () => ({ broadcastMessage: () => {} }));
 let db: typeof import('./db.js');
 let meta: typeof import('./sensor-meta.js');
 let recording: typeof import('./recording.js');
+let geology: typeof import('./geology.js');
 let app: FastifyInstance;
 
 /** A DSV pillar with a `Status` sensor, which is what carries the phase. */
@@ -42,6 +43,10 @@ const PLATFORM_SENSORS = {
   ],
   sensors_int: [
     { id: 's-status', name: 'Status', meta: { source: 'user', role: 'mode' } },
+    { id: 's-geodin', name: 'GeoDIN', meta: { source: 'kiosk', role: 'geology_nr' } },
+  ],
+  sensors_string: [
+    { id: 's-geologie', name: 'Geologie', meta: { source: 'kiosk', role: 'geology_text' } },
   ],
 };
 
@@ -61,6 +66,7 @@ beforeAll(async () => {
   db = await import('./db.js');
   meta = await import('./sensor-meta.js');
   recording = await import('./recording.js');
+  geology = await import('./geology.js');
   if (db.databasePath() !== ':memory:') {
     throw new Error(
       `Refusing to run destructive tests against "${db.databasePath()}" — expected :memory:`,
@@ -156,5 +162,72 @@ describe('the start route', () => {
     const { status, body } = await post({ elementName: 'P-01', operatingMode: 'verpressen' });
     expect(status).toBe(200);
     expect(db.getSessionById(body.sessionId!)!.operating_mode).toBe('bohren');
+  });
+});
+
+/**
+ * The geology window of a session that opens past `bohren`.
+ *
+ * Such a session never makes the step out of `bohren`, which is what stamps
+ * `drilling_ended_at` — and without that bound every depth reading it holds
+ * reads as drilling data, because `session_readings.phase` is only ever
+ * `bohren` or `rohrwechsel` and never the operating mode. The rig pulling its
+ * pipes back out of a finished hole therefore looked like a 6 m bore, so the
+ * stop's back-fill committed the whole Schichtauftrag profile a second time,
+ * dated against retraction instants, over the profile the drilling session had
+ * already signed off: a corrupted Herstellprotokoll out of an upload that
+ * reports success.
+ */
+describe('a recording opened past Bohren', () => {
+  const VORGABEN = {
+    int_sensors: { 'Geologie 1': 5, 'Geologie 2': 9 },
+    float_sensors: { 'Tiefe Geologie 1': 3, 'Tiefe Geologie 2': 6, 'Säulenhöhe': 6 },
+  };
+
+  /** Depth readings a second apart, as the rig reports them. */
+  function feedDepths(sessionId: number, depths: number[]): void {
+    const t0 = Date.now();
+    depths.forEach((d, i) => {
+      db.insertSessionReading(
+        sessionId, 'rig/tiefe', 's-tiefe', 'float', d, null, { receivedAt: t0 + i * 1000 },
+      );
+    });
+  }
+
+  it('closes its geology window at the start', async () => {
+    const id = await start('P-01', 'auffuellen');
+    expect(db.getSessionById(id)!.drilling_ended_at).not.toBeNull();
+  });
+
+  it('leaves it open for a session that opens in Bohren', async () => {
+    const id = await start('P-01');
+    expect(db.getSessionById(id)!.drilling_ended_at).toBeNull();
+  });
+
+  /*
+   * The series is one reading at rest and then the pipes coming out of a 6 m
+   * hole, which is what makes the fabrication reachable rather than merely
+   * possible: `alignBoundaries` drops a boundary shallower than the session's
+   * first reading, so a *pure* retraction loses every planned boundary to
+   * `aboveHole` — one reading before the rig moves is enough for both to
+   * align, the 3 m boundary onto the reading at 6 m.
+   */
+  it('commits no profile at the stop, however far the rig retracts', async () => {
+    db.setElementVorgaben('P-01', VORGABEN);
+    const id = await start('P-01', 'auffuellen');
+    feedDepths(id, [0, 6, 5.5, 5, 4, 3, 2, 1, 0]);
+
+    expect(geology.commitDefaultGeology(db.getSessionById(id)!)).toBeNull();
+    expect(db.getSessionSensorSeries(id, 's-geodin')).toEqual([]);
+  });
+
+  /* The same readings, from a session that did the drilling, still commit. */
+  it('does not stop a drilling session from committing one', async () => {
+    db.setElementVorgaben('P-01', VORGABEN);
+    const id = await start('P-01');
+    feedDepths(id, [0, 1, 2, 3, 4, 5, 6]);
+
+    expect(geology.commitDefaultGeology(db.getSessionById(id)!)?.geschrieben).toBeGreaterThan(0);
+    expect(db.getSessionSensorSeries(id, 's-geodin').length).toBeGreaterThan(0);
   });
 });
