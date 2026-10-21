@@ -7,7 +7,7 @@ import type { SensorReading } from '../hooks/useWebSocket';
 import { SensorChart, type ChartScale, type ChartSeries } from './SensorChart';
 import { formatNumber } from '../utils/format';
 import { formatPayload, freshnessOf, niceScale, silenceLabel } from '../utils/datenstrom';
-import type { Channel } from './DatenstromPage';
+import type { Channel, Missing } from './DatenstromPage';
 
 /**
  * One channel: what it is publishing, what the kiosk makes of it, and the
@@ -43,7 +43,16 @@ const LEGEND_PX = 28;
 interface HistoryPoint { ts: number; value: number }
 
 interface Props {
-  topic: string;
+  /** The channel being inspected, when one is arriving. */
+  topic?: string;
+  /**
+   * A sensor the Verfahren expects and nothing is feeding, addressed by name
+   * because it has no topic. Its calibration still has to be readable and
+   * clearable: a factor on a channel that went quiet would otherwise be
+   * invisible and permanently in force, while the settings hub went on
+   * counting it.
+   */
+  sensorName?: string;
   readings: Map<string, SensorReading>;
 }
 
@@ -75,8 +84,9 @@ function chartScale(points: HistoryPoint[]): { scale: ChartScale; decimals: numb
   return { scale: { key: 'y', min: n.min, max: n.max }, decimals: n.decimals };
 }
 
-export function DatenstromDetail({ topic, readings }: Props) {
+export function DatenstromDetail({ topic, sensorName, readings }: Props) {
   const [channel, setChannel] = useState<Channel | null>(null);
+  const [missing, setMissing] = useState<Missing | null>(null);
   /**
    * `absent` and `error` are deliberately different states. A failed request
    * rendered as "nothing has arrived for this topic" sends a technician to the
@@ -92,15 +102,36 @@ export function DatenstromDetail({ topic, readings }: Props) {
   const [saved, setSaved] = useState(false);
   const [chartRef, chartHeight] = useMeasuredHeight();
 
-  const apply = useCallback((d: { channels?: Channel[]; windowMs?: number }, withDrafts: boolean) => {
+  const apply = useCallback((
+    d: { channels?: Channel[]; missing?: Missing[]; windowMs?: number },
+    withDrafts: boolean,
+  ) => {
     if (d.windowMs) setWindowMs(d.windowMs);
-    const found = d.channels?.find((c) => c.topic === topic) ?? null;
-    setChannel(found);
+    const found = topic ? d.channels?.find((c) => c.topic === topic) ?? null : null;
+    // A sensor addressed by name may also have started publishing since the
+    // overview listed it as missing, in which case its channel is the better
+    // answer and the screen becomes an ordinary channel view.
+    const byName = sensorName
+      ? d.channels?.find((c) => c.sensor === sensorName) ?? null
+      : null;
+    setChannel(found ?? byName);
+    setMissing(sensorName ? d.missing?.find((m) => m.sensor === sensorName) ?? null : null);
     setStatus('ready');
-    if (withDrafts && found) {
-      setDrafts({ scale: germanNumber(found.scale), offset: germanNumber(found.offset) });
+    // `|| d === null` is load-bearing: the fields used to be seeded only by the
+    // one `load(true)` on mount, so a mount that missed left them null for the
+    // life of the screen and the inputs fell back to their `?? '1'` / `?? '0'`
+    // defaults — a sensor with 0,379 in force rendering as neutral, with
+    // `Speichern` disabled because nothing had "changed". Reachable twice: the
+    // server restarting under an auto-update, and a channel that starts
+    // publishing after the screen was opened.
+    const cal = (found ?? byName)
+      ?? (sensorName ? d.missing?.find((m) => m.sensor === sensorName) : undefined);
+    if (cal) {
+      setDrafts((prev) => (withDrafts || prev === null
+        ? { scale: germanNumber(cal.scale), offset: germanNumber(cal.offset) }
+        : prev));
     }
-  }, [topic]);
+  }, [topic, sensorName]);
 
   const load = useCallback((withDrafts: boolean) => {
     // Only the first failure downgrades the screen: once a channel is on
@@ -118,7 +149,7 @@ export function DatenstromDetail({ topic, readings }: Props) {
   // Never with drafts: a poll landing while a factor is being typed would throw
   // the typing away. Same discipline, and the same reason, as the screen this
   // replaces.
-  usePolledJson<{ channels?: Channel[]; windowMs?: number }>(
+  usePolledJson<{ channels?: Channel[]; missing?: Missing[]; windowMs?: number }>(
     '/api/config/datenstrom', 10_000, (d) => apply(d, false), { immediate: false },
   );
 
@@ -131,6 +162,7 @@ export function DatenstromDetail({ topic, readings }: Props) {
   useEffect(() => {
     let cancelled = false;
     setHistory([]);
+    if (!topic) return;
     fetch(`/api/config/datenstrom/history?topic=${encodeURIComponent(topic)}&minutes=${minutes}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { points?: HistoryPoint[] } | null) => {
@@ -140,7 +172,7 @@ export function DatenstromDetail({ topic, readings }: Props) {
     return () => { cancelled = true; };
   }, [topic, minutes]);
 
-  const reading = readings.get(topic);
+  const reading = topic ? readings.get(topic) : undefined;
   const liveAt = reading?.receivedAt ?? channel?.lastSeen ?? 0;
   const ageMs = liveAt ? Date.now() - liveAt : Infinity;
   const fresh = freshnessOf(ageMs);
@@ -170,7 +202,8 @@ export function DatenstromDetail({ topic, readings }: Props) {
     return { series, scales: q ? [q.scale] : undefined, decimals: q?.decimals ?? 0 };
   }, [history, channel?.unit]);
 
-  async function send(path: string, init: RequestInit): Promise<void> {
+  /** Resolves true only when the write actually landed. */
+  async function send(path: string, init: RequestInit): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
@@ -186,25 +219,31 @@ export function DatenstromDetail({ topic, readings }: Props) {
       setSaved(true);
       setTimeout(() => setSaved(false), 4000);
       load(false);
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     } finally {
       setBusy(false);
     }
   }
 
-  const save = () => channel && drafts && send('/api/config/calibration', {
+  // The sensor every write is addressed to — the CSV spelling, which is what
+  // `checkKnownSensor` matches, never the lowercased resolver key.
+  const writeTarget = channel?.sensor ?? missing?.sensor ?? null;
+
+  const save = () => writeTarget && drafts && send('/api/config/calibration', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      sensorName: channel.sensor,
+      sensorName: writeTarget,
       scale: parseNumber(drafts.scale),
       offset: parseNumber(drafts.offset),
     }),
   });
 
-  const tare = () => channel && send(
-    `/api/config/calibration/${encodeURIComponent(channel.sensor ?? '')}/tare`,
+  const tare = () => writeTarget && send(
+    `/api/config/calibration/${encodeURIComponent(writeTarget)}/tare`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -212,11 +251,98 @@ export function DatenstromDetail({ topic, readings }: Props) {
     },
   );
 
-  const reset = () => channel && send(
-    `/api/config/calibration/${encodeURIComponent(channel.sensor ?? '')}`,
+  const reset = () => writeTarget && send(
+    `/api/config/calibration/${encodeURIComponent(writeTarget)}`,
     { method: 'DELETE' },
-  ).then(() => setDrafts({ scale: '1', offset: '0' }));
+    // Only on success. `send` resolves either way, so chaining this
+    // unconditionally cleared the fields to 1 / 0 next to a red error while the
+    // stored factor was untouched and still being applied to every reading —
+    // and `changed` then lit `Speichern` up, so one tap wrote the neutral
+    // values for real. The screen this replaces guarded exactly this.
+  ).then((ok) => { if (ok) setDrafts({ scale: '1', offset: '0' }); });
 
+  /**
+   * A sensor the Verfahren expects with nothing feeding it.
+   *
+   * No chart and no live value — there is nothing to draw and nothing to zero
+   * against — but the calibration is here, because a factor stored on a
+   * channel that has gone quiet is still applied to every reading the moment
+   * it comes back, and it would otherwise be unreachable.
+   */
+  if (!channel && missing) {
+    const changedMissing = drafts !== null
+      && (parseNumber(drafts.scale) !== missing.scale
+        || parseNumber(drafts.offset) !== missing.offset);
+    const activeMissing = missing.scale !== 1 || missing.offset !== 0;
+    return (
+      <div style={styles.page}>
+        <div style={styles.identity}>
+          <span style={styles.topic}>{missing.sensor}</span>
+        </div>
+        <div style={styles.binding}>
+          {missing.unit && <span style={styles.meta}>{missing.unit}</span>}
+          <span style={styles.meta}>{missing.type}</span>
+          <span style={styles.unbound}>kein Topic — es kommen keine Werte an</span>
+        </div>
+
+        {error && <div style={styles.error}>{error}</div>}
+
+        <div style={styles.block}>
+          <span style={styles.blockText}>
+            Für diesen Sensor ist kein Topic zugeordnet, oder es hat in der
+            letzten Stunde nichts gesendet. Faktor und Versatz lassen sich
+            trotzdem setzen — sie gelten, sobald wieder Werte ankommen.
+          </span>
+          <button style={styles.linkButton} onClick={() => navigate('sensors')}>
+            Sensorzuordnung öffnen
+          </button>
+        </div>
+
+        {missing.type === 'Double' && (
+          <div style={styles.calibration}>
+            <label style={styles.field}>
+              <span style={styles.valueLabel}>Faktor</span>
+              <input
+                style={styles.input}
+                inputMode="decimal"
+                value={drafts?.scale ?? '1'}
+                onChange={(e) => {
+                  setDrafts((d) => ({ scale: e.target.value, offset: d?.offset ?? '0' }));
+                  setError(null);
+                }}
+              />
+            </label>
+            <label style={styles.field}>
+              <span style={styles.valueLabel}>Versatz</span>
+              <input
+                style={styles.input}
+                inputMode="decimal"
+                value={drafts?.offset ?? '0'}
+                onChange={(e) => {
+                  setDrafts((d) => ({ scale: d?.scale ?? '1', offset: e.target.value }));
+                  setError(null);
+                }}
+              />
+            </label>
+            <button
+              style={changedMissing ? styles.saveButton : styles.saveButtonIdle}
+              onClick={save}
+              disabled={busy || !changedMissing}
+            >
+              {saved ? '✓' : 'Speichern'}
+            </button>
+            <button
+              style={activeMissing ? styles.resetButton : styles.resetButtonIdle}
+              onClick={reset}
+              disabled={busy || !activeMissing}
+            >
+              Zurücksetzen
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
   if (!channel && status === 'error') {
     return (
       <div style={styles.notice}>
@@ -245,8 +371,13 @@ export function DatenstromDetail({ topic, readings }: Props) {
   const changed = drafts !== null
     && (parseNumber(drafts.scale) !== channel.scale || parseNumber(drafts.offset) !== channel.offset);
   const active = channel.scale !== 1 || channel.offset !== 0;
-  const windowSeconds = windowMs / 1000;
-  const rate = channel.count > 0 ? channel.count / windowSeconds : 0;
+  // Over the span actually observed, not the window. A box connected two
+  // minutes ago has ~414 messages of a 60-minute window, which divided by the
+  // window reads "≈ 0,1 Nachrichten/s" for a channel publishing at ~3,4 Hz —
+  // a thirtyfold understatement on the screen a technician opens to find out
+  // whether the box is publishing at all, in exactly the hour after connecting
+  // a rig. One interval is needed before a rate means anything.
+  const rate = channel.spanMs > 0 ? (channel.count - 1) / (channel.spanMs / 1000) : 0;
 
   return (
     <div style={styles.page}>

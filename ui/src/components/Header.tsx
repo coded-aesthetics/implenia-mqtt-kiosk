@@ -28,12 +28,12 @@ interface Props {
   currentPage: string;
   configSection?: string;
   /**
-   * The channel open on the Datenstrom screen, so the back button can return to
-   * the stream instead of leaving it. In the URL and not in component state for
-   * the same reason the route carries it: a reload must not change what a
-   * button does.
+   * What the Datenstrom screen has open — a topic, or a sensor nothing is
+   * feeding — so the back button returns to the stream instead of leaving it.
+   * Read from the URL and not from component state for the same reason the
+   * route carries it: a reload must not change what a button does.
    */
-  datenstromTopic?: string;
+  datenstromDetail?: string;
   pageTitle?: string;
   voiceSupported?: boolean;
   isListening?: boolean;
@@ -91,7 +91,7 @@ interface Props {
 }
 
 export function Header({ connectivity, apiHealth = 'unknown', sourceHealth = 'unknown', sourceType = 'mqtt', hasApiKey, currentPage, configSection,
-  datenstromTopic, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, recording = false, operatingMode, onModeChange, hidePhaseStepper, ausrichten, updateAvailable = null, updateApplying = false, updateSource = null, updateFailure = null }: Props) {
+  datenstromDetail, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, recording = false, operatingMode, onModeChange, hidePhaseStepper, ausrichten, updateAvailable = null, updateApplying = false, updateSource = null, updateFailure = null }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -145,7 +145,7 @@ export function Header({ connectivity, apiHealth = 'unknown', sourceHealth = 'un
               else if (currentPage === 'sensors') navigate('config/datenquelle');
               // A channel's detail goes back to the stream, not out of it; the
               // stream goes back to Messwerte, which is the card that opens it.
-              else if (currentPage === 'datenstrom') navigate(datenstromTopic ? 'datenstrom' : 'config/messwerte');
+              else if (currentPage === 'datenstrom') navigate(datenstromDetail ? 'datenstrom' : 'config/messwerte');
               else if (currentPage === 'rohrverlaengerung') navigate('config/messwerte');
               else navigate('/');
             }}

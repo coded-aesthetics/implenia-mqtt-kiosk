@@ -93,6 +93,12 @@ export interface DatenstromChannel {
   ageMs: number;
   /** Messages seen inside the window. */
   count: number;
+  /**
+   * Milliseconds between the oldest and newest message in the window — what
+   * `count` is actually a rate over. Dividing by the window instead understates
+   * a freshly connected box by up to thirty times.
+   */
+  spanMs: number;
   /** The sensor this topic feeds, in the CSV's own spelling, or null. */
   sensor: string | null;
   boundBy: BoundBy;
@@ -171,6 +177,7 @@ export function registerDatenstromRoutes(app: FastifyInstance): void {
           lastSeen: t.lastSeen,
           ageMs: Math.max(0, now - t.lastSeen),
           count: t.count,
+          spanMs: Math.max(0, t.lastSeen - t.firstSeen),
           // The CSV's spelling, never the lowercased key: the key is what a
           // lookup needs and the name is what a human reads and what a write
           // is addressed to.

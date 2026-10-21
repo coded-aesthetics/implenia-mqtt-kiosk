@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import { navigate } from '../hooks/useHashRouter';
 import { usePolledJson } from '../hooks/usePolledJson';
 import type { SensorReading } from '../hooks/useWebSocket';
+import { formatNumber } from '../utils/format';
 import {
   formatPayload, freshnessOf, groupByPrefix, groupLabel, silenceLabel,
 } from '../utils/datenstrom';
@@ -33,6 +34,7 @@ export interface Channel {
   lastSeen: number;
   ageMs: number;
   count: number;
+  spanMs: number;
   sensor: string | null;
   boundBy: 'override' | 'shipped' | 'name' | 'none';
   unit: string;
@@ -45,10 +47,18 @@ export interface Channel {
   isClamp: boolean;
 }
 
-interface Missing {
+/** An MQTT sensor of this Verfahren that nothing is currently feeding. */
+export interface Missing {
   sensor: string;
   unit: string;
   type: string;
+  /**
+   * Its stored calibration. A factor on a channel that has gone quiet is still
+   * in force the moment it comes back, so it has to stay readable and
+   * clearable — which is what `?sensor=` on the detail view is for.
+   */
+  scale: number;
+  offset: number;
 }
 
 interface Body {
@@ -80,7 +90,7 @@ function live(channel: Channel, readings: Map<string, SensorReading>) {
   if (reading && reading.receivedAt >= channel.lastSeen) {
     return { payload: reading.payload, at: reading.receivedAt };
   }
-  const fallback = channel.calibrated ?? channel.raw;
+  const fallback = channel.calibrated;
   return {
     payload: fallback === null ? channel.lastPayload : String(fallback),
     at: channel.lastSeen,
@@ -183,14 +193,32 @@ export function DatenstromPage({ readings }: Props) {
       )}
 
       {body.missing.length > 0 && (
-        <button style={styles.missingRow} onClick={() => navigate('sensors')}>
+        <div style={styles.missingRow}>
           <span style={styles.missingLabel}>
-            {body.missing.length} Sensor{body.missing.length === 1 ? '' : 'en'} ohne Topic
+            {body.missing.length} ohne Topic
           </span>
-          <span style={styles.missingNames}>
-            {body.missing.map((m) => m.sensor).join(' · ')}
-          </span>
-        </button>
+          {/*
+            One tap target each rather than one for the row: a sensor here may
+            carry a calibration, and that factor is applied the moment its
+            channel comes back — so it has to be reachable. A strip of chips
+            keeps the common case to the same 64px the single row cost, which
+            the captured rig's four columns need; more of them wrap and the
+            stream above scrolls.
+          */}
+          {body.missing.map((m) => {
+            const calibrated = m.scale !== 1 || m.offset !== 0;
+            return (
+              <button
+                key={m.sensor}
+                style={calibrated ? styles.missingChipCalibrated : styles.missingChip}
+                onClick={() => navigate(`datenstrom?sensor=${encodeURIComponent(m.sensor)}`)}
+              >
+                {m.sensor}
+                {calibrated && <span style={styles.missingChipMark}> ×{formatNumber(m.scale)}</span>}
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -266,7 +294,9 @@ const tileBase: CSSProperties = {
 
 const styles: Record<string, CSSProperties> = {
   page: {
-    display: 'flex', flexDirection: 'column', gap: 'var(--space-md)',
+    // --space-sm between the three bands, not --space-md: the 16px bought the
+    // chips below their 56px, and the stream is what must stay whole.
+    display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)',
     padding: 'var(--space-lg)', flex: 1, minHeight: 0, boxSizing: 'border-box',
   },
   headerRow: {
@@ -316,20 +346,34 @@ const styles: Record<string, CSSProperties> = {
    * Sensorzuordnung.
    */
   missingRow: {
-    display: 'flex', alignItems: 'center', gap: 'var(--space-md)',
-    minHeight: 'var(--tap-min)', padding: '0 var(--space-md)', flexShrink: 0,
+    display: 'flex', alignItems: 'center', gap: 'var(--space-sm)',
+    flexWrap: 'wrap', flexShrink: 0, padding: 'var(--space-sm) var(--space-md)',
     backgroundColor: 'var(--surface-1)', border: '2px dashed var(--border)',
-    borderRadius: 'var(--radius-md)', cursor: 'pointer', fontFamily: 'inherit',
-    textAlign: 'left', width: '100%', boxSizing: 'border-box',
+    borderRadius: 'var(--radius-md)', boxSizing: 'border-box',
   },
   missingLabel: {
     fontSize: 'var(--font-base)', fontWeight: 700,
     color: 'var(--color-warning-text)', whiteSpace: 'nowrap',
+    marginRight: 'var(--space-sm)',
   },
-  missingNames: {
-    fontSize: 'var(--font-sm)', color: 'var(--text-muted)',
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+  missingChip: {
+    // 56px, the height every other button in Einstellungen uses. 64 would be
+    // better and does not fit: the stream above is the thing that must stay
+    // whole, and it was measured at 517px of a 517px band.
+    minHeight: '56px', padding: '0 var(--space-md)',
+    fontSize: 'var(--font-sm)', fontFamily: 'inherit',
+    color: 'var(--text-secondary)', backgroundColor: 'var(--surface-2)',
+    border: '2px solid var(--border)', borderRadius: 'var(--radius-md)',
+    cursor: 'pointer', whiteSpace: 'nowrap',
   },
+  missingChipCalibrated: {
+    minHeight: '56px', padding: '0 var(--space-md)',
+    fontSize: 'var(--font-sm)', fontFamily: 'inherit', fontWeight: 700,
+    color: 'var(--text-primary)', backgroundColor: 'var(--surface-2)',
+    border: '2px solid var(--color-accent)', borderRadius: 'var(--radius-md)',
+    cursor: 'pointer', whiteSpace: 'nowrap',
+  },
+  missingChipMark: { fontFamily: 'var(--font-mono)', color: 'var(--color-accent)' },
 
   tileRow: {
     display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',

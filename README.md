@@ -693,6 +693,15 @@ GET /api/config/datenstrom?minutes=60              → every observed topic, wha
 GET /api/config/datenstrom/history?topic=…&minutes=10 → one topic's raw history, 1 s buckets
 ```
 
+**A sensor nothing is feeding is still reachable**, at `#/datenstrom?sensor=<name>`
+— by name, because it has no topic to put in the path. The overview lists those
+sensors as chips below the stream, and marks any that carry a calibration with
+its factor. Without that there is a dead end: a factor stored on a channel that
+then goes quiet for an hour becomes invisible and unclearable, while the
+settings hub goes on counting it — and it is still applied to every reading the
+moment the channel comes back. It is also what lets a kiosk being prepared in
+the office take a factor that is already known.
+
 Calibration is unchanged and still lives at `/api/config/calibration*`; the
 detail view is simply where it is now reached, per channel, with the whole
 display instead of one flex row.
@@ -724,6 +733,12 @@ which the server refuses a tare, so the screen can never invite a technician
 into that refusal); past two minutes it reads `stumm vor 23 Min.` and the tile
 takes a warning border. Two minutes is some forty times the slowest channel's
 ~3 s publish interval.
+
+The publish rate on the detail view is counted over the span actually observed,
+not over the window: a box connected two minutes ago has a few hundred messages
+of a 60-minute window, which divided by the window reads `≈ 0,1 Nachrichten/s`
+for a channel publishing at ~3,4 Hz. `getObservedTopics` returns `firstSeen` for
+that, which the aggregate was already in a position to compute.
 
 A **non-numeric payload is printed verbatim**. `nan` is a real value on the rig —
 `Bohrgeraet/Klemmdruck` publishes it in the G08 capture — and

@@ -496,8 +496,17 @@ export function App() {
       break;
     }
     case 'datenstrom': {
-      content = route.params.topic
-        ? <DatenstromDetail topic={route.params.topic} readings={readings} />
+      // `?sensor=` addresses a sensor the Verfahren expects and nothing is
+      // feeding: it has no topic to put in the path, and it still has a
+      // calibration that has to be readable and clearable.
+      content = route.params.topic || route.query.sensor
+        ? (
+          <DatenstromDetail
+            topic={route.params.topic}
+            sensorName={route.query.sensor}
+            readings={readings}
+          />
+        )
         : <DatenstromPage readings={readings} />;
       pageTitle = 'Datenstrom';
       break;
@@ -727,7 +736,9 @@ export function App() {
         hasApiKey={config.hasApiKey}
         currentPage={route.page}
         configSection={route.page === 'config' ? route.params.section : undefined}
-        datenstromTopic={route.page === 'datenstrom' ? route.params.topic : undefined}
+        datenstromDetail={route.page === 'datenstrom'
+          ? route.params.topic ?? route.query.sensor
+          : undefined}
         pageTitle={pageTitle}
         voiceSupported={voice.isSupported}
         isListening={voice.isListening}

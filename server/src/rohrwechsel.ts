@@ -360,7 +360,7 @@ function describeProgress(
       'Wenn das bei jedem Rohr so ist, stimmt die Kalibrierung der Bohrtiefe nicht — ' +
       `der Faktor müsste mit ${factor.toLocaleString('de-DE', {
         minimumFractionDigits: 3, maximumFractionDigits: 3,
-      })} multipliziert werden (Einstellungen → Kalibrierung).`
+      })} multipliziert werden (Einstellungen → Messwerte → Datenstrom, Kanal der Bohrtiefe).`
     );
   }
 
