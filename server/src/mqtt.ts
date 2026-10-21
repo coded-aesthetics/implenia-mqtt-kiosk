@@ -21,6 +21,11 @@ class MqttSource extends DataSource {
     return 'mqtt';
   }
 
+  get configured(): boolean {
+    const { brokerUrl, topics } = getMqttSettings();
+    return Boolean(brokerUrl && topics);
+  }
+
   start(): void {
     // Settings come from the setup wizard (meta table), falling back to env.
     // Not configured yet (fresh machine) → stay disconnected and let the rest

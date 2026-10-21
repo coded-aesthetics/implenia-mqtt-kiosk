@@ -34,7 +34,7 @@ import type { OperatingMode } from './hooks/useWebSocket';
 import type { ViewTab } from './components/ElementDetail';
 
 export function App() {
-  const { readings, deviceFrames, connectivity, recordingState, uploadProgress, updateAvailable, updateSource, updateApplying, updateFailure, replaySeeking } =
+  const { readings, deviceFrames, connectivity, apiHealth, sourceHealth, sourceType, recordingState, uploadProgress, updateAvailable, updateSource, updateApplying, updateFailure, replaySeeking } =
     useWebSocket();
   const route = useHashRouter();
   const config = useConfig();
@@ -66,6 +66,18 @@ export function App() {
     prevConnRef.current = connectivity;
     if (connectivity === 'online' && was === 'offline') refetchShift();
   }, [connectivity, refetchShift]);
+  /*
+   * And when the platform comes back, which is a separate event: a kiosk shown
+   * yesterday's cached list because the backend was down must not keep showing
+   * it once the backend answers again. The internet never went anywhere in
+   * that case, so the watchdog above never fires.
+   */
+  const prevApiRef = useRef(apiHealth);
+  useEffect(() => {
+    const was = prevApiRef.current;
+    prevApiRef.current = apiHealth;
+    if (apiHealth === 'ok' && (was === 'unreachable' || was === 'rejected')) refetchShift();
+  }, [apiHealth, refetchShift]);
 
   const [devMode, setDevMode] = useState(false);
   useEffect(() => {
@@ -609,6 +621,9 @@ export function App() {
     <div style={styles.container}>
       <Header
         connectivity={connectivity}
+        apiHealth={apiHealth}
+        sourceHealth={sourceHealth}
+        sourceType={sourceType}
         hasApiKey={config.hasApiKey}
         currentPage={route.page}
         configSection={route.page === 'config' ? route.params.section : undefined}

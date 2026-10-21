@@ -70,6 +70,7 @@ The UI dev server runs on `http://localhost:5173` and proxies API/WS requests to
 | `NODE_ENV` | No | `production` | `development` / `production` / `test` |
 | `CONNECTIVITY_PROBE_HOST` | No | `8.8.8.8` | DNS host for connectivity checks |
 | `CONNECTIVITY_POLL_INTERVAL_MS` | No | `30000` | Connectivity poll interval (ms) |
+| `API_PROBE_INTERVAL_MS` | No | `300000` | How stale the last answer from the Implenia API may get before the watchdog probes it directly. Every real API call reports in, so this only fires on an idle kiosk |
 | `USB_UPDATE_PATHS` | No | `/media` | Comma-separated dirs to scan for USB update bundles |
 | `LOG_SENSOR_UPLOAD` | No | `false` | Upload log entries as string sensor readings |
 | `LOG_SENSOR_LEVEL` | No | `warn` | Minimum level for sensor-uploaded logs |
@@ -336,6 +337,72 @@ PUT  /api/verfahren/active      → { verfahren } — write-once, 409 if already
 ```
 
 **Write-once by design.** Recorded sessions, serial channel mappings and stream-export columns are all interpreted through the active Verfahren, so switching it under existing data would silently reinterpret that data. Changing it requires a full reset. Until it is set, sensor metadata enrichment is skipped — the live view still works, just without CSV-derived priorities, roles and units.
+
+### The connection indicator reports three things, one at a time
+
+`CONNECTIVITY_PROBE_HOST` is a DNS lookup against 8.8.8.8 — it answers "does
+this kiosk have internet", which is not the question the header's green dot was
+read as answering. Two other things can be wrong and were reported nowhere:
+
+- **The platform.** A kiosk whose Implenia backend was down, misconfigured or
+  refusing its key showed „Verbunden" in green while nothing could upload and
+  the element list sat on an error.
+- **The data source.** `ingestion.sourceConnected` existed but was never pushed
+  anywhere, and no screen looked at reading ages: when the link to the box
+  died mid-hole, every gauge froze at its last value and kept showing it. The
+  depth hero read 8,40 m while the drill kept going, and a running recording
+  recorded nothing — the only sign of it being the recording bar's reading
+  count sitting still.
+
+All three share **one** indicator. The header is the most contested space on
+the screen (it carries the phase stepper during a recording), so a second dot
+was not an option — and showing only the worst problem would hide the others,
+which matters because on site the box is the data source *and* the uplink, so
+one dead box takes out two of the three at once. When more than one is wrong
+the indicator **cycles through them every 4 s**; a single problem sits still.
+
+| | |
+|---|---|
+| `Verbunden` (green) | all three fine |
+| `MQTT offline` / `USB offline` (red) | the data source is down — named after the transport |
+| `Offline` (red) | no internet |
+| `Server offline` (amber) | internet up, platform not answering (no answer, or a 5xx) |
+| `Kein Zugriff` (amber) | internet up, platform refusing this kiosk's key (401/403) |
+| `Verbinde...` (grey) | nothing observed yet |
+
+**The data source goes first in the rotation.** A failed upload is buffered and
+retried — the measurements survive. A source that is down means readings that
+never existed, so it is the only one of the three that loses data.
+
+`unknown` and `unconfigured` claim nothing on either axis and fall back to the
+rest: a bench kiosk with no credentials must not accuse the platform, and a
+fresh machine whose broker has not been set up yet is not a fault (`mqtt.start()`
+returns early when there is no broker, so `connected` is false and stays false —
+`DataSource.configured` is what keeps that out of the indicator).
+
+**The label width is fixed at 108px** so the rotation cannot walk the version
+indicator and the settings button sideways — the same objection that kept
+reading ages out of the drilling screen's gauges. Measured on the rendered
+header, in **DejaVu Sans**: the font stack ends in `sans-serif` and a kiosk
+installs `fonts-dejavu-core` and nothing else, so it renders ~6% wider than a
+developer laptop does.
+
+**Two of the three are nearly free.** `fetchImplenia` reports *every* outcome
+to `api-health.ts`, so a page load, an upload batch or an element screen
+answers the platform question at no cost; the watchdog only probes
+`/api/v1/measuring-device/self` when nothing has answered for
+`API_PROBE_INTERVAL_MS` (5 min), and never while the internet is down. A **404
+counts as healthy** — a backend saying there is no shift assignment today is a
+working backend.
+
+The data source is **polled**, once a second, by the ingestion layer
+(`source-health.ts`). Not event-driven, deliberately: each `DataSource` flips
+its own `_connected` in two to five places, so emitting from every one of them
+is five files and a dozen edit sites where a missed one makes the indicator
+quietly wrong — and `device-source` settles it outright, since its `connected`
+is *derived* (`deviceManager.getStatus().some(...)`) and has no transition point
+to emit from at all. One boolean read per second, in the seam that already owns
+the source, cannot be forgotten by a source added later.
 
 ### Vorgaben cache
 
@@ -1170,7 +1237,9 @@ server/src/
   grid-reduce.ts      — Readings → one row per interval, last value per sensor (pure)
   csv-upload.ts       — Session → chunked CSV for the measuring-device batch endpoint
   reduction-config.ts — Per-kiosk export/upload granularity and upload route
-  connectivity.ts     — Online/offline watchdog
+  connectivity.ts     — Online/offline watchdog, and the throttled API probe
+  api-health.ts       — Is the *platform* answering, as opposed to the internet
+  source-health.ts    — Is sensor data *arriving*; polled in the ingestion seam
   network.ts          — WLAN: scan, and the staged switch that cannot lock the kiosk out
   updater.ts          — Self-update from GitHub Releases
   device-manager.ts   — Device lifecycle management

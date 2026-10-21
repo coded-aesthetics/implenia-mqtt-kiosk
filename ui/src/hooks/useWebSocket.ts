@@ -70,6 +70,21 @@ export interface UploadProgress {
 
 export type UpdateSource = 'github' | 'usb';
 
+/**
+ * Whether the Implenia platform is answering, as opposed to whether the kiosk
+ * has internet. See the server's api-health.ts — `unknown` and `unconfigured`
+ * both say nothing about the platform and the header falls back to the
+ * internet state for them.
+ */
+export type ApiHealth = 'unknown' | 'ok' | 'unreachable' | 'rejected' | 'unconfigured';
+
+/**
+ * Whether sensor data is arriving. The third thing the header reports, and the
+ * only one of the three whose failure loses data rather than delaying it — see
+ * the server's source-health.ts.
+ */
+export type SourceHealth = 'unknown' | 'connected' | 'disconnected' | 'unconfigured';
+
 export interface DeviceFrame {
   deviceId: number;
   values: number[];
@@ -80,6 +95,10 @@ interface WebSocketState {
   readings: Map<string, SensorReading>;
   deviceFrames: Map<number, DeviceFrame>;
   connectivity: 'online' | 'offline' | 'unknown';
+  apiHealth: ApiHealth;
+  sourceHealth: SourceHealth;
+  /** `mqtt` | `serial` | `replay` — what the indicator names when it is down. */
+  sourceType: string;
   recordingState: RecordingState;
   uploadProgress: UploadProgress | null;
   updateAvailable: string | null;
@@ -106,6 +125,9 @@ export function useWebSocket() {
     readings: new Map(),
     deviceFrames: new Map(),
     connectivity: 'unknown',
+    apiHealth: 'unknown',
+    sourceHealth: 'unknown',
+    sourceType: 'mqtt',
     recordingState: INITIAL_RECORDING,
     uploadProgress: null,
     updateAvailable: null,
@@ -196,6 +218,18 @@ export function useWebSocket() {
 
           case 'connectivity':
             setState((prev) => ({ ...prev, connectivity: msg.state }));
+            break;
+
+          case 'api-health':
+            setState((prev) => ({ ...prev, apiHealth: msg.state }));
+            break;
+
+          case 'source-health':
+            setState((prev) => ({
+              ...prev,
+              sourceHealth: msg.state,
+              sourceType: msg.sourceType ?? prev.sourceType,
+            }));
             break;
 
           case 'recording-state':
