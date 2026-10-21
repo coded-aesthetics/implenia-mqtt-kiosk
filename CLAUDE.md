@@ -1039,6 +1039,19 @@ What else must not be broken:
   `keyManagementFor` reads NetworkManager's own SECURITY field, and an 802.1X
   network is refused outright rather than offered a password box it can never
   satisfy.
+- **The scan needs a polkit action of its own, and a refused scan is silent.**
+  `org.freedesktop.NetworkManager.wifi.scan` defaults to `auth_admin` for a
+  subject with no login session, which is exactly what the PM2-started server
+  is — being in `netdev` changes nothing. `nmcli device wifi list --rescan yes`
+  swallows the refusal: exit 0, empty stderr, NetworkManager's cache printed as
+  if it were fresh. So the screen lists whatever the machine last happened to
+  see — the office, or on a kiosk that has been connected to one network since
+  boot, that network alone — while the box sits 30 cm away and absent, with
+  nothing anywhere saying why. The provisioning rule grants the action and
+  `scan()` asks for the rescan in its own call purely so the exit code can be
+  logged. The rule file is compared in full on every provisioning run, because
+  the guard that asked "is there a rule for this user" would skip the fix
+  forever on every machine that already had the old rule.
 - **Reading the status never drives the radio.** `device wifi list` defaults to
   `--rescan auto`, which scans whenever the cache is older than 30 s — so the
   settings hub waited on a radio scan before painting any of its five tiles.

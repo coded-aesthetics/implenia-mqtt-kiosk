@@ -39,6 +39,8 @@ const WIFI_LIST = [
 interface Scripted {
   deviceStatus?: ExecResult;
   wifiList?: ExecResult;
+  /** `device wifi rescan` — the call that can report a polkit refusal. */
+  rescan?: ExecResult;
   connectionShow?: ExecResult;
   add?: ExecResult;
   /** `connection up implenia-pending` */
@@ -73,6 +75,7 @@ function harness(script: Scripted = {}) {
       if (joined.includes('device status')) {
         return script.deviceStatus ?? { code: 0, stdout: DEVICE_STATUS, stderr: '' };
       }
+      if (joined.includes('device wifi rescan')) return script.rescan ?? OK;
       if (joined.includes('device wifi list')) {
         return script.wifiList ?? { code: 0, stdout: WIFI_LIST, stderr: '' };
       }
@@ -130,6 +133,17 @@ describe('parseScan', () => {
     expect(rows).toEqual([
       { ssid: 'Implenia-Box-G08', signal: 84, secured: true, security: 'WPA2', active: true },
     ]);
+  });
+});
+
+describe('an SSID nmcli does not escape', () => {
+  // The question a field report arrives as: "is our list filtering the box
+  // out?". `#` is not a terse-mode metacharacter, so it must survive — and the
+  // box on site is called `Implenia-MQTT#00`.
+  it('keeps a hash in the SSID', () => {
+    const networks = parseScan('Implenia-MQTT#00:100:WPA2:\nBuero-WLAN:71:WPA2:*');
+    expect(networks.map((n) => n.ssid)).toEqual(['Implenia-MQTT#00', 'Buero-WLAN']);
+    expect(networks[0]).toMatchObject({ signal: 100, secured: true, active: false });
   });
 });
 
@@ -276,6 +290,40 @@ describe('a machine that cannot do this', () => {
   it('scans to an empty list rather than throwing', async () => {
     const { net } = harness({ wifiList: { code: 1, stdout: '', stderr: 'boom' } });
     expect(await net.scan()).toEqual([]);
+  });
+
+  it('does not ask a machine without a wireless interface to scan', async () => {
+    const { net, nmcli } = harness({
+      deviceStatus: { code: 0, stdout: 'eth0:ethernet:connected:lan', stderr: '' },
+    });
+    expect(await net.scan()).toEqual([]);
+    expect(nmcli().some((c) => c.includes('device wifi'))).toBe(false);
+  });
+});
+
+describe('a scan the kiosk may not be allowed to run', () => {
+  // `nmcli device wifi list --rescan yes` swallows a refused scan: exit 0,
+  // empty stderr, NetworkManager's cache printed as if it were fresh. So the
+  // rescan is requested in its own call, whose exit code is the only place that
+  // refusal is visible — on a kiosk whose polkit rule has no `wifi.scan`, the
+  // WLAN screen otherwise lists the office while the box sits next to it.
+  it('asks for the rescan in a call that can report a refusal', async () => {
+    const { net, nmcli } = harness();
+    await net.scan();
+    const calls = nmcli();
+    const rescan = calls.findIndex((c) => c.includes('device wifi rescan'));
+    const list = calls.findIndex((c) => c.includes('device wifi list'));
+    expect(rescan).toBeGreaterThanOrEqual(0);
+    expect(rescan).toBeLessThan(list);
+  });
+
+  it('still answers the cached list when the rescan is refused', async () => {
+    // A stale list beats no list, and a second tap on the scan button fails
+    // the same way ("scanning not allowed while already scanning").
+    const { net } = harness({
+      rescan: { code: 4, stdout: '', stderr: 'Error: ... wifi.scan request failed: not authorized.' },
+    });
+    expect((await net.scan()).map((n) => n.ssid)).toEqual(['Implenia-Box-G08', 'Buero-WLAN']);
   });
 });
 
