@@ -344,7 +344,13 @@ migrate_ifupdown_wifi() {
     return
   fi
 
-  if ! grep -qE "^[[:space:]]*(iface|auto|allow-hotplug)[[:space:]]+$dev([[:space:]]|\$)" "$file" 2>/dev/null; then
+  # Every read of this file goes through sudo, not just the writes. The
+  # installer writes it 0600 when it holds a wpa-psk — which is exactly the
+  # case being migrated — so an unprivileged grep comes back empty and the
+  # function concludes the interface is not in the file at all, on the one
+  # machine it exists for. A kiosk whose file happens to be world-readable
+  # hides this completely.
+  if ! sudo grep -qE "^[[:space:]]*(iface|auto|allow-hotplug)[[:space:]]+$dev([[:space:]]|\$)" "$file" 2>/dev/null; then
     # Unmanaged for some other reason — rfkill, a driver that never came up, or
     # an explicit keyfile. Not something this function should guess at.
     warn "NetworkManager reports $dev as '${state:-unknown}' and it is not in $file, so the WLAN screen will say it is unavailable. Check 'rfkill list' and 'nmcli device status'."
@@ -356,12 +362,12 @@ migrate_ifupdown_wifi() {
   # carry more than a profile can be rebuilt from here, and guessing at them is
   # how a machine comes back from its reboot with no network.
   local ssid psk
-  ssid="$(awk -v d="$dev" '
+  ssid="$(sudo awk -v d="$dev" '
     $1=="iface" && $2==d { inblock=1; next }
     inblock && /^[^[:space:]]/ { inblock=0 }
     inblock && $1=="wpa-ssid" { $1=""; sub(/^[[:space:]]+/, ""); gsub(/^"|"$/, ""); print; exit }
   ' "$file")"
-  psk="$(awk -v d="$dev" '
+  psk="$(sudo awk -v d="$dev" '
     $1=="iface" && $2==d { inblock=1; next }
     inblock && /^[^[:space:]]/ { inblock=0 }
     inblock && $1=="wpa-psk" { $1=""; sub(/^[[:space:]]+/, ""); gsub(/^"|"$/, ""); print; exit }
@@ -389,7 +395,7 @@ migrate_ifupdown_wifi() {
   # them behind is a syntax error.
   sudo cp "$file" "$file.bak-$(date +%Y%m%d%H%M%S)"
   local cleaned
-  cleaned="$(awk -v d="$dev" '
+  cleaned="$(sudo awk -v d="$dev" '
     $1=="auto" && $2==d { next }
     $1=="allow-hotplug" && $2==d { next }
     $1=="iface" && $2==d { inblock=1; next }
@@ -443,7 +449,10 @@ wifi_access() {
   # described. `YES` rather than an auth prompt — there is nobody to type an
   # admin password on a kiosk, and a prompt no one can answer is a dead end.
   local rules=/etc/polkit-1/rules.d/50-kiosk-network.rules
-  if [[ -f "$rules" ]] && grep -q "\"$USER\"" "$rules"; then
+  # Elevated, like every other read of a root-only path here: polkit's rules.d
+  # is mode 0700, so an unprivileged test always says "absent" and this step
+  # silently rewrote the rule on every run while reporting it as newly created.
+  if sudo test -f "$rules" && sudo grep -q "\"$USER\"" "$rules"; then
     skip "polkit rule for $USER already in place"
   else
     # polkitd reads this directory but does not ship it: a Debian 13 kiosk has

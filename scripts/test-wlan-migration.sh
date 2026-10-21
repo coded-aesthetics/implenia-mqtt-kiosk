@@ -28,7 +28,9 @@ check() {
 }
 
 # Stubs.
-sudo() { "$@"; }
+# A file, not a variable: the reads happen inside $(...), whose subshell
+# cannot write back to the parent.
+sudo() { echo "$1" >> "$SUDO_LOG"; "$@"; }
 systemctl() { return 0; }
 warn() { WARNED="$*"; }
 ok() { OKED="$*"; }
@@ -42,6 +44,7 @@ nmcli() {
 run_case() { # name device content
   CUR_DEV="$2"; FILE="$TMP/interfaces"; printf '%s' "$3" > "$FILE"
   NMCLI_ARGS=""; WARNED=""; OKED=""; NEEDS_REBOOT=0
+  SUDO_LOG="$TMP/sudo.log"; : > "$SUDO_LOG"
   # Re-source per case and repoint the hardcoded path at the fixture.
   eval "$(sed "s#file=/etc/network/interfaces#file=\"$FILE\"#" "$TMP/func.sh")"
   printf '\n── %s\n' "$1"
@@ -76,6 +79,13 @@ check "profile ssid"         "1" "$(grep -c 'ssid IP-Portscanner_0' <<<"$NMCLI_A
 check "profile psk"          "1" "$(grep -c 'wifi-sec.psk 74207420' <<<"$NMCLI_ARGS")"
 check "autoconnect yes"      "1" "$(grep -c 'connection.autoconnect yes' <<<"$NMCLI_ARGS")"
 check "reboot flagged"       "1" "$NEEDS_REBOOT"
+# The installer writes this file 0600 when it holds a wpa-psk, which is exactly
+# the case being migrated — so an unprivileged read comes back empty and the
+# function concludes the interface is not in the file at all. A fixture is
+# always readable, so the only way to pin this is to check that the reads were
+# elevated.
+check "grep went through sudo" "yes" "$([ "$(grep -c '^grep$' "$SUDO_LOG")" -gt 0 ] && echo yes || echo no)"
+check "awk went through sudo"  "yes" "$([ "$(grep -c '^awk$' "$SUDO_LOG")" -gt 0 ] && echo yes || echo no)"
 check "no warning"           ""  "$WARNED"
 
 WIRED='source /etc/network/interfaces.d/*
