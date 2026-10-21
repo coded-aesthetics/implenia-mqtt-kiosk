@@ -138,7 +138,14 @@ export function DatenstromPage({ readings }: Props) {
 
   const groups = groupByPrefix(body.channels);
   const bound = body.channels.filter((c) => c.sensor !== null).length;
-  const silent = body.channels.filter((c) => freshnessOf(c.ageMs) === 'stumm').length;
+  // Counted from the same live value the tiles use, not from the server's
+  // `ageMs`. That figure is as old as the last poll, so a channel falling
+  // silent between polls had the header calling it stumm while its own tile
+  // still read current — two numbers on one screen disagreeing about the same
+  // channel, which is exactly what a technician would come to this screen to
+  // settle.
+  const silent = body.channels
+    .filter((c) => freshnessOf(Date.now() - live(c, readings).at) === 'stumm').length;
   const minutes = Math.round(body.windowMs / 60_000);
 
   return (
