@@ -469,6 +469,38 @@ is *derived* (`deviceManager.getStatus().some(...)`) and has no transition point
 to emit from at all. One boolean read per second, in the seam that already owns
 the source, cannot be forgotten by a source added later.
 
+### The clock sits on top of that label, inside its width
+
+The header shows the time of day (`HH:mm`, `de-DE`, 24 hours) **above** the
+connection label, in the 108px that label already reserves — not beside it.
+
+The header has no spare width to give it. Measured on the drilling screen at
+1024x768 with the phase stepper up, an update offered and a comment queued: 124
+px left section, a 287px right cluster and a 420px stepper leave the element
+name about a dozen pixels. A second line in the column that is already there
+costs **nothing**, in every state — which is also why the clock never has to
+move or collapse when a recording starts, the way anything laid out beside the
+stepper would. The before/after measurement is identical to the pixel: header
+85px, right cluster 287px at x=713, centre 565px.
+
+The dot stays *outside* that column, where it was, and is nudged down onto the
+label's line rather than moved into it: on the label's line it would widen the
+cluster by its own 12px plus a gap, and centred against a two-line block it
+would read as belonging to the clock.
+
+**No seconds.** A repaint a second on the kiosk's Celeron for information
+nobody on site needs, and the digits would move the column. The tick
+**re-aligns to the minute boundary** after every update instead of running on a
+fixed 60s interval, which would start wherever the component mounted and drift
+with every timer the browser delays — a kiosk runs for weeks without a reload.
+`tabular-nums` keeps the one remaining movement, the digit change, from
+shifting anything.
+
+It is the browser's clock, which on a kiosk is the same machine clock the
+server stamps readings with. That is deliberate: a kiosk whose NTP never ran
+uploads wrong timestamps with no symptom anybody on site can see, and a visibly
+wrong header clock is that symptom.
+
 ### Vorgaben cache
 
 Vorgaben (the Soll values and the geology profile) arrive bundled in the shift assignment: `GET /shift-assignment/unfinished-elements?include_vorgaben=true`. That list only carries **unfinished** elements, so as soon as an element's `Ausführungsdatum` is set it drops out — and its vorgaben go with it. A pillar spanning several days would be resumed blind: no geology profile, no Soll on any gauge.
@@ -1348,7 +1380,7 @@ ui/src/
     CalibrationPage.tsx — Per-sensor factor and offset, with live values
     UpdateUpload.tsx   — Manual update upload
     StatusBar.tsx      — Connectivity indicator
-    Header.tsx         — App header + navigation
+    Header.tsx         — App header + navigation (clock, connection, version)
 ```
 
 ## Testing

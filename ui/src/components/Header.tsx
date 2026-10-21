@@ -4,6 +4,7 @@ import type { OperatingMode, ApiHealth, SourceHealth } from '../hooks/useWebSock
 import {
   aktuelleMeldung, meldungsSchluessel, verbindungsMeldungen, MELDUNG_WECHSEL_MS,
 } from '../utils/verbindung';
+import { useUhrzeit } from '../hooks/useUhrzeit';
 import { PhaseStepper, type AusrichtenSlot } from './PhaseStepper';
 import { VersionIndicator } from './VersionIndicator';
 import logo from '../../assets/implenia-logo.png';
@@ -119,6 +120,8 @@ export function Header({ connectivity, apiHealth = 'unknown', sourceHealth = 'un
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schluessel, meldungen.length]);
 
+  const uhrzeit = useUhrzeit();
+
   const verbindung = aktuelleMeldung(meldungen, meldungsTick);
   const connColor = `var(--color-${verbindung.farbe})`;
   const connLabel = verbindung.label;
@@ -168,8 +171,27 @@ export function Header({ connectivity, apiHealth = 'unknown', sourceHealth = 'un
 
       {/* Right: connectivity + version + settings */}
       <div style={styles.rightSection}>
-        <span style={{ ...styles.dot, backgroundColor: connColor }} />
-        <span style={styles.statusText}>{connLabel}</span>
+        {/*
+          The clock sits on top of the connectivity label, inside the width that
+          label already reserves, because the header has no spare width to give
+          it: with the phase stepper up, an update offered and a comment queued,
+          the element name in the centre is down to about a dozen pixels. Two
+          lines in the column that is already there cost nothing, in every state
+          — so the clock never has to move or collapse when a recording starts.
+          It is the same two-line box the version indicator next to it uses.
+
+          The dot stays outside the column, where it was, for the same reason:
+          moving it onto the label's line would widen the cluster by its own
+          12px plus a gap. It is nudged down instead, so it reads as belonging
+          to the label under the clock rather than to the clock itself.
+        */}
+        <div style={styles.statusGroup}>
+          <span style={{ ...styles.dot, backgroundColor: connColor }} />
+          <div style={styles.statusColumn}>
+            <span style={styles.clock}>{uhrzeit}</span>
+            <span style={styles.statusText}>{connLabel}</span>
+          </div>
+        </div>
         <span style={styles.divider} />
         <VersionIndicator version={version} available={updateAvailable} applying={updateApplying} source={updateSource} failure={updateFailure} recording={recording} />
         {voiceSupported && (
@@ -301,12 +323,50 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '0.75rem',
     minHeight: '48px',
   },
+  statusGroup: {
+    display: 'flex',
+    // The dot belongs to the connectivity label, which is now the lower of two
+    // lines, so the group is bottom-aligned and the dot nudged off that edge
+    // rather than centred against a block it only half describes.
+    alignItems: 'flex-end',
+    gap: '0.75rem',
+  },
+  statusColumn: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'flex-start',
+  },
   dot: {
     width: '12px',
     height: '12px',
     borderRadius: '50%',
     display: 'inline-block',
     flexShrink: 0,
+    // Centres the dot on the label's text line: the line box is ~19px tall at
+    // 0.95rem, so (19 - 12) / 2.
+    marginBottom: '4px',
+  },
+  clock: {
+    /*
+     * The time of day, `HH:mm`. See hooks/useUhrzeit.ts for why there are no
+     * seconds and why the tick re-aligns to the minute.
+     *
+     * It gets the primary text colour and 1.4rem while the connectivity label
+     * under it stays muted, so the column reads clock-first — a worker glancing
+     * up for the time should not have to pick it out of the status line.
+     *
+     * No width of its own: "14:32" is about 56px at this size, well inside the
+     * 108px the label below already reserves, so the column's width is the
+     * label's and the cluster beside it does not move. `tabular-nums` keeps it
+     * that way through a digit change — the one thing that could still shift
+     * the column once a minute.
+     */
+    fontSize: 'var(--font-md)',
+    fontWeight: 600,
+    lineHeight: 1.15,
+    color: 'var(--text-primary)',
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap' as const,
   },
   statusText: {
     fontSize: '0.95rem',
