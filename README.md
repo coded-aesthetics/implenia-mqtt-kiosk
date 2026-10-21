@@ -664,6 +664,137 @@ Overrides are keyed by the **full topic** the technician saw, so an override doe
 
 This is deliberately *not* in the sensor CSV: implenia-web and implenia-machine-backend never see MQTT topics, and it is unrelated to the CSV's `Alias` column, which carries a sensor's legacy name on the platform.
 
+**Sensorzuordnung and Datenstrom answer opposite questions and both exist.** The
+Sensorzuordnung is sensor-first — "are all fourteen sensors wired?" — and is the
+only screen on which a sensor with *no* topic appears at all. Datenstrom is
+topic-first — "what is this box actually sending?" — and is the only screen on
+which a topic with *no* sensor appears. Neither list contains the other.
+
+## Datenstrom
+
+What the data source is actually publishing, grouped by topic prefix, at
+`#/datenstrom` — and one channel at a time at `#/datenstrom/<topic>`, with its
+recent history and its calibration. Reached from **Einstellungen → Messwerte**.
+
+Every other view of this data is filtered by something, which is why none of
+them answers the question a technician setting up a box opens with. The
+Sensorzuordnung shows one sensor's candidates. The Kalibrierung screen this
+replaces listed the Verfahren's `Double` sensors — on DSV that is **50 rows of
+which 13 are MQTT channels**, the other 37 being `server`- and `kiosk`-derived
+results (`Startpunkt X Ist`, `Azimut`, `Mittlere Drehzahl`, the volume
+integrations) that have no raw value to compare against anything. This screen is
+spined on `mqtt_buffer`, which is written *before* any sensor mapping is
+attempted, so a topic that resolves to nothing is exactly as visible as one that
+resolves correctly — which matters, because an unresolved topic displays live
+and is never uploaded.
+
+```
+GET /api/config/datenstrom?minutes=60              → every observed topic, what it feeds, and its calibration
+GET /api/config/datenstrom/history?topic=…&minutes=10 → one topic's raw history, 1 s buckets
+```
+
+**A sensor nothing is feeding is still reachable**, at `#/datenstrom?sensor=<name>`
+— by name, because it has no topic to put in the path. The overview lists those
+sensors as chips below the stream, and marks any that carry a calibration with
+its factor. Without that there is a dead end: a factor stored on a channel that
+then goes quiet for an hour becomes invisible and unclearable, while the
+settings hub goes on counting it — and it is still applied to every reading the
+moment the channel comes back. It is also what lets a kiosk being prepared in
+the office take a factor that is already known.
+
+Calibration is unchanged and still lives at `/api/config/calibration*`; the
+detail view is simply where it is now reached, per channel, with the whole
+display instead of one flex row.
+
+### The grouping is a presentation heuristic, not a convention
+
+Topics are shown in a column per prefix. **`${source}/${sensor_name}` is not a
+convention** — `server/assets/topic-maps/README.md` says so, and topic names
+differ per box — so the split has to degrade, and nothing correctness-critical
+may depend on it. `splitTopic` (`server/src/topic-grouping.ts`) handles a
+prefix-less topic (`logs` → its own group, headed *Ohne Präfix*), the serial
+transport's three-segment `device/<id>/<name>`, and a prefix seen once.
+
+It is computed **server-side**, because the server knows something the topic
+string does not say: `Bohrgeraet/Drehzahl [1/min]` and `device/3/Tiefe` are both
+three segments and want different splits, and only a resolved sensor name tells
+them apart — the leaf *is* the sensor name. Splitting on the last `/` in the
+browser would have shown that first channel as `min]`, which is the display half
+of the bug `resolveSensorKey` already carries a comment about. A topic is never
+split on `/` to resolve a *sensor*; that is `resolveSensorKey`'s job alone.
+
+### A channel that stopped publishing stays listed
+
+The window is **60 minutes**, deliberately longer than the five every other view
+uses. At five minutes a pump that stopped six minutes ago *disappears from the
+list* rather than reading as dead — the same failure as a gauge frozen at its
+last value. Past ten seconds a tile's age turns orange (the same threshold at
+which the server refuses a tare, so the screen can never invite a technician
+into that refusal); past two minutes it reads `stumm vor 23 Min.` and the tile
+takes a warning border. Two minutes is some forty times the slowest channel's
+~3 s publish interval.
+
+The publish rate on the detail view is counted over the span actually observed,
+not over the window: a box connected two minutes ago has a few hundred messages
+of a 60-minute window, which divided by the window reads `≈ 0,1 Nachrichten/s`
+for a channel publishing at ~3,4 Hz. `getObservedTopics` returns `firstSeen` for
+that, which the aggregate was already in a position to compute.
+
+A **non-numeric payload is printed verbatim**. `nan` is a real value on the rig —
+`Bohrgeraet/Klemmdruck` publishes it in the G08 capture — and
+`buildSensorValues` would hand back `0` for it, which would have this screen
+report a pressure the machine never sent.
+
+### Live values come off the WebSocket; the inventory is polled slowly
+
+Measured against a seeded buffer at the captured rig's publish rates, with 24 h
+of retention being **3.09 million rows**:
+
+| 3.09M rows | overview (60 min) | history (10 min) | index build |
+|---|---|---|---|
+| no index on `topic` | **73 ms** | 9.1 ms | — |
+| index on `(topic, received_at)` | 129 ms | 2.8 ms | 1394 ms |
+
+**The obvious index makes the hot query worse**, which is why `mqtt_buffer` still
+has only its `received_at` index. Without it SQLite answers with
+`SEARCH … USING idx_mqtt_buffer_time (received_at>?)` — a seek bounded to the
+window, so the cost is flat in the size of the buffer (73 ms at 24 h, 68 ms at
+1 h). With it the optimiser prefers
+`SCAN … USING COVERING INDEX idx_mqtt_buffer_topic_time`, **loses the time
+bound** and walks all 3.09M rows.
+
+73 ms on a developer machine is some 300–400 ms on a J1900, and `better-sqlite3`
+is synchronous — every poll is time the event loop is not broadcasting readings.
+So the screen polls the *inventory* every 10 s and takes the live values off the
+WebSocket it is already connected to, which is both cheaper and more responsive
+than the 3 s poll the screen it replaces used. The chart is fetched **once per
+open** for the same reason.
+
+The history is bucketed to **1 s, taking the last value in each bucket**, by the
+same rule and for the same reasons as the upload's reduction — see *Reduction
+happens on the way out*. A mean would invent numbers the rig never reported.
+
+### The detail view has four states
+
+| state | what it shows |
+|---|---|
+| the configured Klemmbacke topic | badged as such, with a note that it is deliberately never calibrated, and a button to Rohrverlängerung |
+| bound to a `Double` sensor | Faktor, Versatz, Nullen, Speichern, Zurücksetzen |
+| bound to a non-`Double` sensor | says so; `Status` and DSV's `Bohren/Düsen` are Integer mode flags |
+| bound to nothing | says the values are recorded but **not uploaded**, with a button to the Sensorzuordnung |
+
+The Klemmbacke case is not cosmetic: that topic is a sensor of no Verfahren, so
+without the badge the rig's most important unmapped channel reads *kein Sensor*
+and invites a technician to wire it to something. It is matched with
+`isClampTopic` **server-side**, the same function the ingestion path uses — a
+browser copy of that rule would drift and show a technician a topic the recorder
+is not reading, which is exactly why `/api/config/rohrwechsel/live` already
+resolves it on the server.
+
+The chart is the only element that flexes, so when the on-screen keyboard takes
+roughly a third of the layout's height the chart gives way and the fields being
+typed into stay on screen.
+
 ## Rohrverlängerung (Klemmbacke)
 
 A drilling rig can only drill one Bohrrohr length at a time — 2 m or 3 m, depending on the site. When that length is used up, drilling is interrupted: the lower **Klemmbacke** closes and holds the pipe string in the ground, the Drehantrieb runs Linkslauf and unscrews itself from the pipe, travels back up the mast, the excavator lays a new Bohrrohr in position, Rechtslauf screws it into the old pipe and into the drive, the Klemmbacke opens, and drilling continues.
@@ -782,7 +913,26 @@ POST   /api/config/calibration/:sensorName/tare  → { scale? } — offset := -(
 DELETE /api/config/calibration/:sensorName       → back to neutral
 ```
 
-The **Kalibrierung** screen at `#/kalibrierung` (from the config page) shows one row per sensor with the raw value and the corrected value side by side, updating live — a factor gets set by comparing the kiosk against the display on the rig, not by arithmetic.
+Calibration is set on the **Datenstrom** detail view, one channel at a time, at
+`#/datenstrom/<topic>` — raw value and corrected value side by side above a
+chart of the channel's recent history, updating live. A factor gets set by
+comparing the kiosk against the display on the rig, not by arithmetic.
+
+It used to be a row per sensor on a `#/kalibrierung` screen, which is gone: that
+row carried a name, two live values, two fields and three buttons across 1024px
+and left the name cell about **100px**, so sensor names and units were cut off
+after three or four characters. `#/kalibrierung` still resolves, to the
+Datenstrom overview — the kiosk reloads itself on an update, and a technician
+parked on that path across one would otherwise land on the element list with no
+way back and no F5 key.
+
+**Only a `Double` sensor may be calibrated**, enforced on the write and not just
+by what the screen offers. `checkKnownSensor` answers "is this a sensor of this
+Verfahren", which is the right question for binding a topic and the wrong one
+for scaling it: a factor stored against an Integer *mode* flag would be applied
+to every reading by `applyCalibration` and change what the number means, and
+`Status`'s numbering is a contract shared with implenia-web, where it segments
+every KPI on the Herstellprotokoll.
 
 **Nullen** covers the most common correction in one tap: a pressure or load channel that idles at a non-zero value gets the offset that cancels it (`versatz = -(rohwert × faktor)`, so the *scaled* value goes to zero, not the raw one). The server reads the live value itself at the moment of the tap rather than taking the one the screen last polled, and answers with the offset it stored. The machine has to be at rest when it is tapped: whatever the sensor reads at that moment becomes the new zero.
 
@@ -1394,6 +1544,7 @@ server/src/
   rohrwechsel.ts      — Pure Rohrverlängerung state machine (Klemmbacke phase + clipping)
   rohrwechsel-config.ts — Klemmbacke topic, Rohrlänge and thresholds (meta-backed)
   calibration.ts      — Per-sensor linear correction (scale + offset)
+  topic-grouping.ts   — Topic → group + display name for Datenstrom (pure, heuristic)
   db.ts               — SQLite schema, migrations, queries
   websocket.ts        — WS broadcast
   implenia-api.ts     — Implenia API auth + fetch wrapper
@@ -1452,7 +1603,8 @@ ui/src/
     GeologieSpalte.tsx — Quick picker in the profile column: the plan's soils,
                          marked Aktuell (where the drill is) and Vorgabe
     RohrwechselSettings.tsx — Klemmbacke topic, Rohrlänge, thresholds
-    CalibrationPage.tsx — Per-sensor factor and offset, with live values
+    DatenstromPage.tsx — Every observed topic, a column per prefix, live values
+    DatenstromDetail.tsx — One channel: history chart, binding, and its calibration
     UpdateUpload.tsx   — Manual update upload
     StatusBar.tsx      — Connectivity indicator
     Header.tsx         — App header + navigation (clock, connection, version)

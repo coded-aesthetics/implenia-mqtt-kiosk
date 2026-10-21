@@ -266,6 +266,20 @@ const getBufferRangeStmt = db.prepare(
   'SELECT * FROM mqtt_buffer WHERE received_at >= ? AND received_at <= ? ORDER BY received_at ASC'
 );
 
+/**
+ * One topic's raw history. Filtered in SQL rather than by the caller, because
+ * the range it sits in holds every other topic too: a 10-minute window on the
+ * captured rig is ~21 000 rows for the ~1 500 that belong to one channel.
+ *
+ * `received_at` carries the only index on this table, and deliberately so —
+ * see `getTopicHistory`.
+ */
+const getTopicHistoryStmt = db.prepare(
+  `SELECT * FROM mqtt_buffer
+   WHERE topic = ? AND received_at >= ? AND received_at <= ?
+   ORDER BY received_at ASC`
+);
+
 // Sessions
 const createSessionStmt = db.prepare(
   'INSERT INTO recording_sessions (element_name, sensor_map, started_at, site_id) VALUES (?, ?, ?, ?)'
@@ -499,10 +513,11 @@ const getObservedTopicsStmt = db.prepare(`
   SELECT b.topic,
          b.payload      AS last_payload,
          b.received_at  AS last_seen,
-         c.n            AS count
+         c.n            AS count,
+         c.first_seen   AS first_seen
   FROM mqtt_buffer b
   JOIN (
-    SELECT topic, MAX(id) AS max_id, COUNT(*) AS n
+    SELECT topic, MAX(id) AS max_id, COUNT(*) AS n, MIN(received_at) AS first_seen
     FROM mqtt_buffer
     WHERE received_at >= ?
     GROUP BY topic
@@ -512,6 +527,16 @@ const getObservedTopicsStmt = db.prepare(`
 
 export interface ObservedTopic {
   topic: string;
+  /**
+   * The oldest message still inside the window.
+   *
+   * Without it `count` can only be divided by the whole window, which
+   * understates a rate by as much as thirty times for a box connected two
+   * minutes ago — on the screen whose job is to say whether a box is
+   * publishing, in exactly the hour after a rig is connected. Free here: the
+   * aggregate is already grouping over the same rows.
+   */
+  firstSeen: number;
   lastPayload: string;
   lastSeen: number;
   count: number;
@@ -519,10 +544,11 @@ export interface ObservedTopic {
 
 export function getObservedTopics(since: number): ObservedTopic[] {
   const rows = getObservedTopicsStmt.all(since) as {
-    topic: string; last_payload: string; last_seen: number; count: number;
+    topic: string; last_payload: string; last_seen: number; count: number; first_seen: number;
   }[];
   return rows.map((r) => ({
     topic: r.topic,
+    firstSeen: r.first_seen,
     lastPayload: r.last_payload,
     lastSeen: r.last_seen,
     count: r.count,
@@ -531,6 +557,20 @@ export function getObservedTopics(since: number): ObservedTopic[] {
 
 export function getBufferRange(from: number, to: number): BufferRow[] {
   return getBufferRangeStmt.all(from, to) as BufferRow[];
+}
+
+/**
+ * Every raw message on one topic in a time range, oldest first.
+ *
+ * **No index on `topic`, on purpose.** The buffer takes ~35 inserts a second on
+ * the captured rig and keeps 24 h, so it reaches around three million rows; a
+ * second b-tree would be maintained on the ingest path of every message, on a
+ * 4 GB J1900, to speed up a query a technician opens occasionally. The window
+ * is bounded instead and rides the `received_at` index — which is why the
+ * caller must bound it rather than asking for the whole retention.
+ */
+export function getTopicHistory(topic: string, from: number, to: number): BufferRow[] {
+  return getTopicHistoryStmt.all(topic, from, to) as BufferRow[];
 }
 
 // --- Session functions ---

@@ -7,7 +7,7 @@ import { getCalibrations, setCalibration, deleteCalibration, getObservedTopics }
 import { parsePayload } from '../parse-payload.js';
 import { getActiveVerfahren, loadSensorCsv } from '../sensor-meta.js';
 import { getResolverContext, resolveSensorKey } from '../topic-resolver.js';
-import { checkKnownSensor } from './sensor-guard.js';
+import { checkKnownSensor, type SensorCheck } from './sensor-guard.js';
 import { createLogger } from '../logger.js';
 
 // Logs as 'config', not as this file's name: /api/logs?module=config is how
@@ -46,6 +46,40 @@ function liveRawBySensor(): Map<string, LiveRaw> {
     }
   }
   return latest;
+}
+
+/**
+ * A sensor that may carry a calibration: known to this Verfahren *and* a
+ * `Double`.
+ *
+ * `checkKnownSensor` only answers the first half, and the type matters here in
+ * a way it does not for a topic binding — binding an Integer channel is
+ * ordinary, scaling one is not. `GET /api/config/calibration` has always
+ * filtered the list to `Double`, so the screen never offered the others; this
+ * closes the write while that is still the only writer.
+ *
+ * What it protects: `Bohren/Düsen` (DSV) and `Status` are Integer *mode* flags
+ * whose numbering is a contract shared with implenia-web — `Status` segments
+ * every KPI on the Herstellprotokoll. A factor stored against one of those
+ * would be applied to every reading by `applyCalibration` and silently change
+ * what the number means.
+ */
+function checkCalibratableSensor(sensorName: string): SensorCheck {
+  const known = checkKnownSensor(sensorName);
+  if (!known.ok) return known;
+
+  const verfahren = getActiveVerfahren();
+  const row = (verfahren ? loadSensorCsv(verfahren) ?? [] : [])
+    .find((r) => r.name === sensorName);
+  if (row && row.type.trim() !== 'Double') {
+    return {
+      ok: false,
+      status: 400,
+      error: `„${sensorName}" ist ein ${row.type.trim()}-Sensor und wird nicht `
+        + 'kalibriert. Nur Messwerte mit Kommastellen haben Faktor und Versatz.',
+    };
+  }
+  return { ok: true };
 }
 
 /** Per-sensor linear calibration, and taring against the live raw value. */
@@ -96,7 +130,7 @@ export function registerCalibrationRoutes(app: FastifyInstance): void {
         return reply.status(400).send({ error: 'Es wurde kein Sensor angegeben.' });
       }
 
-      const check = checkKnownSensor(sensorName);
+      const check = checkCalibratableSensor(sensorName);
       if (!check.ok) return reply.status(check.status).send({ error: check.error });
 
       const result = validateCalibration(request.body?.scale, request.body?.offset);
@@ -130,7 +164,7 @@ export function registerCalibrationRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const sensorName = request.params.sensorName.trim();
 
-      const check = checkKnownSensor(sensorName);
+      const check = checkCalibratableSensor(sensorName);
       if (!check.ok) return reply.status(check.status).send({ error: check.error });
 
       const stored = getCalibrationMap().get(sensorName.toLowerCase()) ?? NEUTRAL;

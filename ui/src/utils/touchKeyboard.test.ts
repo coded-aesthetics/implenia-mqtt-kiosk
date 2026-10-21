@@ -29,7 +29,7 @@ describe('layoutFor', () => {
 
 describe('separatorFor', () => {
   // The app's own decimal fields keep the raw string and normalise ',' to '.'
-  // themselves (CalibrationPage.parseNumber, RohrwechselSettings).
+  // themselves (DatenstromDetail.parseNumber, RohrwechselSettings).
   it('is a comma for the app-parsed decimal fields', () => {
     expect(separatorFor({ inputMode: 'decimal' })).toBe(',');
   });

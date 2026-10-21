@@ -239,8 +239,11 @@ describe('depth correction through the ingestion pipeline', () => {
   });
 
   it('refuses when nothing is being recorded, and says where to go instead', () => {
+    // The path, not the word: this message exists to send somebody somewhere,
+    // and it named "Einstellungen → Kalibrierung" for a screen that no longer
+    // exists. Pinning the destination is what makes the next rename fail here.
     const { ingestion } = ingestionMod;
-    expect(() => ingestion.correctDepth(-1)).toThrow(/Kalibrierung/);
+    expect(() => ingestion.correctDepth(-1)).toThrow(/Datenstrom/);
   });
 
   it('corrects the depth even when the element has no Kommentar sensor', () => {

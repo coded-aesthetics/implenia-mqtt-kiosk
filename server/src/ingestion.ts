@@ -600,7 +600,7 @@ export class DataIngestion extends EventEmitter {
       throw new DepthCorrectionError(
         'Es läuft keine Aufzeichnung. Die Tiefe kann nur während einer Aufzeichnung ' +
         'korrigiert werden. Für einen dauerhaft falschen Nullpunkt: ' +
-        'Einstellungen → Kalibrierung.',
+        'Einstellungen → Messwerte → Datenstrom, Kanal der Tiefe.',
         'state',
       );
     }

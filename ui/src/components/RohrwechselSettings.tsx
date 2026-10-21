@@ -195,8 +195,8 @@ export function RohrwechselSettings() {
               Der Messgeber sitzt am Vorschub, nicht im Loch — ein Meter Messwert ist
               deshalb selten ein Meter Bohrloch. Wenn nach einem Rohrwechsel eine
               falsche Strecke gemeldet wird, steht der passende Faktor in der Meldung;
-              eingetragen wird er unter Einstellungen → Kalibrierung beim Sensor der
-              Bohrtiefe.
+              eingetragen wird er unter Einstellungen → Messwerte → Datenstrom beim
+              Kanal der Bohrtiefe.
             </div>
           )}
 

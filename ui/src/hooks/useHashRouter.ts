@@ -1,9 +1,26 @@
 import { useSyncExternalStore } from 'react';
 
 export interface Route {
-  page: 'home' | 'config' | 'element' | 'bohren' | 'comments' | 'setup' | 'sensors' | 'calibration' | 'rohrverlaengerung' | 'geologie' | 'ausrichten';
+  page: 'home' | 'config' | 'element' | 'bohren' | 'comments' | 'setup' | 'sensors' | 'datenstrom' | 'rohrverlaengerung' | 'geologie' | 'ausrichten';
   params: Record<string, string>;
   query: Record<string, string>;
+}
+
+/**
+ * Percent-decode a path parameter without being able to take the app down.
+ *
+ * `decodeURIComponent` throws `URIError` on a malformed escape — and a literal
+ * `%` is one, which an MQTT topic or an element name may well contain. This
+ * function runs inside `getSnapshot()`, so a throw here does not fail a route:
+ * it blanks the whole screen, on a machine with no keyboard to reload from.
+ * An undecoded parameter is wrong in a way somebody can read and work around.
+ */
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 /**
@@ -17,7 +34,7 @@ export function parseRoute(hash: string): Route {
   if (qs) {
     for (const pair of qs.split('&')) {
       const [k, v] = pair.split('=', 2);
-      if (k) query[decodeURIComponent(k)] = decodeURIComponent(v ?? '');
+      if (k) query[safeDecode(k)] = safeDecode(v ?? '');
     }
   }
 
@@ -36,10 +53,29 @@ export function parseRoute(hash: string): Route {
     return { page: 'sensors', params: {}, query };
   }
 
-  // Calibration is its own screen for the same reason: one row per sensor with
-  // live values needs the whole display.
+  /**
+   * The data stream: every topic the box is sending, and one channel's detail.
+   *
+   * The topic is in the path rather than in component state so that a reload —
+   * or the page reload a PM2 restart causes — leaves the technician on the
+   * channel they were looking at, the same reasoning as the `geologie` route.
+   * Topics contain `/`, so the parameter is percent-encoded by the caller and
+   * matched here with `(.+)`.
+   */
+  const datenstromMatch = path.match(/^datenstrom(?:\/(.+))?$/);
+  if (datenstromMatch) {
+    return {
+      page: 'datenstrom',
+      params: datenstromMatch[1] ? { topic: safeDecode(datenstromMatch[1]) } : {},
+      query,
+    };
+  }
+
+  // Where the Kalibrierung screen used to be. Kept as an alias because the
+  // kiosk reloads itself on an update: a technician parked here across one
+  // would otherwise land on the element list with no way back and no F5 key.
   if (path === 'kalibrierung') {
-    return { page: 'calibration', params: {}, query };
+    return { page: 'datenstrom', params: {}, query };
   }
 
   if (path === 'rohrverlaengerung') {
@@ -53,7 +89,7 @@ export function parseRoute(hash: string): Route {
   if (geologieMatch) {
     return {
       page: 'geologie',
-      params: geologieMatch[1] ? { name: decodeURIComponent(geologieMatch[1]) } : {},
+      params: geologieMatch[1] ? { name: safeDecode(geologieMatch[1]) } : {},
       query,
     };
   }
@@ -76,7 +112,7 @@ export function parseRoute(hash: string): Route {
    */
   const ausrichtenMatch = path.match(/^ausrichten\/(.+)$/);
   if (ausrichtenMatch) {
-    return { page: 'ausrichten', params: { name: decodeURIComponent(ausrichtenMatch[1]) }, query };
+    return { page: 'ausrichten', params: { name: safeDecode(ausrichtenMatch[1]) }, query };
   }
 
   /**
@@ -96,12 +132,12 @@ export function parseRoute(hash: string): Route {
    */
   const bohrenMatch = path.match(/^bohren\/(.+)$/);
   if (bohrenMatch) {
-    return { page: 'bohren', params: { name: decodeURIComponent(bohrenMatch[1]) }, query };
+    return { page: 'bohren', params: { name: safeDecode(bohrenMatch[1]) }, query };
   }
 
   const elementMatch = path.match(/^element\/(.+)$/);
   if (elementMatch) {
-    return { page: 'element', params: { name: decodeURIComponent(elementMatch[1]) }, query };
+    return { page: 'element', params: { name: safeDecode(elementMatch[1]) }, query };
   }
 
   return { page: 'home', params: {}, query };

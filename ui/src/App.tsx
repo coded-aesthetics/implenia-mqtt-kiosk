@@ -13,7 +13,8 @@ import { TouchKeyboard } from './components/TouchKeyboard';
 import { CommentQueuePage } from './components/CommentQueuePage';
 import { SetupWizard } from './components/SetupWizard';
 import { TopicAssignment } from './components/TopicAssignment';
-import { CalibrationPage } from './components/CalibrationPage';
+import { DatenstromPage } from './components/DatenstromPage';
+import { DatenstromDetail } from './components/DatenstromDetail';
 import { RohrverlaengerungPage } from './components/RohrverlaengerungPage';
 import { BohrenScreen, INJEKTIONSBOHREN_BOHREN } from './components/BohrenScreen';
 import { GeologieBestaetigung } from './components/GeologieBestaetigung';
@@ -494,9 +495,20 @@ export function App() {
       pageTitle = 'Sensorzuordnung';
       break;
     }
-    case 'calibration': {
-      content = <CalibrationPage />;
-      pageTitle = 'Kalibrierung';
+    case 'datenstrom': {
+      // `?sensor=` addresses a sensor the Verfahren expects and nothing is
+      // feeding: it has no topic to put in the path, and it still has a
+      // calibration that has to be readable and clearable.
+      content = route.params.topic || route.query.sensor
+        ? (
+          <DatenstromDetail
+            topic={route.params.topic}
+            sensorName={route.query.sensor}
+            readings={readings}
+          />
+        )
+        : <DatenstromPage readings={readings} />;
+      pageTitle = 'Datenstrom';
       break;
     }
     case 'rohrverlaengerung': {
@@ -724,6 +736,9 @@ export function App() {
         hasApiKey={config.hasApiKey}
         currentPage={route.page}
         configSection={route.page === 'config' ? route.params.section : undefined}
+        datenstromDetail={route.page === 'datenstrom'
+          ? route.params.topic ?? route.query.sensor
+          : undefined}
         pageTitle={pageTitle}
         voiceSupported={voice.isSupported}
         isListening={voice.isListening}
@@ -749,7 +764,7 @@ export function App() {
       )}
       <main style={{
         ...styles.main,
-        ...(route.page === 'element' || route.page === 'bohren' || route.page === 'sensors' || route.page === 'calibration' || route.page === 'rohrverlaengerung' || route.page === 'geologie' || route.page === 'ausrichten'
+        ...(route.page === 'element' || route.page === 'bohren' || route.page === 'sensors' || route.page === 'datenstrom' || route.page === 'rohrverlaengerung' || route.page === 'geologie' || route.page === 'ausrichten'
           // The hub, and the WLAN screen: both lay themselves out against the
           // available height rather than growing past it. Everything else on
           // /config is a stack of cards that may scroll.

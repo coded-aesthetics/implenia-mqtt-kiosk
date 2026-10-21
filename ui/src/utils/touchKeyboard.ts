@@ -118,7 +118,7 @@ export function layoutFor(attrs: TargetAttrs): KeyboardLayout {
  * The decimal separator a field can actually take, or `null` for a field that
  * can take none.
  *
- * German inputs take a comma — `CalibrationPage.parseNumber` and
+ * German inputs take a comma — `DatenstromDetail.parseNumber` and
  * `RohrwechselSettings` both normalise `,` to `.` before parsing, and a comma
  * is what a number is written with everywhere else in this UI.
  *

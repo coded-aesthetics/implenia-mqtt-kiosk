@@ -144,3 +144,33 @@ export function getResolverContext(): ResolverContext {
 export function clearResolverCache(): void {
   cached = null;
 }
+
+/** Where a topic's binding to a sensor came from. */
+export type BoundBy = 'override' | 'shipped' | 'name' | 'none';
+
+/**
+ * Which of `resolveSensorKey`'s three layers answered for this topic.
+ *
+ * Deliberately a second function rather than a second return value: the live
+ * path calls `resolveSensorKey` on every reading and must not pay for
+ * provenance it never looks at. The branches below mirror that function's in
+ * the same order, and `resolveBoundBy` returning anything but `'none'` means
+ * `resolveSensorKey` returned a key from that layer — the two must be changed
+ * together.
+ *
+ * `'none'` is the segment fallback at the end of `resolveSensorKey`, which
+ * answers with the topic's last segment whether or not any sensor is called
+ * that. So this is the question "is anything actually bound here", which the
+ * key alone cannot answer.
+ */
+export function resolveBoundBy(topic: string, ctx: ResolverContext): BoundBy {
+  const full = topic.toLowerCase();
+  const segment = topicSegment(topic);
+
+  if (ctx.overrides.get(full) ?? ctx.overrides.get(segment)) return 'override';
+  if (ctx.topicMap.get(full) ?? ctx.topicMap.get(segment)) return 'shipped';
+  for (const name of ctx.sensorNames) {
+    if (full === name || full.endsWith('/' + name)) return 'name';
+  }
+  return 'none';
+}

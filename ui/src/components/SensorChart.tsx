@@ -24,6 +24,14 @@ interface Props {
   scales?: ChartScale[];
   windowMinutes?: number;
   height?: number;
+  /**
+   * Decimals on the y tick labels. Zero by default, which is right for the
+   * drilling screens' pressures and volumes and useless for a channel that
+   * lives between 0 and 2 — an inclination charted with integer ticks reads
+   * `1`, `1`, `1`. The Datenstrom detail view charts whatever a box publishes,
+   * so it sets this from the range it is drawing.
+   */
+  tickDecimals?: number;
 }
 
 function emptyData(seriesCount: number): uPlot.AlignedData {
@@ -68,7 +76,9 @@ function resolveAxisStyle(el: HTMLElement) {
   };
 }
 
-export function SensorChart({ series, scales: scalesProp, windowMinutes = 5, height = 200 }: Props) {
+export function SensorChart({
+  series, scales: scalesProp, windowMinutes = 5, height = 200, tickDecimals = 0,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
   const dataRef = useRef<uPlot.AlignedData>(emptyData(series.length));
@@ -117,7 +127,7 @@ export function SensorChart({ series, scales: scalesProp, windowMinutes = 5, hei
           ...axisStyle,
           ...(!isFirst && { grid: { show: false }, ticks: { show: false } }),
           splits: () => splits,
-          values: (_u, vals) => vals.map((v) => formatNumber(v, 0)),
+          values: (_u, vals) => vals.map((v) => formatNumber(v, tickDecimals)),
         });
       }
     } else {
@@ -125,7 +135,7 @@ export function SensorChart({ series, scales: scalesProp, windowMinutes = 5, hei
       yAxes.push({
         scale: 'y',
         ...axisStyle,
-        values: (_u, vals) => vals.map((v) => formatNumber(v, 0)),
+        values: (_u, vals) => vals.map((v) => formatNumber(v, tickDecimals)),
       });
     }
 
@@ -180,7 +190,7 @@ export function SensorChart({ series, scales: scalesProp, windowMinutes = 5, hei
         throttleRef.current = null;
       }
     };
-  }, [height, windowMinutes, seriesOpts, scalesKey]);
+  }, [height, windowMinutes, seriesOpts, scalesKey, tickDecimals]);
 
   useEffect(() => {
     if (throttleRef.current) return;

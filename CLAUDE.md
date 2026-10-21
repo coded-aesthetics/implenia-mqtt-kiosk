@@ -777,6 +777,19 @@ so a granularity chosen wrong costs resolution on the platform and is undone by
 re-uploading or re-exporting the same session. Nothing in this area may start
 deleting or rewriting recorded rows.
 
+**The Datenstrom chart is a third way out, and obeys the same rule.**
+`GET /api/config/datenstrom/history` reads `mqtt_buffer` rather than
+`session_readings`, so it is outside everything above — but it reduces, and a
+chart is exactly where somebody will later think averaging is free. It goes
+through `reduceToGrid` with `bucketMs: 1000` and `maxHoldMs: 0`, so it inherits
+the last-value rule and its two witnesses (`Klemmdruck` bimodal at ~1650/~4200
+with a mean in a band the clamp cannot produce; `Tiefe` stepping by a whole
+Bohrrohr) rather than restating them. The zero hold is the one deliberate
+difference: an upload fills a gap because the platform reads an absent cell as
+an outage, and a chart must draw a gap as a gap — a stalled rig may not come out
+looking like a running one. Nothing about it touches what is recorded or
+uploaded; a granularity chosen wrong there costs a picture.
+
 What follows from the shape of the data, and must not be broken:
 
 - **Last value in the interval, never a mean.** The readings are mostly
