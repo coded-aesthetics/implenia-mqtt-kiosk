@@ -201,6 +201,7 @@ worth knowing are `--bundle` (install a specific release archive), `--no-vosk`
 |---|---|---|
 | System | Hostname, `Europe/Berlin`, `de_DE.UTF-8`, X + Openbox + Chromium + `unclutter`, `udiskie`, `avahi-daemon` | `--no-install-recommends` throughout: no print spooler, no mail agent, no desktop. `udiskie` mounts USB sticks under `/media`, which is where `USB_UPDATE_PATHS` looks — with no desktop environment nothing would mount them otherwise. `avahi` makes the machine reachable as `kiosk-g08.local` for service SSH |
 | WLAN | `network-manager`, a polkit rule for the kiosk user, a check for a wireless interface, and `--wifi-ssid` pre-seeded with `autoconnect` on | The MQTT box's access point is both the data source and the internet uplink on site, and the app sets it from **Einstellungen → WLAN** — as the kiosk user, not as root, hence polkit. Installing NetworkManager does not disturb the wired connection this run is using: Debian ships `[ifupdown] managed=false` and the installer puts the ethernet interface in `/etc/network/interfaces`, so only the wireless device is ever touched. The interface check is there to find a missing firmware blob **in the office** rather than on site |
+| WLAN, installed over Wi-Fi | Moves the wireless interface from `/etc/network/interfaces` to NetworkManager, keeping the SSID and password | The Debian installer writes whichever interface **the install itself used** into that file, and Debian's `[ifupdown] managed=false` keeps NetworkManager off anything named there. So a machine installed over Wi-Fi has the card, has NetworkManager, and still cannot change its WLAN from the screen. Nothing is torn down: removing the stanza does not drop a link ifupdown already brought up, so the run continues over the same Wi-Fi and the handover happens at the reboot this script already asks for. Only the shape the installer writes (`inet dhcp` + `wpa-ssid` + `wpa-psk`) is migrated — a static address or a `wpa-conf` carries more than a profile can be rebuilt from, and those are refused with a warning rather than guessed at. `scripts/test-wlan-migration.sh` covers it |
 | Kernel | `intel_idle.max_cstate=1` | Bay Trail hangs at random in deep C-states. A frozen screen on site is the failure this product exists to avoid, so the workaround goes on every machine rather than waiting for a report |
 | Swap | zram, 50% of RAM, zstd | 4 GB shared with Chromium. Compressed swap in RAM beats swapping to the disk the database is on |
 | Node | NodeSource, major 22, **npm 11 over it**, plus PM2 | Two separate pins. Node 22 because better-sqlite3 11.x ships no prebuild for Node 24, so Node 24 compiles it from source and that build aborts on teardown (`Assertion failed: (env) != nullptr`); 22 is the prebuild the project ships, and the major also has to match whatever built an offline dependency archive. npm 11 because Node 22's bundled npm 10.9 **cannot resolve this tree at all** — it dies with `Cannot read properties of null (reading 'edgesOut')`, which is what the Dependencies step looks like without the pin |
@@ -328,6 +329,29 @@ Before the machine leaves:
       a service laptop connects without anybody touching the screen
 - [ ] The update banner appears, or `curl localhost:3000/api/logs?module=updater`
       shows a successful check (a private repo needs the token in `.env`)
+
+### Installing over Wi-Fi
+
+Supported, and it costs one reboot. The installer pins whichever interface it
+used into `/etc/network/interfaces`, so a Wi-Fi install leaves the wireless
+device unmanaged and **Einstellungen → WLAN** reports that it is unavailable —
+accurately, but with nothing the technician can do from the screen.
+Provisioning detects this and migrates it; the WLAN screen works from the next
+boot onwards.
+
+Two things worth knowing before relying on it:
+
+- **It only migrates what the installer writes.** `iface <dev> inet dhcp` with
+  `wpa-ssid` and `wpa-psk`. A static address, a `wpa-conf` pointing at a
+  wpa_supplicant file, or an enterprise setup are refused with a warning
+  naming the manual steps — rebuilding those from guesswork is how a machine
+  comes back from its reboot with no network at all.
+- **The old file is kept** as `/etc/network/interfaces.bak-<timestamp>`. If the
+  machine comes back without network, restoring that file and rebooting puts it
+  back exactly as it was.
+
+A machine installed over a cable never goes through any of this: the wireless
+device was never in the file, so NetworkManager has it from the start.
 
 ## Sites with no internet
 

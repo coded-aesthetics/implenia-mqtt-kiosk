@@ -311,6 +311,106 @@ RULES
 
 # --- 2c. WLAN -------------------------------------------------------------
 
+#
+# Hand a wireless interface over from ifupdown to NetworkManager.
+#
+# **Nothing is torn down here, and that is the whole trick.** Removing the
+# stanza does not drop a connection ifupdown already brought up — the link and
+# the DHCP lease outlive the file entry, and only `ifdown` would end them. So
+# the profile is written, the stanza is removed, and the handover happens at
+# the reboot this script already asks for. The rest of the run keeps using the
+# live Wi-Fi, which matters because everything after this step — apt, the
+# release download, npm — needs the network, and on such a machine the Wi-Fi is
+# the only network there is.
+#
+# The alternative designs are both worse. Switching live (`ifdown`, edit,
+# reload) cuts the SSH session the technician is working over, so the remaining
+# steps never run and the machine is stranded half-migrated. Refusing without a
+# cable fails exactly the case this exists for: a site that had no cable is why
+# the install ran over Wi-Fi in the first place.
+#
+migrate_ifupdown_wifi() {
+  local dev="$1" file=/etc/network/interfaces
+
+  # `nmcli -t -f DEVICE,STATE` rather than the /sys glob: this is the question
+  # the kiosk's own capability check asks, and the two must agree.
+  local state=""
+  if command -v nmcli >/dev/null && systemctl is-active --quiet NetworkManager; then
+    state="$(nmcli -t -f DEVICE,STATE device status 2>/dev/null | awk -F: -v d="$dev" '$1==d {print $2}')"
+  fi
+
+  if [[ -n "$state" && "$state" != "unmanaged" ]]; then
+    ok "NetworkManager manages $dev (state: $state) — the WLAN screen works"
+    return
+  fi
+
+  # Every read of this file goes through sudo, not just the writes. The
+  # installer writes it 0600 when it holds a wpa-psk — which is exactly the
+  # case being migrated — so an unprivileged grep comes back empty and the
+  # function concludes the interface is not in the file at all, on the one
+  # machine it exists for. A kiosk whose file happens to be world-readable
+  # hides this completely.
+  if ! sudo grep -qE "^[[:space:]]*(iface|auto|allow-hotplug)[[:space:]]+$dev([[:space:]]|\$)" "$file" 2>/dev/null; then
+    # Unmanaged for some other reason — rfkill, a driver that never came up, or
+    # an explicit keyfile. Not something this function should guess at.
+    warn "NetworkManager reports $dev as '${state:-unknown}' and it is not in $file, so the WLAN screen will say it is unavailable. Check 'rfkill list' and 'nmcli device status'."
+    return
+  fi
+
+  # Only the shape the installer writes is migrated. A static address, a
+  # `wpa-conf` pointing at a wpa_supplicant file, or an enterprise setup all
+  # carry more than a profile can be rebuilt from here, and guessing at them is
+  # how a machine comes back from its reboot with no network.
+  local ssid psk
+  ssid="$(sudo awk -v d="$dev" '
+    $1=="iface" && $2==d { inblock=1; next }
+    inblock && /^[^[:space:]]/ { inblock=0 }
+    inblock && $1=="wpa-ssid" { $1=""; sub(/^[[:space:]]+/, ""); gsub(/^"|"$/, ""); print; exit }
+  ' "$file")"
+  psk="$(sudo awk -v d="$dev" '
+    $1=="iface" && $2==d { inblock=1; next }
+    inblock && /^[^[:space:]]/ { inblock=0 }
+    inblock && $1=="wpa-psk" { $1=""; sub(/^[[:space:]]+/, ""); gsub(/^"|"$/, ""); print; exit }
+  ' "$file")"
+
+  if [[ -z "$ssid" ]]; then
+    warn "The wireless interface $dev is configured in $file in a form this script will not migrate (no wpa-ssid — a static address, wpa-conf or an enterprise setup). The WLAN screen stays unavailable until $dev is removed from that file by hand and NetworkManager is given a profile for the network. See docs/kiosk-provisioning.md."
+    return
+  fi
+
+  # The profile first, while the old configuration is still the live one. If
+  # this fails, nothing has been changed and the machine keeps working exactly
+  # as it did.
+  sudo nmcli connection delete "$ssid" >/dev/null 2>&1 || true
+  local add=(nmcli connection add type wifi con-name "$ssid" ifname "$dev" ssid "$ssid"
+             connection.autoconnect yes connection.autoconnect-priority 10)
+  [[ -n "$psk" ]] && add+=(wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$psk")
+  if ! sudo "${add[@]}" >/dev/null 2>&1; then
+    warn "Could not create a NetworkManager profile for '$ssid', so $dev was left with ifupdown and the WLAN screen stays unavailable. $file is unchanged."
+    return
+  fi
+
+  # Then the file, with a backup beside it. The stanza is removed whole: the
+  # indented wpa-* lines belong to the `iface` line above them, and leaving
+  # them behind is a syntax error.
+  sudo cp "$file" "$file.bak-$(date +%Y%m%d%H%M%S)"
+  local cleaned
+  cleaned="$(sudo awk -v d="$dev" '
+    $1=="auto" && $2==d { next }
+    $1=="allow-hotplug" && $2==d { next }
+    $1=="iface" && $2==d { inblock=1; next }
+    inblock && /^[[:space:]]*$/ { inblock=0; print; next }
+    inblock && /^[[:space:]]/ { next }
+    { inblock=0; print }
+  ' "$file")"
+  printf '%s\n' "$cleaned" | sudo tee "$file" >/dev/null
+  printf '\n# %s is managed by NetworkManager, so the kiosk can set the WLAN from\n# Einstellungen -> WLAN. An entry here would make it unmanaged again.\n' "$dev" \
+    | sudo tee -a "$file" >/dev/null
+
+  NEEDS_REBOOT=1
+  ok "$dev moved from ifupdown to NetworkManager, WLAN '$ssid' kept (takes effect at the reboot; the connection stays up until then)"
+}
+
 wifi_access() {
   log "WLAN"
 
@@ -322,14 +422,25 @@ wifi_access() {
   # incidental: migrating the wired config mid-provisioning would cut the
   # network out from under the step that is running.
 
-  # Checked at the kernel level, not through nmcli: the point is to find out in
-  # the office whether this machine has a usable wireless device at all, and a
-  # missing firmware blob looks exactly like a missing card from up here.
-  if compgen -G "/sys/class/net/*/wireless" >/dev/null; then
-    ok "Wireless interface present: $(ls -d /sys/class/net/*/wireless | cut -d/ -f5 | tr '\n' ' ')"
-  else
+  # The kernel view first, because a missing firmware blob looks exactly like a
+  # missing card from NetworkManager's side and the message differs.
+  if ! compgen -G "/sys/class/net/*/wireless" >/dev/null; then
     warn "This machine reports no wireless interface, so the kiosk's WLAN screen will say it is unavailable and the machine will need a network cable on site. Check whether the WLAN is switched off in the BIOS, and whether the driver is missing its firmware: 'sudo dmesg | grep -i firmware'. Debian's non-free-firmware packages (firmware-iwlwifi, firmware-realtek, firmware-atheros) are the usual fix."
+    return
   fi
+
+  local wifi_dev
+  wifi_dev="$(ls -d /sys/class/net/*/wireless 2>/dev/null | head -1 | cut -d/ -f5)"
+
+  # Then whether it is usable, which is a different question and the one that
+  # matters. The kernel check only ever verified the *card*: a machine whose
+  # wireless interface is in /etc/network/interfaces — which is what the Debian
+  # installer writes when the install itself ran over Wi-Fi — has the card, has
+  # NetworkManager, and still cannot change its WLAN from the screen, because
+  # Debian's `[ifupdown] managed=false` keeps NetworkManager off any interface
+  # named in that file. Provisioning used to sign such a machine off with two
+  # green ticks and leave the screen able only to apologise.
+  migrate_ifupdown_wifi "$wifi_dev"
 
   # The server runs as this user and is not root, so changing a connection goes
   # through polkit. Granted explicitly rather than by adding the user to
@@ -338,7 +449,10 @@ wifi_access() {
   # described. `YES` rather than an auth prompt — there is nobody to type an
   # admin password on a kiosk, and a prompt no one can answer is a dead end.
   local rules=/etc/polkit-1/rules.d/50-kiosk-network.rules
-  if [[ -f "$rules" ]] && grep -q "\"$USER\"" "$rules"; then
+  # Elevated, like every other read of a root-only path here: polkit's rules.d
+  # is mode 0700, so an unprivileged test always says "absent" and this step
+  # silently rewrote the rule on every run while reporting it as newly created.
+  if sudo test -f "$rules" && sudo grep -q "\"$USER\"" "$rules"; then
     skip "polkit rule for $USER already in place"
   else
     # polkitd reads this directory but does not ship it: a Debian 13 kiosk has
@@ -1075,4 +1189,8 @@ main() {
   summary
 }
 
-main "$@"
+# Sourced rather than executed: define the functions and stop. That is what lets
+# the awk in migrate_ifupdown_wifi be tested against real /etc/network/interfaces
+# fixtures instead of eyeballed — it rewrites the file a machine needs to reach
+# the network at all.
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
