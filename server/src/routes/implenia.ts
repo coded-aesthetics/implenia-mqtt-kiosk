@@ -6,7 +6,7 @@ import {
 } from '../herstellen-sensors.js';
 import {
   getMeta, setMeta, deleteMeta, setElementVorgaben, getElementVorgaben,
-  getCompletedElements,
+  getCompletedElements, getLastSessionForElement,
 } from '../db.js';
 import { validateShiftImport, resolveShiftAssignment } from '../shift-import.js';
 import {
@@ -18,6 +18,7 @@ import {
   writeElementCompletion,
 } from '../element-completion.js';
 import { withElementDevice } from '../element-device.js';
+import { isOperatingMode } from '../ingestion.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('implenia');
@@ -165,6 +166,42 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
       return reply.status(404).send({ error: 'Keine Vorgaben für dieses Element gespeichert.' });
     }
     return reply.send({ vorgaben });
+  });
+
+  /**
+   * What this element was last doing here — the screen to reopen it on.
+   *
+   * Two answers in one, both read off the element's own last session:
+   *
+   * — **`bekannt`**: has this kiosk ever recorded this element? An element it
+   *   has not is one nobody has stood in front of yet, and opening it is the
+   *   moment to aim the rig. One it has is being resumed, and the operator
+   *   goes to the alignment screen themselves if the machine was moved. That
+   *   is the whole condition behind the `#/ausrichten/<name>` redirect.
+   * — **`mode`**: the phase that session was in, so a pillar left in Auffüllen
+   *   reopens on Auffüllen rather than on Bohren.
+   *
+   * Read-only and local — no platform call, so it answers on a kiosk that has
+   * been offline for days, which is exactly when a pillar gets resumed. 404 is
+   * not used: "this element has no session here" is an answer, not a missing
+   * resource, and the screen needs it to decide.
+   */
+  app.get('/api/elements/:elementName/last-session', async (request, reply) => {
+    const { elementName } = request.params as { elementName: string };
+    const session = getLastSessionForElement(elementName);
+    if (!session) {
+      return reply.send({ bekannt: false, mode: null, startedAt: null, status: null });
+    }
+    const mode = session.operating_mode;
+    return reply.send({
+      bekannt: true,
+      // An unrecognised value is dropped rather than passed on: the column has
+      // carried a default since the migration that added it, and a screen
+      // chosen from a mode nothing can render is worse than the default one.
+      mode: mode && isOperatingMode(mode) ? mode : null,
+      startedAt: session.started_at,
+      status: session.status,
+    });
   });
 
   /*

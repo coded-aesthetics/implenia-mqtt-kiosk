@@ -910,6 +910,43 @@ The slot appears only where `Vertikalneigung ≠ 0` — a plumb hole has no dire
 
 **Except on the screen itself**, where the slot is offered whatever the Vorgabe says. Without that exception an alignment URL opened for a plumb element (a typed address, a stale bookmark, a reload while the Vorgabe is still loading) is a screen with no exit at all.
 
+### Opening a tilted element lands here
+
+Aiming the rig is the first thing that happens at such an element, so it is the first thing on screen: tapping it in the element list opens `#/ausrichten/<element>` rather than the drilling screen with a stepper slot nobody has noticed. The way on is the stepper's Bohren slot, one tap, and the recording starts from there as before — nothing here gates it.
+
+**The element screen has two route names, and that is what keeps the redirect from being a trap.** Both render the same thing:
+
+| route | means | redirected? |
+| --- | --- | --- |
+| `#/element/<name>` | "open this element" — the element list, a resumed pillar, `öffne P-01` | yes, when it has to be aimed |
+| `#/bohren/<name>` | the drilling screen, directly — leaving the alignment screen, the geology sign-off's return, `P-01 herstellen` | never |
+
+Carrying it in the URL rather than in an "already aligned" flag is what makes it survive a reload and a PM2 restart — the same reasoning as `?beenden=1` on the geology route. An in-memory flag would put the operator back on the dials every time the kiosk restarted.
+
+**A running recording is never redirected.** The rig is in the hole and its angles are no longer something to set; a worker who walks back to the list mid-session and taps the pillar again means "show me what it is doing".
+
+**Neither is an element this kiosk has already recorded.** It is being resumed, and it reopens where it was left (below). The machine may well have been moved since and need aiming again — but that is something the operator knows and the kiosk does not, so they go there themselves, one tap on the stepper. Guessing the other way puts two dials in front of every operator appending a few metres to a pillar they drilled an hour ago.
+
+The condition is "this kiosk has a session for this element", not "it has been aligned": nothing records the latter, and an element that was aimed but never recorded is still the untouched case the redirect exists for.
+
+A Vorgabe that has not arrived answers "no", and so does a session lookup that has not answered — the redirect waits for both rather than drawing the drilling screen and taking it back a moment later. One that never arrives (offline, nothing cached) opens exactly as it did before. Holding the screen back on a request is the one thing this kiosk does not do; this lookup is the kiosk's own SQLite, so the wait is a few milliseconds and happens offline too.
+
+### Reopening an element where it was left
+
+`GET /api/elements/<name>/last-session` answers both halves of that, off the element's **own** last session — never the kiosk's most recent one, which belongs to whatever was recorded since:
+
+```
+{ "bekannt": true, "mode": "auffuellen", "startedAt": …, "status": "uploaded" }
+```
+
+`bekannt` is the redirect condition above. `mode` is the phase that session was in, so a pillar left in Auffüllen reopens on the Auffüllen screen rather than on Bohren, with the stepper showing `[ ‹ Einbauen ][ Auffüllen ]`.
+
+**Before a recording exists, that phase is the screen's own.** There is nothing to write it to — `operating_mode` is a column on a session, and a pillar being looked at has none — so the stepper moves it locally instead of asking the server, which would be asking it to write a mode onto somebody else's session. Stepping back through the phases to Bohren is also how the Ausrichten slot comes back, since it sits before Bohren in the sequence.
+
+**It travels to the server exactly once, with the start.** `POST /api/recording/start` takes an optional `operatingMode` and opens the new session in it, so the screen the operator tapped start on is the phase the readings are stamped with. Without that the session would record `Status = 0` under a screen saying Auffüllen, and implenia-web's Herstellprotokoll — which segments every KPI on that value — would report the filling as drilling, from an upload that reports success. An unrecognised or absent value opens in `bohren`, so a caller that does not know about this (the voice command, a second tab on an older bundle) behaves exactly as it did.
+
+The phase is written onto the session **row**, not handed through `ingestion.pendingMode`: `operating_mode` is `NOT NULL DEFAULT 'bohren'`, so a fresh row already carries a mode and `startRecording` reads that first — which is also why `pendingMode`, sitting behind it, only ever reaches the reported state. Writing the row persists the phase immediately, so a PM2 restart one reading in resumes into it.
+
 ### The two dials
 
 **Horizontalneigung** is a full circle, 0° at the top, clockwise. The ticks stay neutral and a pointer marks the Ist, because a filled arc from the minimum is meaningless on a compass. The Soll sits on the rim as a green triangle on its tolerance arc — "aligned" is a width on screen rather than a number to compare against — with the Ist pointer one ring further out, so the two marks are neighbours. Between them runs the **Abweichungskeil**: an arc from Ist to Soll, always the short way round, with an arrowhead at the Soll end. That is what makes the dial an instruction rather than an instrument. The short way matters: a Soll of 2° at an Ist of 358° is 4° to the right, not 356° to the left.

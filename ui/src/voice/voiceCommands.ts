@@ -215,7 +215,14 @@ export function buildCommands(): VoiceCommand[] {
       precondition: (ctx) => !ctx.recordingState.active,
       preconditionHint: 'Aufzeichnung läuft bereits',
       execute: async (_ctx: VoiceContext, params: Record<string, string>) => {
-        navigate(`element/${encodeURIComponent(params.element)}`);
+        /*
+         * `bohren/`, not `element/`: this command says drill, so it goes to the
+         * drilling screen directly. `element/<name>` is the route App may send
+         * on to the alignment screen for a tilted element, and a hands-free
+         * operator who asked for a recording would have landed on two dials
+         * while it ran.
+         */
+        navigate(`bohren/${encodeURIComponent(params.element)}`);
         await fetch('/api/recording/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

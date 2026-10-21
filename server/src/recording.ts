@@ -32,6 +32,8 @@ import {
   markSessionReadingsUploaded,
   markSessionReadingsFailed,
   resetFailedReadings,
+  setDrillingEndedAt,
+  setOperatingModeRow,
   updateSessionStatus,
   type Session,
 } from './db.js';
@@ -140,7 +142,28 @@ const SENSOR_TYPE_MAP: Record<string, string> = {
 
 // --- Recording orchestration ---
 
-export async function beginRecording(elementName: string): Promise<{ sessionId: number }> {
+export async function beginRecording(
+  elementName: string,
+  /**
+   * The phase this session opens in. Defaults to `bohren`.
+   *
+   * A resumed element reopens on the phase its last session was in, and the
+   * operator may step it before tapping start — so the screen they tapped on
+   * is the phase the readings have to be stamped with. `startRecording`
+   * writes the opening `Status` reading from the session's mode, and
+   * implenia-web segments every Injektionsbohren KPI on that value (see
+   * "Status numbering" in CLAUDE.md), so a screen saying Auffüllen over a
+   * session recording `Status = 0` reports the filling as drilling.
+   *
+   * Written onto the session row rather than handed to `startRecording`,
+   * because `operating_mode` is `NOT NULL DEFAULT 'bohren'`: a fresh row
+   * already *has* a stored mode, which is what `startRecording` reads first
+   * (and why `ingestion.pendingMode`, which sits behind it, only ever reaches
+   * the reported state). Writing the row also persists the phase immediately,
+   * so a restart one reading in resumes into it rather than into Bohren.
+   */
+  openingMode?: OperatingMode,
+): Promise<{ sessionId: number }> {
   const existing = getActiveSession();
   if (existing) {
     throw new Error(`Aufzeichnung ${existing.id} für „${existing.element_name}" läuft bereits.`);
@@ -191,6 +214,33 @@ export async function beginRecording(elementName: string): Promise<{ sessionId: 
   }
 
   const sessionId = createSession(elementName, JSON.stringify(sensorMapJson));
+  if (openingMode && openingMode !== 'bohren') {
+    setOperatingModeRow(sessionId, openingMode);
+    /*
+     * A session that opens past `bohren` has already finished drilling, so its
+     * geology window is closed from the first reading on.
+     *
+     * `drilling_ended_at` is otherwise stamped by the step out of `bohren`
+     * (`PUT /api/recording/mode`), which a session resumed straight into
+     * Auffüllen never makes. Without it every reading such a session holds
+     * counts as drilling data — `session_readings.phase` is only ever `bohren`
+     * or `rohrwechsel`, never the operating mode — so `drilledDepth` is the
+     * whole hole, `commitDefaultGeology` at the stop finds `gebohrt`, and the
+     * element gets a second, entirely back-filled Schichtauftrag profile dated
+     * against the retraction, over the one the drilling session signed off.
+     * `alignBoundaries` catches a *pure* retraction, every boundary being
+     * shallower than the first reading and going to `aboveHole`, which is why
+     * this looks harmless; one reading before the rig starts pulling is enough
+     * to defeat that and write the fabricated layers. It uploads cleanly, into
+     * a Herstellprotokoll that is signed and archived.
+     *
+     * Stamped at the session's own start, which leaves the window empty: this
+     * session drilled nothing, `gebohrt` is false, and nothing is committed. A
+     * step back into `bohren` clears it again, so an operator who does resume
+     * drilling gets their window back.
+     */
+    setDrillingEndedAt(sessionId, Date.now());
+  }
   ingestion.startRecording(sessionId, sensorMap);
   attachLogSensor(sessionId, sensorMap);
 

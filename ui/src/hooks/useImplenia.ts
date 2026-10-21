@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import type { OperatingMode } from './useWebSocket';
 
 function friendlyApiError(status: number, _body: string): string {
   if (status === 401 || status === 403) {
@@ -563,4 +564,78 @@ export function useVerfahrenSensors(verfahren: string | null): VerfahrenSensorsS
     : antwort.sensoren === null ? 'fehler' : 'ok';
 
   return { sensoren: passend ? antwort.sensoren : null, status, neuLaden };
+}
+
+// --- What an element was last doing here ---
+
+/** `laedt` until the kiosk has answered — see `ElementRueckkehr.status`. */
+export type ElementRueckkehrStatus = 'laedt' | 'ok' | 'fehler';
+
+export interface ElementRueckkehr {
+  status: ElementRueckkehrStatus;
+  /** Has this kiosk ever recorded this element? */
+  bekannt: boolean;
+  /** The phase its last session was in, or null. */
+  modus: OperatingMode | null;
+}
+
+const MODI: readonly string[] = ['bohren', 'austausch', 'einbauen', 'auffuellen'];
+
+/**
+ * Reopen an element where it was left.
+ *
+ * Two things come out of the element's own last session, and the screen needs
+ * both before it can decide anything:
+ *
+ * — **`bekannt`** decides whether opening the element jumps to the alignment
+ *   screen. An element this kiosk has never recorded is one nobody has stood
+ *   in front of; a resumed one is not, and the operator goes to the dials
+ *   themselves if the machine was moved.
+ * — **`modus`** decides which phase screen is drawn, so a pillar left in
+ *   Auffüllen reopens on Auffüllen.
+ *
+ * **`laedt` is not `bekannt: false`.** The redirect waits for this, which is
+ * what keeps a resumed element from showing the drilling screen and then
+ * jumping to the dials a moment later. The request is local — the kiosk's own
+ * SQLite, no platform call — so the wait is a few milliseconds and is there
+ * even when the site has been offline for days.
+ *
+ * A failure answers `bekannt: true`: it is the conservative direction. Not
+ * knowing whether an element has been recorded must not drag an operator onto
+ * a screen they did not ask for; leaving them on the drilling screen is what
+ * the kiosk did before any of this existed.
+ */
+export function useElementRueckkehr(elementName: string | null): ElementRueckkehr {
+  const [antwort, setAntwort] = useState<{ name: string; wert: ElementRueckkehr } | null>(null);
+
+  useEffect(() => {
+    if (!elementName) return;
+    let aktuell = true;
+    fetch(`/api/elements/${encodeURIComponent(elementName)}/last-session`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data) => {
+        if (!aktuell) return;
+        const modus = typeof data.mode === 'string' && MODI.includes(data.mode)
+          ? data.mode as OperatingMode
+          : null;
+        setAntwort({
+          name: elementName,
+          wert: { status: 'ok', bekannt: data.bekannt === true, modus },
+        });
+      })
+      .catch(() => {
+        if (!aktuell) return;
+        setAntwort({ name: elementName, wert: { status: 'fehler', bekannt: true, modus: null } });
+      });
+    return () => { aktuell = false; };
+  }, [elementName]);
+
+  // Keyed on the name, so switching elements reads as "loading" rather than
+  // handing the new element the previous one's phase for a frame.
+  if (!elementName) return { status: 'ok', bekannt: false, modus: null };
+  if (!antwort || antwort.name !== elementName) return { status: 'laedt', bekannt: false, modus: null };
+  return antwort.wert;
 }

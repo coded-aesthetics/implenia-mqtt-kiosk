@@ -79,6 +79,21 @@ export function parseRoute(hash: string): Route {
     return { page: 'ausrichten', params: { name: decodeURIComponent(ausrichtenMatch[1]) }, query };
   }
 
+  /**
+   * The element's own screen, under two names.
+   *
+   * They render the same thing, and the difference is one of intent:
+   * `element/<name>` means "open this element" and is what the element list,
+   * the voice navigation and a resumed pillar use — App may send it on to
+   * `ausrichten/<name>` when the element has to be aimed first.
+   * `bohren/<name>` means the drilling screen, directly, and is never
+   * redirected: it is where the alignment screen's own slot leads, where the
+   * geology sign-off returns to, and what a spoken "herstellen" opens.
+   *
+   * Carrying that in the URL rather than in a "has been aligned" flag is what
+   * makes it survive a reload and a PM2 restart — same reasoning as
+   * `?beenden=1` on the geology route.
+   */
   const bohrenMatch = path.match(/^bohren\/(.+)$/);
   if (bohrenMatch) {
     return { page: 'bohren', params: { name: decodeURIComponent(bohrenMatch[1]) }, query };

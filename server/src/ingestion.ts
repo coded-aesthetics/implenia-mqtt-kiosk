@@ -256,8 +256,7 @@ export class DataIngestion extends EventEmitter {
       if (this.activeSession) {
         this.setOperatingMode(mode);
       } else {
-        this.pendingMode = mode;
-        this.emit('operating-mode', mode);
+        this.setPendingMode(mode);
       }
       return;
     }
@@ -488,6 +487,24 @@ export class DataIngestion extends EventEmitter {
   /** What the rig is doing, or null when nothing is being recorded. */
   get operatingMode(): OperatingMode | null {
     return this.activeSession?.operatingMode ?? this.pendingMode;
+  }
+
+  /**
+   * The phase the next recording will open in.
+   *
+   * Only meaningful with no session running — `startRecording` consumes it,
+   * clears it and writes it as the session's opening `Status` reading. It
+   * affects nothing else: clipping and every phase decision read the *active*
+   * session's mode, so a pending mode left over from an element the operator
+   * walked away from cannot change how a reading is handled.
+   *
+   * Two callers: a replay file's `kiosk/operating-mode` control topic, and the
+   * start route carrying the phase a resumed element reopened on.
+   */
+  setPendingMode(mode: OperatingMode): void {
+    if (this.activeSession) return;
+    this.pendingMode = mode;
+    this.emit('operating-mode', mode);
   }
 
   /**
