@@ -1286,9 +1286,47 @@ chrome.exe --kiosk --app=http://localhost:3000 --disable-infobars --noerrdialogs
 5. The archive is extracted to a staging directory
 6. A health check runs against the new version
 7. PM2 graceful reload is triggered; an open recording session is re-attached on boot
-8. The UI service worker detects the new build
+8. The browser reloads itself — the UI sets a flag on `update-applying` and reloads when the WebSocket comes back (`useWebSocket.ts`)
 
 **USB updates**: the server also scans `USB_UPDATE_PATHS` for `.tar.gz` bundles. Upload manually via the config UI.
+
+### The reload has to land on the new build, and there is no keyboard
+
+Step 8 used to be able to come up on the *old* UI. The reload is a navigation,
+and a navigation is answered by whichever service worker is still in control —
+the outgoing one, which had `index.html` in its precache and handed back the
+shell it already had, pointing at the old hashed bundle. The new worker
+installed during that page's life and claimed control a moment later, so the
+*next* navigation would have been fine. A kiosk never makes one. The result was
+a machine reporting the new version in its header (that comes from the
+restarted server) while running the old UI, with the only recovery being F5 —
+on a touchscreen, in gloves, with no keyboard on site.
+
+It was a race rather than a certainty, which is why it survived: the new worker
+often won and served the navigation itself. Two changes close it, in
+`ui/vite.config.ts` and `ui/src/sw-update.ts`:
+
+- **The shell is not precached.** `globPatterns` drops `html` and navigations
+  go `NetworkFirst`, so a reload fetches `index.html` from the server. The
+  trade is small here — the UI is served by a server on the *same machine*, and
+  if that server is not answering the kiosk is dead anyway, so a precached
+  shell could only ever render a frozen app. The hashed assets stay precached;
+  being content-addressed, they cannot go stale.
+- **The page reloads itself when a new worker claims control.** It covers the
+  navigation that was already served before the handover. Guarded twice: only
+  when a worker was *already* in control as the page loaded (otherwise the
+  first-ever visit reloads itself, since `clientsClaim` fires on the initial
+  install), and never twice inside 30 s — a reload loop on a kiosk is far worse
+  than a stale clock, because a stale UI keeps recording and uploading while a
+  looping one records nothing.
+
+**The release that introduces this is itself delivered by the old worker**, so
+it lands stale on every kiosk already in the field — measured, not assumed.
+That is harmless only because the change is invisible: the stale bundle renders
+exactly like the new one. **A release carrying this fix must therefore not also
+carry a visible UI change**, which would not appear until the release after it.
+Every release from the next one on arrives correctly with nobody touching the
+machine.
 
 ### Creating a Release
 
