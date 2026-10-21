@@ -27,6 +27,13 @@ interface Props {
   hasApiKey: boolean;
   currentPage: string;
   configSection?: string;
+  /**
+   * The channel open on the Datenstrom screen, so the back button can return to
+   * the stream instead of leaving it. In the URL and not in component state for
+   * the same reason the route carries it: a reload must not change what a
+   * button does.
+   */
+  datenstromTopic?: string;
   pageTitle?: string;
   voiceSupported?: boolean;
   isListening?: boolean;
@@ -83,7 +90,8 @@ interface Props {
   updateFailure?: string | null;
 }
 
-export function Header({ connectivity, apiHealth = 'unknown', sourceHealth = 'unknown', sourceType = 'mqtt', hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, recording = false, operatingMode, onModeChange, hidePhaseStepper, ausrichten, updateAvailable = null, updateApplying = false, updateSource = null, updateFailure = null }: Props) {
+export function Header({ connectivity, apiHealth = 'unknown', sourceHealth = 'unknown', sourceType = 'mqtt', hasApiKey, currentPage, configSection,
+  datenstromTopic, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, recording = false, operatingMode, onModeChange, hidePhaseStepper, ausrichten, updateAvailable = null, updateApplying = false, updateSource = null, updateFailure = null }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -130,12 +138,14 @@ export function Header({ connectivity, apiHealth = 'unknown', sourceHealth = 'un
     <div style={styles.bar}>
       {/* Left: logo + optional back button */}
       <div style={styles.leftSection}>
-        {(currentPage === 'element' || currentPage === 'bohren' || currentPage === 'comments' || !!configSection || currentPage === 'sensors' || currentPage === 'calibration' || currentPage === 'rohrverlaengerung') && (
+        {(currentPage === 'element' || currentPage === 'bohren' || currentPage === 'comments' || !!configSection || currentPage === 'sensors' || currentPage === 'datenstrom' || currentPage === 'rohrverlaengerung') && (
           <button
             onClick={() => {
               if (configSection) navigate('config');
               else if (currentPage === 'sensors') navigate('config/datenquelle');
-              else if (currentPage === 'calibration' || currentPage === 'rohrverlaengerung') navigate('config/messwerte');
+              // A channel's detail goes back to the stream, not out of it.
+              else if (currentPage === 'datenstrom') navigate(datenstromTopic ? 'datenstrom' : 'config/datenquelle');
+              else if (currentPage === 'rohrverlaengerung') navigate('config/messwerte');
               else navigate('/');
             }}
             style={styles.backButton}

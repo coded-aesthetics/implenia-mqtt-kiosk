@@ -146,3 +146,39 @@ describe('ausrichten route', () => {
     expect(parseRoute('#/ausrichtend/P-01').page).toBe('home');
   });
 });
+
+describe('Datenstrom', () => {
+  it('parses the overview', () => {
+    expect(parseRoute('#/datenstrom')).toMatchObject({ page: 'datenstrom', params: {} });
+  });
+
+  it('parses an encoded topic back to the topic', () => {
+    const topic = 'Bohrgeraet/Tiefe';
+    const route = parseRoute(`#/datenstrom/${encodeURIComponent(topic)}`);
+    expect(route.page).toBe('datenstrom');
+    expect(route.params.topic).toBe(topic);
+  });
+
+  it('survives a sensor name containing a slash and brackets', () => {
+    const topic = 'hdi/Drehzahl [1/min]';
+    expect(parseRoute(`#/datenstrom/${encodeURIComponent(topic)}`).params.topic).toBe(topic);
+  });
+
+  it('does not throw on a malformed escape', () => {
+    // A literal '%' is one. parseRoute runs inside getSnapshot, so a throw
+    // here blanks the whole app rather than failing one route.
+    expect(() => parseRoute('#/datenstrom/Druck 50%')).not.toThrow();
+    expect(parseRoute('#/datenstrom/Druck 50%').params.topic).toBe('Druck 50%');
+  });
+
+  it('keeps the old Kalibrierung path working', () => {
+    expect(parseRoute('#/kalibrierung')).toMatchObject({ page: 'datenstrom', params: {} });
+  });
+});
+
+describe('element names that would have thrown', () => {
+  it('decodes a name with a literal percent instead of crashing', () => {
+    expect(() => parseRoute('#/element/P-50%')).not.toThrow();
+    expect(parseRoute('#/element/P-50%').params.name).toBe('P-50%');
+  });
+});

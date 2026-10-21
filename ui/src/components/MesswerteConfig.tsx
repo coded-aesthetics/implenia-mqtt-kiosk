@@ -4,19 +4,20 @@ import { configStyles as styles } from './configStyles';
 export function MesswerteConfig() {
   return (
     <div style={styles.container}>
-      {/* Kalibrierung link */}
+      {/* Datenstrom — where calibration now lives, per channel */}
       <div style={styles.cardWrapper}>
         <div style={styles.card}>
           <div style={styles.statusRow}>
-            <span style={styles.label}>Kalibrierung</span>
+            <span style={styles.label}>Datenstrom &amp; Kalibrierung</span>
           </div>
           <div style={styles.envHint}>
-            Faktor und Versatz je Sensor, wenn ein Messwert nicht in der Einheit
-            ankommt, in der er sein sollte. Gehört eigentlich ans Gerät — hier für
-            Geräte, an denen das gerade nicht geht.
+            Welche Topics ankommen, welchen Sensor jedes bedient und was es
+            gerade meldet. Je Kanal mit Verlauf und mit Faktor und Versatz,
+            falls ein Messwert nicht in der Einheit ankommt, in der er sein
+            sollte.
           </div>
-          <button onClick={() => navigate('kalibrierung')} style={styles.presetButtonActive}>
-            Kalibrierung öffnen
+          <button onClick={() => navigate('datenstrom')} style={styles.presetButtonActive}>
+            Datenstrom öffnen
           </button>
         </div>
       </div>

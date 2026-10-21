@@ -18,6 +18,7 @@ import { registerMqttConfigRoutes } from './config-mqtt.js';
 import { registerRohrwechselConfigRoutes } from './config-rohrwechsel.js';
 import { registerReductionConfigRoutes } from './config-reduction.js';
 import { registerCalibrationRoutes } from './config-calibration.js';
+import { registerDatenstromRoutes } from './config-datenstrom.js';
 import { registerTopicOverrideRoutes } from './config-topics.js';
 import { registerNetworkConfigRoutes } from './config-network.js';
 
@@ -233,6 +234,7 @@ export function registerConfigRoutes(app: FastifyInstance): void {
   registerRohrwechselConfigRoutes(app);
   registerReductionConfigRoutes(app);
   registerCalibrationRoutes(app);
+  registerDatenstromRoutes(app);
   registerTopicOverrideRoutes(app);
   registerNetworkConfigRoutes(app);
 }
