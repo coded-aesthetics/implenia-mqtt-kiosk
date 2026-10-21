@@ -279,13 +279,25 @@ is left after the step's continue button rather than the whole of `main`.
 
 `provision-kiosk.sh` installs `network-manager` and writes a polkit rule
 (`/etc/polkit-1/rules.d/50-kiosk-network.rules`) letting the kiosk user change
-connections — the server is not root. Installing it does not disturb the wired
-connection the provisioning run is using: Debian ships `[ifupdown]
-managed=false`, and the installer puts the ethernet interface in
-`/etc/network/interfaces`, so NetworkManager only ever touches the wireless
+connections and make the radio scan — the server is not root. Installing it
+does not disturb the wired connection the provisioning run is using: Debian
+ships `[ifupdown] managed=false`, and the installer puts the ethernet interface
+in `/etc/network/interfaces`, so NetworkManager only ever touches the wireless
 device. The step also checks for a wireless interface and warns if there is
 none, which is where a missing firmware blob shows up — in the office, not on
 site.
+
+**Scanning is a permission of its own, and not having it is silent.** The
+server runs under PM2 with no login session at all, which is the subject polkit
+is least generous to: `org.freedesktop.NetworkManager.wifi.scan` defaults to
+`auth_admin` there, and `nmcli device wifi list --rescan yes` swallows the
+refusal — exit 0, empty stderr, NetworkManager's cache printed as if it were
+fresh. The screen then lists the office while the box sits next to the kiosk.
+The rule grants the action, `scan()` asks for the rescan in its own call so the
+exit code can be logged (`GET /api/logs?module=network`), and the rule file is
+compared in full on every provisioning run — the old guard only asked whether a
+rule for this user existed, which would have skipped the fix on every machine
+that already had one.
 
 **An interface in `/etc/network/interfaces` is unmanaged, and that is the one
 state that looks like success.** The Debian installer writes whichever

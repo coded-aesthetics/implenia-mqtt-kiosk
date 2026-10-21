@@ -449,29 +449,56 @@ wifi_access() {
   # described. `YES` rather than an auth prompt — there is nobody to type an
   # admin password on a kiosk, and a prompt no one can answer is a dead end.
   local rules=/etc/polkit-1/rules.d/50-kiosk-network.rules
-  # Elevated, like every other read of a root-only path here: polkit's rules.d
-  # is mode 0700, so an unprivileged test always says "absent" and this step
-  # silently rewrote the rule on every run while reporting it as newly created.
-  if sudo test -f "$rules" && sudo grep -q "\"$USER\"" "$rules"; then
-    skip "polkit rule for $USER already in place"
-  else
-    # polkitd reads this directory but does not ship it: a Debian 13 kiosk has
-    # no /etc/polkit-1/rules.d until something creates one, and `tee` cannot
-    # write into a directory that is not there.
-    sudo mkdir -p "$(dirname "$rules")"
-    sudo tee "$rules" >/dev/null <<RULES
+  # Every action the server needs, in one place.
+  #
+  # `wifi.scan` is the one that is easy to leave out and silent when it is:
+  # polkit's default for it is `auth_admin` for a subject with no login session,
+  # which is exactly what a PM2-started server is, and `nmcli device wifi list
+  # --rescan yes` *swallows* the refusal — exit 0, empty stderr, NetworkManager's
+  # cache printed as if it were fresh. The WLAN screen then lists whatever the
+  # machine last happened to see, with the box 30 cm away and absent from it.
+  # Being in `netdev` does not help; that was checked on a kiosk that was.
+  local nm_actions=(
+    org.freedesktop.NetworkManager.settings.modify.system
+    org.freedesktop.NetworkManager.network-control
+    org.freedesktop.NetworkManager.enable-disable-wifi
+    org.freedesktop.NetworkManager.wifi.scan
+  )
+  local rule_body
+  rule_body="$(printf '    "%s",\n' "${nm_actions[@]}" | sed '$ s/,$//')"
+  local rule_text
+  rule_text="$(cat <<RULES
 // The kiosk app sets this machine's WLAN from its own settings screen
 // (Einstellungen -> WLAN). The server runs as $USER, not as root.
+//
+// Written by scripts/provision-kiosk.sh. Edit it there, not here: this file is
+// compared against what that script would write and replaced when it differs.
 polkit.addRule(function(action, subject) {
-  if (subject.user == "$USER" && (
-        action.id == "org.freedesktop.NetworkManager.settings.modify.system" ||
-        action.id == "org.freedesktop.NetworkManager.network-control" ||
-        action.id == "org.freedesktop.NetworkManager.enable-disable-wifi")) {
+  var allowed = [
+$rule_body
+  ];
+  if (subject.user == "$USER" && allowed.indexOf(action.id) >= 0) {
     return polkit.Result.YES;
   }
 });
 RULES
-    ok "polkit: $USER may change WLAN settings"
+)"
+  # Compared in full rather than "does a rule for this user exist", which is
+  # what the first version asked. Adding an action to the list above would then
+  # have been skipped as "already in place" on every machine that already had
+  # the old rule — forever, and without a symptom on the screen. Elevated like
+  # every other read of a root-only path here: rules.d is mode 0700, so an
+  # unprivileged test always says "absent".
+  if sudo test -f "$rules" && [[ "$(sudo cat "$rules")" == "$rule_text" ]]; then
+    skip "polkit rule for $USER already in place"
+  else
+    # polkitd reads this directory but does not ship it: a Debian 13 kiosk has
+    # no /etc/polkit-1/rules.d until something creates one, and `tee` cannot
+    # write into a directory that is not there. polkitd watches the directory,
+    # so the new rule takes effect without a restart.
+    sudo mkdir -p "$(dirname "$rules")"
+    printf '%s\n' "$rule_text" | sudo tee "$rules" >/dev/null
+    ok "polkit: $USER may change WLAN settings and scan for networks"
   fi
 
   # Pre-seeding is the normal case, and the screen is the recovery path: a

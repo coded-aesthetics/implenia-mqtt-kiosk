@@ -495,12 +495,36 @@ export class LocalNetwork implements NetworkController {
   /**
    * Visible networks, strongest first.
    *
-   * `--rescan yes` on purpose: the cached list is whatever the machine happened
-   * to see last, which on a kiosk carried in from the office is the office.
+   * The radio is made to scan on purpose: the cached list is whatever the
+   * machine happened to see last, which on a kiosk carried in from the office
+   * is the office. Which makes a scan the kiosk is *not allowed* to run the
+   * failure to care about, and it is the quiet one — see below.
    */
   async scan(): Promise<WifiNetwork[]> {
     const capability = await this.capability();
     if (!capability.available) return [];
+
+    // The rescan is asked for in its own call, which looks redundant beside the
+    // `--rescan yes` below and is not: that flag *swallows* a refused scan.
+    // polkit's default for `org.freedesktop.NetworkManager.wifi.scan` is
+    // `auth_admin` for a subject with no login session — which is exactly what
+    // a PM2-started server is — so on a kiosk whose polkit rule predates that
+    // action the radio never scans, and nmcli still exits 0 with an empty
+    // stderr and prints NetworkManager's cache as if it were fresh. A kiosk
+    // carried in from the office then offers the office's networks while the
+    // box sits 30 cm away, absent from the list, with nothing anywhere saying
+    // why; it cost a field debugging session on 2026-10-21. `device wifi
+    // rescan` reports the refusal, and `GET /api/logs?module=network` is where
+    // a technician finds it.
+    //
+    // A failure is logged and otherwise ignored on purpose: a stale list beats
+    // no list, and "scanning not allowed while already scanning" — a second tap
+    // on the scan button — fails exactly the same way.
+    const rescan = await this.nmcli(['device', 'wifi', 'rescan']);
+    if (rescan.code !== 0) {
+      log.warn('Wi-Fi rescan was refused (%d): %s', rescan.code, rescan.stderr.trim());
+    }
+
     const result = await this.nmcli([
       '-t', '-f', 'SSID,SIGNAL,SECURITY,IN-USE', 'device', 'wifi', 'list', '--rescan', 'yes',
     ]);
