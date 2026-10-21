@@ -143,8 +143,9 @@ export function Header({ connectivity, apiHealth = 'unknown', sourceHealth = 'un
             onClick={() => {
               if (configSection) navigate('config');
               else if (currentPage === 'sensors') navigate('config/datenquelle');
-              // A channel's detail goes back to the stream, not out of it.
-              else if (currentPage === 'datenstrom') navigate(datenstromTopic ? 'datenstrom' : 'config/datenquelle');
+              // A channel's detail goes back to the stream, not out of it; the
+              // stream goes back to Messwerte, which is the card that opens it.
+              else if (currentPage === 'datenstrom') navigate(datenstromTopic ? 'datenstrom' : 'config/messwerte');
               else if (currentPage === 'rohrverlaengerung') navigate('config/messwerte');
               else navigate('/');
             }}
