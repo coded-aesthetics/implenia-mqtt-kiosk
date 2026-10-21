@@ -737,6 +737,15 @@ What follows, and must not be broken:
 - **A session's opening value is written at `startRecording`**, because a mode
   is otherwise only recorded when it *changes* — see `resetForSeek`, which has
   to re-state it after clearing a session.
+- **That opening value is not always `bohren`.** A resumed element reopens on
+  the phase its last session was in, and `POST /api/recording/start` carries
+  that phase so the session opens in it — otherwise a screen saying Auffüllen
+  records `Status = 0` and the protocol reports the filling as drilling.
+  `beginRecording` writes it onto the session row before `startRecording`,
+  because `operating_mode` is `NOT NULL DEFAULT 'bohren'`: a fresh row already
+  has a stored mode, which is what `startRecording` reads first, and which is
+  why `ingestion.pendingMode` behind it never reaches a new session.
+  `opening-phase.test.ts` pins the whole path.
 - **It is never gridded.** Four readings in a shift, so the CSV route would
   write a fabricated outage into every row it has no value for; web
   forward-fills this sensor and reads a NULL as "mode unknown from here on".

@@ -32,6 +32,7 @@ import {
   markSessionReadingsUploaded,
   markSessionReadingsFailed,
   resetFailedReadings,
+  setOperatingModeRow,
   updateSessionStatus,
   type Session,
 } from './db.js';
@@ -140,7 +141,28 @@ const SENSOR_TYPE_MAP: Record<string, string> = {
 
 // --- Recording orchestration ---
 
-export async function beginRecording(elementName: string): Promise<{ sessionId: number }> {
+export async function beginRecording(
+  elementName: string,
+  /**
+   * The phase this session opens in. Defaults to `bohren`.
+   *
+   * A resumed element reopens on the phase its last session was in, and the
+   * operator may step it before tapping start — so the screen they tapped on
+   * is the phase the readings have to be stamped with. `startRecording`
+   * writes the opening `Status` reading from the session's mode, and
+   * implenia-web segments every Injektionsbohren KPI on that value (see
+   * "Status numbering" in CLAUDE.md), so a screen saying Auffüllen over a
+   * session recording `Status = 0` reports the filling as drilling.
+   *
+   * Written onto the session row rather than handed to `startRecording`,
+   * because `operating_mode` is `NOT NULL DEFAULT 'bohren'`: a fresh row
+   * already *has* a stored mode, which is what `startRecording` reads first
+   * (and why `ingestion.pendingMode`, which sits behind it, only ever reaches
+   * the reported state). Writing the row also persists the phase immediately,
+   * so a restart one reading in resumes into it rather than into Bohren.
+   */
+  openingMode?: OperatingMode,
+): Promise<{ sessionId: number }> {
   const existing = getActiveSession();
   if (existing) {
     throw new Error(`Aufzeichnung ${existing.id} für „${existing.element_name}" läuft bereits.`);
@@ -191,6 +213,7 @@ export async function beginRecording(elementName: string): Promise<{ sessionId: 
   }
 
   const sessionId = createSession(elementName, JSON.stringify(sensorMapJson));
+  if (openingMode && openingMode !== 'bohren') setOperatingModeRow(sessionId, openingMode);
   ingestion.startRecording(sessionId, sensorMap);
   attachLogSensor(sessionId, sensorMap);
 

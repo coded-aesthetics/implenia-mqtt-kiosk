@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { imageDataURI, findByNr } from '@coded-aesthetics/din4023';
-import type { RecordingState, UploadProgress } from '../hooks/useWebSocket';
+import type { OperatingMode, RecordingState, UploadProgress } from '../hooks/useWebSocket';
 import { hasPipeHandling } from '../utils/operating-mode';
 import { navigate } from '../hooks/useHashRouter';
 import { shouldConfirmGeology } from '../utils/geology-stop';
@@ -9,6 +9,12 @@ import type { GeologieErfassung } from '../hooks/useGeologieErfassung';
 
 interface Props {
   currentPage: string;
+  /**
+   * The phase the element screen is showing when no session owns it — the
+   * opening phase of the recording this bar starts. Null while a session does
+   * own it, because the server already knows that one.
+   */
+  startModus?: OperatingMode | null;
   elementName?: string;
   recordingState: RecordingState;
   uploadProgress: UploadProgress | null;
@@ -33,7 +39,7 @@ interface ExportOption {
   exported: boolean;
 }
 
-export function RecordingBar({ currentPage, elementName, recordingState, uploadProgress, geologie }: Props) {
+export function RecordingBar({ currentPage, elementName, startModus = null, recordingState, uploadProgress, geologie }: Props) {
   const rohrwechsel = recordingState.rohrwechsel;
   const operatingMode = recordingState.operatingMode;
   const [loading, setLoading] = useState(false);
@@ -147,7 +153,7 @@ export function RecordingBar({ currentPage, elementName, recordingState, uploadP
       const res = await fetch('/api/recording/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ elementName }),
+        body: JSON.stringify(startModus ? { elementName, operatingMode: startModus } : { elementName }),
       });
       if (!res.ok) {
         const data = await res.json();
