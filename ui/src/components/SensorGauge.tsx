@@ -2,6 +2,20 @@ import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import { formatNumber } from '../utils/format';
 import { clampFrac, statusColor, autoLabelStep } from '../utils/sensor-viz';
+import { useSvgTextFit } from '../hooks/useFitScale';
+
+/**
+ * How wide the reading may be, in viewBox units.
+ *
+ * The dial is 200 units across and the value sits at its centre, where the
+ * nearest obstruction is the inner end of the tick marks at radius 54. The
+ * text band reaches about 29 units above the centre line, which leaves
+ * `sqrt(54² - 29²) ≈ 45` to either side — so 90 is the width at which digits
+ * stop before the ticks rather than through them. A five-character reading
+ * (`90,01`) is well inside it; `299,87` is not, and that is the one that was
+ * being drawn over the scale.
+ */
+const VALUE_BUDGET = 90;
 
 interface Props {
   value: number;
@@ -29,6 +43,12 @@ const END = -45;
 function px(cx: number, r: number, a: number) { return cx + r * Math.cos(a * DEG); }
 function py(cy: number, r: number, a: number) { return cy - r * Math.sin(a * DEG); }
 
+/** Scale about the text's own anchor, so a shrunk reading stays centred. */
+function shrink(x: number, y: number, scale: number): string | undefined {
+  if (scale >= 1) return undefined;
+  return `translate(${x} ${y}) scale(${scale}) translate(${-x} ${-y})`;
+}
+
 function arc(cx: number, cy: number, r: number, from: number, to: number) {
   const x1 = px(cx, r, from), y1 = py(cy, r, from);
   const x2 = px(cx, r, to), y2 = py(cy, r, to);
@@ -38,6 +58,8 @@ function arc(cx: number, cy: number, r: number, from: number, to: number) {
 
 export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, labelStep: labelStepProp, size = 240, half, hideLabel }: Props) {
   const labelStep = labelStepProp ?? autoLabelStep(max - min);
+  const valueText = formatNumber(value);
+  const { ref: valueRef, scale: valueScale } = useSvgTextFit(valueText, VALUE_BUDGET);
 
   const elements = useMemo(() => {
     const cx = 100, cy = 100;
@@ -115,34 +137,43 @@ export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, la
     }
 
     if (half) {
+      // Reading and unit sit 10 units lower than they used to, which puts them
+      // across the dial's open bottom instead of leaving that strip empty and
+      // crowding the arc above. The viewBox follows them down (see `vbH`), so
+      // the dial is shorter than it was — vertical room the gauge row needs
+      // more than the gap under the number.
       parts.push(
         <text key={k++}
-          x={cx} y={cy - 18} fill="var(--text-primary)"
+          ref={valueRef}
+          x={cx} y={cy - 8} fill="var(--text-primary)"
           fontSize={32} fontWeight={800} textAnchor="middle" dominantBaseline="auto"
           style={tabNums}
+          transform={shrink(cx, cy - 8, valueScale)}
         >
-          {formatNumber(value)}
+          {valueText}
         </text>,
-        <text key={k++} x={cx} y={cy - 2} fill="var(--text-muted)" fontSize={12} textAnchor="middle">
+        <text key={k++} x={cx} y={cy + 8} fill="var(--text-muted)" fontSize={12} textAnchor="middle">
           {unit}
         </text>,
       );
     } else {
       parts.push(
         <text key={k++}
-          x={cx} y={cy - 6} fill="var(--text-primary)"
+          ref={valueRef}
+          x={cx} y={cy + 4} fill="var(--text-primary)"
           fontSize={32} fontWeight={800} textAnchor="middle" dominantBaseline="auto"
           style={tabNums}
+          transform={shrink(cx, cy + 4, valueScale)}
         >
-          {formatNumber(value)}
+          {valueText}
         </text>,
-        <text key={k++} x={cx} y={cy + 14} fill="var(--text-muted)" fontSize={12} textAnchor="middle">
+        <text key={k++} x={cx} y={cy + 24} fill="var(--text-muted)" fontSize={12} textAnchor="middle">
           {unit}
         </text>,
       );
       if (!hideLabel) {
         parts.push(
-          <text key={k++} x={cx} y={cy + 28} fill="var(--text-muted)" fontSize={10} textAnchor="middle">
+          <text key={k++} x={cx} y={cy + 38} fill="var(--text-muted)" fontSize={10} textAnchor="middle">
             {label}
           </text>,
         );
@@ -150,9 +181,24 @@ export function SensorGauge({ value, min, max, label, unit, soll, ticks = 60, la
     }
 
     return parts;
-  }, [value, min, max, soll, label, unit, ticks, labelStep, half, hideLabel]);
+  }, [value, valueText, valueScale, valueRef, min, max, soll, label, unit, ticks, labelStep, half, hideLabel]);
 
-  const vbH = half ? 115 : 200;
+  /*
+   * The half dial's box has to follow its readout down.
+   *
+   * 115 was not slack: the gauge label underneath is pulled up into it by
+   * `gaugeLabelText`'s negative margin, so the strip below the unit was
+   * already spoken for. Dropping the readout 10 units and keeping 115 put the
+   * unit through `DRUCK HAMMER`. 120 restores the clearance the label was
+   * drawn with.
+   *
+   * Which is worth saying plainly: moving the reading down does not win
+   * vertical space here, it costs about 6px a dial. What the arrangement buys
+   * is a readout centred in the dial's opening rather than pressed against the
+   * arc above it. The vertical space on this screen is in the full dial, whose
+   * box runs to 200 while its scale ends at 162.
+   */
+  const vbH = half ? 120 : 200;
   const svgH = half ? Math.round(size * vbH / 200) : size;
 
   return (

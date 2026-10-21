@@ -8,6 +8,7 @@ import { formatNumber } from '../utils/format';
 import { findSoll, sensorValue } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
 import { useClampState } from '../hooks/useClampState';
+import { useBoxFit } from '../hooks/useFitScale';
 
 export interface GaugeSlot {
   sensor: string;
@@ -54,6 +55,11 @@ export function VerpressenScreen({ readings, vorgaben, config, onKorrigieren }: 
 
   const depth = sensorValue(sensorValues, config.depthSensor) ?? 0;
   const volume = sensorValue(sensorValues, config.volumeSensor) ?? 0;
+  // Same reason as the drilling screen: five figures of litres is wider than a
+  // third of the row, and a total that paints over its neighbours is worse
+  // than one drawn a little smaller.
+  const volumeText = formatNumber(volume);
+  const { inner: volumeTextRef, outer: volumeCellRef, scale: volumeScale } = useBoxFit(volumeText);
   // Chart data accumulation — samples sensorValues at ~1Hz via useEffect
   const chartBufferRef = useRef<Map<string, Array<{ ts: number; value: number }>>>(new Map());
   const lastSampleRef = useRef(0);
@@ -111,10 +117,16 @@ export function VerpressenScreen({ readings, vorgaben, config, onKorrigieren }: 
           </div>
           {onKorrigieren && <span style={styles.heroHint}>Tippen zum Korrigieren</span>}
         </button>
-        <div style={styles.heroCell}>
+        <div style={styles.heroCell} ref={volumeCellRef as React.RefObject<HTMLDivElement>}>
           <div style={styles.heroLabel}>Gesamtvolumen</div>
-          <div style={styles.heroValueRow}>
-            <span style={styles.heroValue}>{formatNumber(volume)}</span>
+          <div
+            ref={volumeTextRef as React.RefObject<HTMLDivElement>}
+            style={{
+              ...styles.heroValueRow,
+              transform: volumeScale < 1 ? `scale(${volumeScale})` : undefined,
+            }}
+          >
+            <span style={styles.heroValue}>{volumeText}</span>
             <span style={styles.heroUnit}>l</span>
           </div>
         </div>
@@ -178,8 +190,11 @@ export const INJEKTIONSBOHREN_VERPRESSEN: VerpressenConfig = {
   depthSensor: 'Tiefe',
   volumeSensor: 'Q_verpressen',
   gauges: [
-    { sensor: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', min: 0, max: 70, vorgabeName: 'Suspensionsdruck' },
-    { sensor: 'Verpresspumpe/Durchfluss', label: 'Durchfluss V', unit: 'l/min', min: 0, max: 300, vorgabeName: 'DurchflussV' },
+    // Same capture as the drilling screen's bars — see the note there.
+    // Druck_Medium reached 119.93 bar; Verpresspumpe/Durchfluss only 167.44
+    // l/min, which is why this one is a fifth of the Spülpumpe's scale.
+    { sensor: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', min: 0, max: 150, vorgabeName: 'Suspensionsdruck' },
+    { sensor: 'Verpresspumpe/Durchfluss', label: 'Durchfluss V', unit: 'l/min', min: 0, max: 200, vorgabeName: 'DurchflussV' },
     { sensor: 'Druck_innen', label: 'Drehm. Innen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'IDrehmoment' },
     { sensor: 'Druck_aussen', label: 'Drehm. Aussen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'ADrehmoment' },
   ],
@@ -213,6 +228,7 @@ const styles: Record<string, CSSProperties> = {
   },
   heroCell: {
     flex: 1,
+    minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
@@ -224,6 +240,7 @@ const styles: Record<string, CSSProperties> = {
   // label under the value, not a box drawn around it.
   heroCellKnopf: {
     flex: 1,
+    minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
