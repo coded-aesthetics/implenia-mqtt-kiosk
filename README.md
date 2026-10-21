@@ -287,6 +287,19 @@ device. The step also checks for a wireless interface and warns if there is
 none, which is where a missing firmware blob shows up — in the office, not on
 site.
 
+**An interface in `/etc/network/interfaces` is unmanaged, and that is the one
+state that looks like success.** The Debian installer writes whichever
+interface *the install itself used* into that file, so a kiosk installed over
+Wi-Fi has the card, has NetworkManager, and still cannot change its WLAN —
+while the old provisioning check, which read `/sys/class/net/*/wireless`,
+signed it off with a green tick because the hardware was there. The check now
+asks `nmcli` for the device state, which is the same question the kiosk's own
+`capability()` asks, and `migrate_ifupdown_wifi` moves the interface across
+keeping the SSID and password. Nothing is torn down to do it: removing the
+stanza does not drop a link ifupdown already brought up, so the run continues
+over the same Wi-Fi and the handover lands on the reboot provisioning already
+wants. `scripts/test-wlan-migration.sh` covers the parsing and the refusals.
+
 A machine without NetworkManager or without a wireless interface answers
 `capability: { available: false, reason }` and the screen shows the reason.
 Both are normal states, not errors: such a kiosk works perfectly well on a
