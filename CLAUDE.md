@@ -72,6 +72,19 @@ GitHub Actions builds, stamps the tag version into package.json, bundles `server
 
 The self-updater polls GitHub Releases every five minutes (`UPDATE_CHECK_INTERVAL_MS`), comparing semver against the root `package.json` version. An update is announced by the version indicator in the header — two lines, `von vX` over `auf vY upgraden` — and applying it takes two taps there, the second confirming "Wirklich upgraden?". There is no banner: an update is never urgent, since the kiosk keeps recording and uploading on the version it has, and installing one restarts the app. `POST /api/update` refuses while a recording is running — and because it does, the indicator shrinks to the version plus a small red dot for the duration, with no tap target: an offer the server will decline is a dead end, and the header is carrying the phase stepper at the same time. The full offer returns on its own when the recording ends. The applying state and a failure note are never suppressed, since both report something that already happened.
 
+**A UI-only release is delivered by the outgoing service worker.** The reload
+that follows an update is a navigation, and a navigation is answered by
+whichever worker still controls the page. The shell is therefore no longer
+precached (`ui/vite.config.ts`: no `html` in `globPatterns`, navigations
+`NetworkFirst`) and the page reloads itself when a new worker claims control
+(`ui/src/sw-update.ts`). Before that, a kiosk could come up reporting the new
+version — that comes from the restarted server — while running the old bundle,
+recoverable only with F5, which a touchscreen on a construction site does not
+have. It was a race, not a certainty, which is how it survived. The release
+*introducing* either half is still delivered by the old worker and lands stale,
+so such a release must not also carry a visible UI change; the next one and
+every one after arrive correctly with nobody touching the machine.
+
 **Release assets need `Accept: application/octet-stream`.** The assets hang off
 `/releases/assets/<id>`, which serves the asset's **JSON metadata** under the
 API's `application/vnd.github.v3+json` and its bytes only under octet-stream.
