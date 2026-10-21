@@ -24,4 +24,17 @@ export abstract class DataSource extends EventEmitter {
   abstract stop(): void;
   abstract get connected(): boolean;
   abstract get sourceType(): string;
+
+  /**
+   * Whether this source has anything to connect *to*.
+   *
+   * Separates "the link is down" from "nothing has been set up yet", which the
+   * header reports differently: a fresh machine or an unfinished setup wizard
+   * must not show a fault for a broker nobody has named. Defaults to true so a
+   * source that does not override it reports from `connected` alone — a false
+   * alarm is visible and fixable, a missing one is not.
+   */
+  get configured(): boolean {
+    return true;
+  }
 }

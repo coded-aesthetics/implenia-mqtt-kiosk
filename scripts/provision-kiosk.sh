@@ -793,6 +793,33 @@ LIGHTDM
   chromium_bin="$(command -v chromium || command -v chromium-browser)" \
     || die "No chromium binary found."
 
+  #
+  # Translation offer: a managed policy, not just the --disable-features flag.
+  #
+  # The UI is German and Debian installs with an English locale, so Chromium
+  # detects a foreign-language page and floats its "Translate this page?"
+  # bubble over the kiosk — on a touchscreen in --kiosk mode, where its close
+  # button is a 16px target and there is no window chrome to escape to.
+  # `--disable-features=Translate,TranslateUI` has been on the command line
+  # since the first machine and does not reliably suppress it; feature names
+  # get renamed and an unknown one is silently ignored. TranslateEnabled is a
+  # documented enterprise policy and survives both.
+  #
+  # Written to both paths because the policy directory follows the package
+  # name: `chromium` on Debian, `chromium-browser` on Ubuntu. The unused one
+  # costs an empty directory.
+  #
+  local policy_dir
+  for policy_dir in /etc/chromium /etc/chromium-browser; do
+    sudo install -d "$policy_dir/policies/managed"
+    sudo tee "$policy_dir/policies/managed/kiosk.json" >/dev/null <<'POLICY'
+{
+  "TranslateEnabled": false
+}
+POLICY
+  done
+  ok "Chromium policy: translation offer disabled"
+
   [[ -f "$HOME/.xsession" ]] && cp "$HOME/.xsession" "$HOME/.xsession.bak"
   cat > "$HOME/.xsession" <<XSESSION
 #!/bin/sh

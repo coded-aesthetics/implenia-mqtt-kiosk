@@ -59,6 +59,10 @@ class DeviceSource extends DataSource {
     return 'serial';
   }
 
+  get configured(): boolean {
+    return deviceManager.getStatus().length > 0;
+  }
+
   start(): void {
     if (this.started) return;
     this.started = true;

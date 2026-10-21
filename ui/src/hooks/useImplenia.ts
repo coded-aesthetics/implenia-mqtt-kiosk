@@ -145,7 +145,15 @@ export interface ShiftAssignment {
 
 export interface ShiftAssignmentState {
   data: ShiftAssignment | null;
-  source: 'api' | 'import' | null;
+  /**
+   * Where the list came from. `cache` is the platform's own answer from
+   * earlier — the backend is unreachable now, and the server served what it
+   * last saw rather than leaving the worker on an error screen. The element
+   * list says so and when it was taken; see shift-cache.ts.
+   */
+  source: 'api' | 'import' | 'cache' | null;
+  /** When a `cache` list was fetched from the platform. */
+  cachedAt: number | null;
   loading: boolean;
   error: string | null;
   notFound: boolean;
@@ -170,13 +178,15 @@ export interface ShiftAssignmentState {
 export function useShiftAssignment(hasApiKey: boolean, apiUrl: string | null): ShiftAssignmentState {
   const [state, setState] = useState<{
     data: ShiftAssignment | null;
-    source: 'api' | 'import' | null;
+    source: 'api' | 'import' | 'cache' | null;
+    cachedAt: number | null;
     loading: boolean;
     error: string | null;
     notFound: boolean;
   }>({
     data: null,
     source: null,
+    cachedAt: null,
     loading: false,
     error: null,
     notFound: false,
@@ -192,21 +202,30 @@ export function useShiftAssignment(hasApiKey: boolean, apiUrl: string | null): S
       .then(async (r) => {
         if (id !== fetchIdRef.current) return;
         if (r.status === 404) {
-          setState({ data: null, source: null, loading: false, error: null, notFound: true });
+          setState({ data: null, source: null, cachedAt: null, loading: false, error: null, notFound: true });
           return;
         }
         if (r.status === 503 && !hasApiKey) {
-          setState({ data: null, source: null, loading: false, error: null, notFound: true });
+          setState({ data: null, source: null, cachedAt: null, loading: false, error: null, notFound: true });
           return;
         }
         if (!r.ok) throw new Error(friendlyApiError(r.status, await r.text()));
         const data = await r.json();
-        const source = data.source === 'import' ? 'import' as const : 'api' as const;
-        setState({ data, source, loading: false, error: null, notFound: false });
+        const source = data.source === 'import'
+          ? 'import' as const
+          : data.source === 'cache' ? 'cache' as const : 'api' as const;
+        setState({
+          data,
+          source,
+          cachedAt: typeof data.cachedAt === 'number' ? data.cachedAt : null,
+          loading: false,
+          error: null,
+          notFound: false,
+        });
       })
       .catch((err) => {
         if (id !== fetchIdRef.current) return;
-        setState({ data: null, source: null, loading: false, error: (err as Error).message, notFound: false });
+        setState({ data: null, source: null, cachedAt: null, loading: false, error: (err as Error).message, notFound: false });
       });
   }, [hasApiKey, apiUrl]);
 

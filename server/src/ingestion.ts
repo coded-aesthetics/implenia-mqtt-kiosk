@@ -12,6 +12,7 @@ import { mqttSource } from './mqtt.js';
 import { deviceSource } from './device-source.js';
 import { getTransport, type Transport } from './transport.js';
 import { createLogger } from './logger.js';
+import { sourceHealth, healthFromSource, SOURCE_POLL_INTERVAL_MS } from './source-health.js';
 import {
   applyClampPressure, applyDepthCorrection, initialDrillState, isClipped, observeDepth,
   parseDrillState, toStatus,
@@ -245,6 +246,7 @@ export class DataIngestion extends EventEmitter {
   private activeSession: ActiveSession | null = null;
   private pendingMode: OperatingMode | null = null;
   private started = false;
+  private sourceHealthTimer: ReturnType<typeof setInterval> | null = null;
 
   private readonly onReading = (reading: SensorReading): void => {
     // Synthetic control topic: replay files can embed mode-switch events.
@@ -464,6 +466,10 @@ export class DataIngestion extends EventEmitter {
       this.source.on('replay-stop', this.onReplayStop);
       this.source.start();
     }
+    // Not a second later: the Datenquelle screen's own feedback is this
+    // indicator, and a swap that left it reporting the previous transport
+    // would read as the new one having failed.
+    if (this.started) this.reportSourceHealth();
   }
 
   /** The source matching a transport key. */
@@ -880,12 +886,37 @@ export class DataIngestion extends EventEmitter {
     this.pruneTimer = setInterval(() => {
       pruneBuffer();
     }, 10 * 60 * 1000);
+
+    /*
+     * Watch the source's connection here rather than in each transport.
+     *
+     * This is the layer that is already source-agnostic — swapping MQTT for
+     * serial goes through `setSource` right above — so a source added later
+     * is covered without touching it. See source-health.ts for why this polls
+     * instead of listening.
+     */
+    this.reportSourceHealth();
+    this.sourceHealthTimer = setInterval(() => this.reportSourceHealth(), SOURCE_POLL_INTERVAL_MS);
+  }
+
+  private reportSourceHealth(): void {
+    sourceHealth.report(
+      healthFromSource({
+        connected: this.source.connected,
+        configured: this.source.configured,
+      }),
+      this.source.sourceType,
+    );
   }
 
   stop(): void {
     if (this.pruneTimer) {
       clearInterval(this.pruneTimer);
       this.pruneTimer = null;
+    }
+    if (this.sourceHealthTimer) {
+      clearInterval(this.sourceHealthTimer);
+      this.sourceHealthTimer = null;
     }
     if (this.started) {
       this.source.off('reading', this.onReading);

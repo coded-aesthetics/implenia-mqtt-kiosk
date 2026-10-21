@@ -3,6 +3,8 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
 import { connectivity } from '../connectivity.js';
+import { apiHealth } from '../api-health.js';
+import { sourceHealth } from '../source-health.js';
 import { ingestion } from '../ingestion.js';
 import { updater } from '../updater.js';
 import { deviceManager } from '../device-manager.js';
@@ -22,7 +24,9 @@ export function registerStatusRoutes(app: FastifyInstance): void {
       version: getVersion(),
       uptime: Math.floor((Date.now() - startTime) / 1000),
       connectivity: connectivity.getState(),
+      apiHealth: apiHealth.getState(),
       sourceConnected: ingestion.sourceConnected,
+      sourceHealth: sourceHealth.getState(),
       sourceType: ingestion.sourceType,
       recording: (() => {
         const s = getActiveSession();

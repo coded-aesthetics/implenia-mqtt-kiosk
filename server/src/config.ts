@@ -84,6 +84,16 @@ const envSchema = z.object({
     blankAsUndefined,
     z.coerce.number().positive().default(30_000),
   ),
+  /*
+   * How stale the last word from the Implenia platform may get before the
+   * watchdog asks it directly. Five minutes, not thirty seconds: every real
+   * API call already reports in, so this only fires on a kiosk nobody is
+   * using, and the uplink is metered.
+   */
+  API_PROBE_INTERVAL_MS: z.preprocess(
+    blankAsUndefined,
+    z.coerce.number().positive().default(300_000),
+  ),
 
   // USB update: comma-separated directories to scan for update bundles
   USB_UPDATE_PATHS: z.preprocess(blankAsUndefined, z.string().default('/media')),

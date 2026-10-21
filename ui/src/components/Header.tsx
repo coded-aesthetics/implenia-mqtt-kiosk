@@ -1,12 +1,28 @@
 import { useState, useEffect } from 'react';
 import { navigate } from '../hooks/useHashRouter';
-import type { OperatingMode } from '../hooks/useWebSocket';
+import type { OperatingMode, ApiHealth, SourceHealth } from '../hooks/useWebSocket';
+import {
+  aktuelleMeldung, meldungsSchluessel, verbindungsMeldungen, MELDUNG_WECHSEL_MS,
+} from '../utils/verbindung';
 import { PhaseStepper, type AusrichtenSlot } from './PhaseStepper';
 import { VersionIndicator } from './VersionIndicator';
 import logo from '../../assets/implenia-logo.png';
 
 interface Props {
   connectivity: 'online' | 'offline' | 'unknown';
+  /**
+   * Whether the Implenia platform is answering. Reported beside the internet
+   * state in the same indicator, because a kiosk with internet and no backend
+   * uploads exactly as much as one with neither — see utils/verbindung.ts.
+   */
+  apiHealth?: ApiHealth;
+  /**
+   * Whether sensor data is arriving. Shares the one indicator with the two
+   * above — see utils/verbindung.ts for why it goes first when several are
+   * wrong at once.
+   */
+  sourceHealth?: SourceHealth;
+  sourceType?: string;
   hasApiKey: boolean;
   currentPage: string;
   configSection?: string;
@@ -66,7 +82,7 @@ interface Props {
   updateFailure?: string | null;
 }
 
-export function Header({ connectivity, hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, recording = false, operatingMode, onModeChange, hidePhaseStepper, ausrichten, updateAvailable = null, updateApplying = false, updateSource = null, updateFailure = null }: Props) {
+export function Header({ connectivity, apiHealth = 'unknown', sourceHealth = 'unknown', sourceType = 'mqtt', hasApiKey, currentPage, configSection, pageTitle, voiceSupported, isListening, wakeWordPhase, onMicPress, onMicRelease, commentQueueCount, recording = false, operatingMode, onModeChange, hidePhaseStepper, ausrichten, updateAvailable = null, updateApplying = false, updateSource = null, updateFailure = null }: Props) {
   const [version, setVersion] = useState('...');
 
   useEffect(() => {
@@ -76,9 +92,36 @@ export function Header({ connectivity, hasApiKey, currentPage, configSection, pa
       .catch(() => {});
   }, []);
 
-  const isOnline = connectivity === 'online';
-  const connColor = isOnline ? 'var(--color-success)' : connectivity === 'offline' ? 'var(--color-danger)' : 'var(--color-neutral)';
-  const connLabel = connectivity === 'unknown' ? 'Verbinde...' : isOnline ? 'Verbunden' : 'Offline';
+  /*
+   * One indicator, several things it may have to say.
+   *
+   * The header is the most contested space on the screen — it carries the
+   * phase stepper during a recording — so a second and third dot were not an
+   * option, and showing only the worst problem would hide the others: on site
+   * the box is both the data source and the uplink, so one failure produces
+   * two messages. They take turns instead.
+   *
+   * The tick only runs while there is more than one message. A single problem
+   * sits still, which is both calmer and what makes the movement mean
+   * something when it does happen.
+   */
+  const meldungen = verbindungsMeldungen(connectivity, apiHealth, sourceHealth, sourceType);
+  const schluessel = meldungsSchluessel(meldungen);
+  const [meldungsTick, setMeldungsTick] = useState(0);
+
+  useEffect(() => {
+    setMeldungsTick(0);
+    if (meldungen.length < 2) return;
+    const timer = setInterval(() => setMeldungsTick((t) => t + 1), MELDUNG_WECHSEL_MS);
+    return () => clearInterval(timer);
+    // `schluessel` is the dependency, not `meldungen`: the array is rebuilt on
+    // every render and would restart the rotation before it ever advanced.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schluessel, meldungen.length]);
+
+  const verbindung = aktuelleMeldung(meldungen, meldungsTick);
+  const connColor = `var(--color-${verbindung.farbe})`;
+  const connLabel = verbindung.label;
 
   return (
     <div style={styles.bar}>
@@ -268,6 +311,22 @@ const styles: Record<string, React.CSSProperties> = {
   statusText: {
     fontSize: '0.95rem',
     color: 'var(--text-muted)',
+    /*
+     * Fixed, because the message rotates.
+     * „Verbunden" and „Server offline" are 19px apart, and a label that
+     * resized every four seconds would walk the version indicator, the
+     * microphone and the settings button back and forth beside it — the same
+     * objection that kept the age out of the drilling screen's gauges.
+     *
+     * 108px is measured, not counted, and measured **in DejaVu Sans**: the
+     * font stack is `"Segoe UI", system-ui, -apple-system, sans-serif` and a
+     * kiosk installs `fonts-dejavu-core` and nothing else, so it renders the
+     * last entry — 6% wider than this laptop's. Every label the indicator can
+     * produce fits: Replay offline 104, Server offline 102, MQTT offline 96,
+     * Verbunden 83.
+     */
+    minWidth: '108px',
+    whiteSpace: 'nowrap' as const,
   },
   divider: {
     width: '1px',

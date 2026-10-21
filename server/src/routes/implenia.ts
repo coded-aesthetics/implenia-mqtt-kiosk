@@ -4,8 +4,14 @@ import {
   cacheImportedSensors, resolveHerstellenSensors, resolveVorgabenSensors,
   SensorDefsUnavailableError,
 } from '../herstellen-sensors.js';
-import { getMeta, setMeta, deleteMeta, setElementVorgaben, getElementVorgaben } from '../db.js';
+import {
+  getMeta, setMeta, deleteMeta, setElementVorgaben, getElementVorgaben,
+  getCompletedElements,
+} from '../db.js';
 import { validateShiftImport, resolveShiftAssignment } from '../shift-import.js';
+import {
+  SHIFT_CACHE_KEY, cacheServesFailure, parseShiftCache, pruneCompleted, serialiseShiftCache,
+} from '../shift-cache.js';
 import {
   completionStamp,
   findCompletionSensorName,
@@ -54,9 +60,36 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
     try {
       const data = await fetchImplenia('/shift-assignment/unfinished-elements?include_vorgaben=true') as { unfinished_elements: Array<Record<string, unknown>> };
       cacheVorgaben(data.unfinished_elements);
+      cacheShiftAssignment(data.unfinished_elements);
       return reply.send({ measuring_devices: data.unfinished_elements, source: 'api' });
     } catch (err) {
       const upstream = (err as ApiError).statusCode;
+
+      /*
+       * The platform did not answer — serve what it last said.
+       *
+       * Before the error, not after: a 502 with a usable list behind it is not
+       * an error the worker needs to see, it is the kiosk doing its job
+       * offline. The response says `source: 'cache'` and when the list was
+       * taken, and the element list puts that on screen beside the import
+       * button, so nobody mistakes it for today's.
+       */
+      if (cacheServesFailure(err)) {
+        const cached = parseShiftCache(getMeta(SHIFT_CACHE_KEY));
+        if (cached) {
+          const devices = pruneCompleted(cached, getCompletedElements());
+          log.warn(
+            'shift-assignment unreachable (%s) — serving the list cached at %s (%d element(s))',
+            (err as Error).message, new Date(cached.fetchedAt).toISOString(), devices.length,
+          );
+          return reply.send({
+            measuring_devices: devices,
+            source: 'cache',
+            cachedAt: cached.fetchedAt,
+          });
+        }
+      }
+
       if (upstream === 404) {
         return reply.status(404).send({ error: 'not_found' });
       }
@@ -285,6 +318,24 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
       });
     }
   });
+}
+
+/**
+ * Remember the list itself, so an unreachable backend tomorrow still has one.
+ *
+ * Only ever written from a *successful* platform response: an import has its
+ * own storage and the cache must not be overwritten by the list the kiosk is
+ * already falling back to, which would keep moving `fetchedAt` forward and
+ * make a week-old list claim to be from this morning.
+ */
+function cacheShiftAssignment(devices: unknown): void {
+  const serialised = serialiseShiftCache(devices, Date.now());
+  if (!serialised) return;
+  try {
+    setMeta(SHIFT_CACHE_KEY, serialised);
+  } catch (err) {
+    log.warn('Could not cache the shift assignment: %s', (err as Error).message);
+  }
 }
 
 /**

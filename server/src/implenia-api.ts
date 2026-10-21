@@ -1,5 +1,6 @@
 import { config } from './config.js';
 import { getMeta } from './db.js';
+import { apiHealth } from './api-health.js';
 
 export interface ApiError extends Error {
   statusCode: number;
@@ -57,7 +58,11 @@ export async function fetchImplenia<T = unknown>(
   },
 ): Promise<T> {
   const cfg = getApiConfig();
-  if (!cfg) throw new Error('Implenia API not configured');
+  if (!cfg) {
+    const err = new Error('Implenia API not configured');
+    apiHealth.noteOutcome(err);
+    throw err;
+  }
 
   const url = cfg.apiUrl.replace(/\/+$/, '') + path;
 
@@ -83,15 +88,30 @@ export async function fetchImplenia<T = unknown>(
     init.signal = AbortSignal.timeout(options.timeoutMs);
   }
 
-  const res = await fetch(url, init);
+  /*
+   * Every outcome is reported to `apiHealth`, including the failures each
+   * caller handles itself. That is what the header's indicator is built on:
+   * the question "is the platform answering" is already being asked a hundred
+   * times a shift, and an answer nobody collected is what let the kiosk show
+   * „Verbunden" while every upload was failing.
+   */
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch (err) {
+    apiHealth.noteOutcome(err);
+    throw err;
+  }
 
   if (!res.ok) {
     const text = await res.text();
     const err = new Error(`Implenia API ${res.status}: ${text}`);
     (err as ApiError).statusCode = res.status;
     (err as ApiError).body = text;
+    apiHealth.noteOutcome(err);
     throw err;
   }
 
+  apiHealth.noteOutcome();
   return res.json() as Promise<T>;
 }

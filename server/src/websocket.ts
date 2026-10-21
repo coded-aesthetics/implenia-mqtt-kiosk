@@ -3,6 +3,8 @@ import type { WebSocket } from 'ws';
 import { ingestion } from './ingestion.js';
 import type { SensorReading } from './data-source.js';
 import { connectivity, type ConnectivityState } from './connectivity.js';
+import { apiHealth, type ApiHealth } from './api-health.js';
+import { sourceHealth, type SourceHealth } from './source-health.js';
 import { updater, type UpdateSource } from './updater.js';
 import { deviceManager } from './device-manager.js';
 import type { DeviceFrame } from './simulator-source.js';
@@ -57,6 +59,24 @@ export function setupWebSocket(app: FastifyInstance): void {
       JSON.stringify({
         type: 'connectivity',
         state: connectivity.getState(),
+      })
+    );
+
+    // Separate from connectivity on purpose: internet and platform are two
+    // questions, and the header reports both (see api-health.ts).
+    socket.send(
+      JSON.stringify({
+        type: 'api-health',
+        state: apiHealth.getState(),
+      })
+    );
+
+    // And the third: whether data is arriving at all (see source-health.ts).
+    socket.send(
+      JSON.stringify({
+        type: 'source-health',
+        state: sourceHealth.getState(),
+        sourceType: sourceHealth.getSourceType(),
       })
     );
 
@@ -139,6 +159,14 @@ export function setupWebSocket(app: FastifyInstance): void {
 
   connectivity.on('change', (state: ConnectivityState) => {
     broadcast({ type: 'connectivity', state });
+  });
+
+  apiHealth.on('change', (state: ApiHealth) => {
+    broadcast({ type: 'api-health', state });
+  });
+
+  sourceHealth.on('change', (state: SourceHealth, sourceType: string) => {
+    broadcast({ type: 'source-health', state, sourceType });
   });
 
   updater.on('update-available', (version: string, source: UpdateSource) => {
