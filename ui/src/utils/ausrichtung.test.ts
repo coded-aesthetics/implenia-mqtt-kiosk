@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   kuerzesterWeg, norm360, bewerteStatus, bewerteHorizontal, bewerteVertikal,
-  ausrichtungErforderlich, ausrichtungMoeglich, sollImBild, sensorFuerRolle,
+  ausrichtungErforderlich, ausrichtungMoeglich, ausrichtenBeimOeffnen, sollImBild, sensorFuerRolle,
   MAX_VERTIKAL,
   TOLERANZ_HORIZONTAL, TOLERANZ_VERTIKAL, NAH_SCHWELLE,
 } from './ausrichtung';
@@ -186,5 +186,80 @@ describe('sollImBild', () => {
 
   it('honours a narrower scale', () => {
     expect(sollImBild(75, 60)).toBe(false);
+  });
+});
+
+describe('ausrichtenBeimOeffnen', () => {
+  const sensoren = [
+    { name: 'Richtung X', role: 'inclination_x' },
+    { name: 'Richtung Y', role: 'inclination_y' },
+  ];
+  const geneigt = vorgaben({ Vertikalneigung: 15, Horizontalneigung: 142 });
+
+  function frage(ueberschreiben: Partial<Parameters<typeof ausrichtenBeimOeffnen>[0]> = {}) {
+    return ausrichtenBeimOeffnen({
+      seite: 'element',
+      aufzeichnungLaeuft: false,
+      bereitsAufgezeichnet: false,
+      nochUnbekannt: false,
+      vorgaben: geneigt,
+      sensoren,
+      ...ueberschreiben,
+    });
+  }
+
+  it('sends an opened tilted element to the alignment screen', () => {
+    expect(frage()).toBe(true);
+  });
+
+  it('leaves a plumb element where it is', () => {
+    expect(frage({ vorgaben: vorgaben({ Vertikalneigung: 0 }) })).toBe(false);
+  });
+
+  /*
+   * The whole reason the two routes exist. `bohren/<name>` is where the
+   * alignment screen's own slot leads, so redirecting it would make the screen
+   * impossible to leave.
+   */
+  it('never redirects the drilling route, which is how the screen is left', () => {
+    expect(frage({ seite: 'bohren' })).toBe(false);
+  });
+
+  it('does not redirect any other screen', () => {
+    expect(frage({ seite: 'ausrichten' })).toBe(false);
+    expect(frage({ seite: 'home' })).toBe(false);
+    expect(frage({ seite: 'geologie' })).toBe(false);
+  });
+
+  // Drilling is under way: the angles are no longer something to set, and a
+  // worker who re-opened the pillar wants to see what it is doing.
+  it('does not pull a running recording off the drilling screen', () => {
+    expect(frage({ aufzeichnungLaeuft: true })).toBe(false);
+  });
+
+  /*
+   * A resumed element reopens where it was left. The machine may need aiming
+   * again, but only the operator knows that — and sending every operator
+   * appending a few metres through the dials would cost more taps than it
+   * saves.
+   */
+  it('leaves a resumed element on the screen it was left on', () => {
+    expect(frage({ bereitsAufgezeichnet: true })).toBe(false);
+  });
+
+  // Not the same as "no session": answering before the lookup is what made the
+  // jump visible, a drilling screen replaced a moment after it was drawn.
+  it('waits for the session lookup instead of jumping and taking it back', () => {
+    expect(frage({ nochUnbekannt: true })).toBe(false);
+    expect(frage({ nochUnbekannt: true, bereitsAufgezeichnet: false })).toBe(false);
+  });
+
+  it('waits for the data rather than guessing', () => {
+    expect(frage({ vorgaben: null })).toBe(false);
+    expect(frage({ sensoren: null })).toBe(false);
+  });
+
+  it('does not redirect on a Verfahren without the live angle sensors', () => {
+    expect(frage({ sensoren: [{ name: 'Bohrtiefe', role: 'depth' }] })).toBe(false);
   });
 });

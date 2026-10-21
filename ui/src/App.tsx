@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useHashRouter, navigate } from './hooks/useHashRouter';
-import { useConfig, useShiftAssignment, useActiveVerfahren, useElementVorgaben, useVerfahrenSensors } from './hooks/useImplenia';
+import { useConfig, useShiftAssignment, useActiveVerfahren, useElementVorgaben, useElementRueckkehr, useVerfahrenSensors } from './hooks/useImplenia';
 import { useVoiceCommands } from './hooks/useVoiceCommands';
 import { Header } from './components/Header';
 import { RecordingBar } from './components/RecordingBar';
@@ -20,7 +20,7 @@ import { BohrenScreen, INJEKTIONSBOHREN_BOHREN } from './components/BohrenScreen
 import { GeologieBestaetigung } from './components/GeologieBestaetigung';
 import { VerpressenScreen, INJEKTIONSBOHREN_VERPRESSEN } from './components/VerpressenScreen';
 import { AusrichtenScreen } from './components/AusrichtenScreen';
-import { ausrichtungErforderlich, ausrichtungMoeglich } from './utils/ausrichtung';
+import { ausrichtenBeimOeffnen, ausrichtungErforderlich, ausrichtungMoeglich } from './utils/ausrichtung';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import { isVerpressenMode, MODE_LABELS } from './utils/operating-mode';
@@ -116,6 +116,46 @@ export function App() {
   const deviceVorgaben = useElementVorgaben(route.params.name ?? null, shiftVorgaben);
 
   /*
+   * What this element was last doing here: whether it has been recorded at all,
+   * and the phase its last session was in. Local lookup, so it answers offline.
+   */
+  const rueckkehr = useElementRueckkehr(route.params.name ?? null);
+
+  /**
+   * The phase before a recording exists.
+   *
+   * Seeded from the element's last session, then moved by the stepper. It is
+   * local because there is nothing to write to: `operating_mode` is a column
+   * on a session, and a pillar being looked at has none. It travels to the
+   * server exactly once, with `POST /api/recording/start`, which opens the new
+   * session in it — so the screen the operator tapped start on is the phase
+   * the readings are stamped with.
+   *
+   * Null means "not chosen": the restored phase then shows through. The
+   * distinction matters because stepping back to the restored phase has to be
+   * possible, and a seeded-then-compared state could not tell the two apart.
+   */
+  const [vorabModus, setVorabModus] = useState<OperatingMode | null>(null);
+  useEffect(() => { setVorabModus(null); }, [route.params.name]);
+
+  /**
+   * Which phase the screens draw, and the stepper shows.
+   *
+   * A running recording is the authority, whatever element is on screen — that
+   * is what the rig is doing. Without one, the recording state still answers
+   * for *its own* element (a session that has ended and is waiting to upload
+   * keeps its phase, and the stepper still writes to that row); for any other
+   * element it has nothing to say and the local phase takes over.
+   */
+  const modusAusAufzeichnung = recordingState.active
+    || recordingState.elementName === route.params.name
+    ? recordingState.operatingMode
+    : null;
+  const angezeigterModus = modusAusAufzeichnung ?? vorabModus ?? rueckkehr.modus;
+  /** Is there a session behind the phase, or is it only the screen's own? */
+  const modusIstLokal = modusAusAufzeichnung === null;
+
+  /*
    * The Verfahren's own sensors, from the CSV the server ships — the alignment
    * screen finds its two live angles by role in here. Local, so it answers on
    * a kiosk that has been offline for days.
@@ -142,9 +182,54 @@ export function App() {
     ? {
       aktiv: route.page === 'ausrichten',
       oeffnen: () => navigate(`ausrichten/${encodeURIComponent(ausrichtenElement)}`),
-      schliessen: () => navigate(`element/${encodeURIComponent(ausrichtenElement)}`),
+      /*
+       * `bohren/`, not `element/`. The two routes render the same screen, and
+       * the difference is the one thing that keeps the redirect below from
+       * being a trap: `element/<name>` means "open this element" and may be
+       * sent here, `bohren/<name>` is the drilling screen asked for directly.
+       * Leaving by way of the former would bounce straight back in.
+       */
+      schliessen: () => navigate(`bohren/${encodeURIComponent(ausrichtenElement)}`),
     }
     : undefined;
+
+  /**
+   * Opening a tilted element lands on the alignment screen.
+   *
+   * Aiming the rig is the first thing that happens there, so it is the first
+   * thing on screen — rather than the drilling screen plus the knowledge that
+   * the stepper holds a step nobody has taken yet. The way on is the stepper's
+   * Bohren slot, one tap, and the recording starts from there as before:
+   * nothing here gates it.
+   *
+   * The condition lives in `ausrichtenBeimOeffnen`, which spells out why it is
+   * keyed on the route and skipped for a running recording. Two consequences
+   * worth knowing at this end:
+   *
+   * — It fires whenever the Vorgabe arrives, which for a **resumed** element is
+   *   a cached fetch rather than the shift payload already in hand. Such an
+   *   element shows the drilling screen for a moment before the jump. The
+   *   alternative is holding the screen back on a request, which is the one
+   *   thing this kiosk never does.
+   * — A Vorgabe that never arrives — offline, nothing cached — leaves the
+   *   element opening exactly as it did before.
+   */
+  useEffect(() => {
+    if (!ausrichtenElement) return;
+    if (!ausrichtenBeimOeffnen({
+      seite: route.page,
+      aufzeichnungLaeuft: recordingState.active,
+      bereitsAufgezeichnet: rueckkehr.bekannt,
+      nochUnbekannt: rueckkehr.status === 'laedt',
+      vorgaben: deviceVorgaben,
+      sensoren: verfahrenSensoren.sensoren,
+    })) return;
+    navigate(`ausrichten/${encodeURIComponent(ausrichtenElement)}`);
+  }, [
+    ausrichtenElement, route.page, recordingState.active,
+    rueckkehr.bekannt, rueckkehr.status,
+    deviceVorgaben, verfahrenSensoren.sensoren,
+  ]);
 
   // The wizard is a route, so its visibility cannot be knocked out by the
   // state it writes. An unconfigured kiosk is redirected into it; from there
@@ -263,6 +348,18 @@ export function App() {
   const setOperatingMode = useCallback(async (mode: OperatingMode) => {
     const vorher = recordingState.operatingMode;
     const sessionId = recordingState.sessionId;
+    /*
+     * No session behind this phase — a resumed element being looked at before
+     * the recording starts. The step is the screen's own, so it is taken here
+     * and handed to the start route later. Asking the server would be asking
+     * it to write a mode onto somebody else's session, which is what the route
+     * answers 409 to: a dead stepper on the one screen whose phase the
+     * operator most needs to correct.
+     */
+    if (modusIstLokal) {
+      setVorabModus(mode);
+      return;
+    }
     try {
       const res = await fetch('/api/recording/mode', {
         method: 'PUT',
@@ -296,7 +393,7 @@ export function App() {
     }
   }, [
     recordingState.sessionId, recordingState.operatingMode, recordingState.active,
-    recordingState.elementName, route.page, route.params.name,
+    recordingState.elementName, route.page, route.params.name, modusIstLokal,
   ]);
 
   /**
@@ -560,7 +657,7 @@ export function App() {
     case 'bohren':
     case 'element': {
       if (setup.verfahren === 'injektionsbohren') {
-        if (isVerpressenMode(recordingState.operatingMode)) {
+        if (isVerpressenMode(angezeigterModus)) {
           content = (
             <VerpressenScreen
               readings={readings}
@@ -639,7 +736,7 @@ export function App() {
         onMicRelease={voice.stopListening}
         commentQueueCount={commentQueue.pendingCount}
         recording={recordingState.active}
-        operatingMode={recordingState.operatingMode}
+        operatingMode={angezeigterModus}
         onModeChange={setOperatingMode}
         hidePhaseStepper={route.page === 'geologie' && route.query.beenden === '1'}
         ausrichten={ausrichtenSlot}
@@ -676,6 +773,10 @@ export function App() {
       <RecordingBar
         currentPage={route.page}
         elementName={route.params.name}
+        // The phase the screen is showing, so a recording started from a
+        // resumed element's Auffüllen screen opens in Auffüllen rather than
+        // silently stepping back to Bohren under the operator's finger.
+        startModus={modusIstLokal ? angezeigterModus : null}
         recordingState={recordingState}
         uploadProgress={uploadProgress}
         geologie={geologie}

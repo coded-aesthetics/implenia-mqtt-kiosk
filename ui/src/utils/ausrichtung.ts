@@ -206,3 +206,65 @@ export function sensorFuerRolle(
 ): string | null {
   return sensoren?.find((s) => s.role === rolle)?.name ?? null;
 }
+
+/**
+ * Should opening an element land on the alignment screen instead of Bohren?
+ *
+ * Aiming the rig is the *first* thing that happens at a tilted element, so a
+ * worker who opens one and finds the drilling screen has to know the stepper
+ * holds a step they have not taken yet. The screen that comes first is the one
+ * that should be on screen.
+ *
+ * ── Why the page matters, and why it is `element` alone ──────────────
+ *
+ * The redirect is keyed on the **route**, not on a "already aligned" flag, and
+ * that is what keeps it from becoming a trap. `element/<name>` means "open this
+ * element"; `bohren/<name>` means "the drilling screen, directly". Leaving the
+ * alignment screen navigates to the latter, so the way on is never bounced
+ * back — and because the distinction lives in the URL it survives a reload and
+ * a PM2 restart, which an in-memory "has been aligned" ref would not. Same
+ * reasoning as `?beenden=1` on the geology route.
+ *
+ * ── Why a running recording is never redirected ──────────────
+ *
+ * Drilling is under way: the rig is in the hole and its angles are no longer
+ * something to set. A worker who walks back to the element list mid-session and
+ * taps the pillar again means "show me what it is doing", and pulling them onto
+ * two dials would cost a glance at the live depth for nothing.
+ *
+ * ── Why an element already recorded here is never redirected ──────────────
+ *
+ * It is being **resumed**, and it reopens where it was left — which is the
+ * phase screen its last session was in, not the dials. The machine may well
+ * have been moved since and need aiming again, but that is something the
+ * operator knows and the kiosk does not: they go there themselves, one tap on
+ * the stepper. Guessing the other way puts two dials in front of every
+ * operator appending a few metres to a pillar they drilled an hour ago.
+ *
+ * `bereitsAufgezeichnet` therefore means "this kiosk has a session for this
+ * element", not "it has been aligned" — nothing records the latter, and an
+ * element that was aimed but never recorded is still the untouched case this
+ * redirect exists for.
+ *
+ * A missing Vorgabe or a sensor list that has not answered answers `false` —
+ * see `ausrichtungErforderlich` and `ausrichtungMoeglich`. The element then
+ * opens the way it always did, and the stepper slot appears next to it as soon
+ * as the data is in. `nochUnbekannt` is the same rule for the session lookup,
+ * and it is what keeps the jump from being visible: the redirect waits for the
+ * answer instead of showing the drilling screen and leaving it a moment later.
+ */
+export function ausrichtenBeimOeffnen(args: {
+  seite: string;
+  aufzeichnungLaeuft: boolean;
+  /** This kiosk has recorded this element before — it is being resumed. */
+  bereitsAufgezeichnet: boolean;
+  /** The session lookup has not answered yet. Not the same as "no session". */
+  nochUnbekannt: boolean;
+  vorgaben: VorgabenData | null;
+  sensoren: readonly { name: string; role?: string }[] | null;
+}): boolean {
+  if (args.seite !== 'element') return false;
+  if (args.aufzeichnungLaeuft) return false;
+  if (args.nochUnbekannt || args.bereitsAufgezeichnet) return false;
+  return ausrichtungMoeglich(args.sensoren) && ausrichtungErforderlich(args.vorgaben);
+}

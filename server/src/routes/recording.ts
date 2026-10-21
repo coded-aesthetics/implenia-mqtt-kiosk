@@ -81,13 +81,33 @@ function readGeologyBody(
 
 export function registerRecordingRoutes(app: FastifyInstance): void {
   app.post('/api/recording/start', async (request, reply) => {
-    const { elementName } = request.body as { elementName: string };
+    const { elementName, operatingMode } = request.body as {
+      elementName: string;
+      operatingMode?: string;
+    };
     if (!elementName) {
       return reply.status(400).send({ error: 'elementName is required' });
     }
 
+    /*
+     * The phase the screen was showing when the operator tapped start.
+     *
+     * A resumed pillar reopens on the phase its last session was in, so a
+     * recording started from that screen has to open in it too — otherwise the
+     * screen says Auffüllen, the session records `Status = 0`, and
+     * implenia-web's Herstellprotokoll reports the filling as drilling until
+     * somebody notices the stepper moved on its own.
+     *
+     * A missing or unrecognised value opens the session in `bohren`, so every
+     * caller that does not know about this — the voice command, a second tab
+     * on an older bundle — behaves exactly as it did.
+     */
+    const openingMode = operatingMode && isOperatingMode(operatingMode)
+      ? operatingMode
+      : undefined;
+
     try {
-      const result = await beginRecording(elementName);
+      const result = await beginRecording(elementName, openingMode);
       // Broadcast new state to all WS clients
       broadcastMessage({ type: 'recording-state', ...getRecordingState() });
       return reply.send(result);

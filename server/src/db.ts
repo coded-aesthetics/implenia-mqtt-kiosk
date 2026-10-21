@@ -293,6 +293,21 @@ const getActiveSessionStmt = db.prepare(
 const getMostRecentSessionStmt = db.prepare(
   'SELECT * FROM recording_sessions ORDER BY started_at DESC LIMIT 1'
 );
+/*
+ * The element's own last session, whatever became of it.
+ *
+ * `getMostRecentSession` answers "what was this kiosk last doing"; this
+ * answers "what was last done *here*", which is a different question as soon
+ * as a second element has been recorded since. No status filter: an uploaded
+ * session is exactly the case this exists for — a resumed element.
+ *
+ * `id DESC` behind `started_at DESC` because two sessions started inside one
+ * millisecond is a replay, not a fiction, and a tie that resolves arbitrarily
+ * would make the restored phase flip between two runs of the same data.
+ */
+const getLastSessionForElementStmt = db.prepare(
+  'SELECT * FROM recording_sessions WHERE element_name = ? ORDER BY started_at DESC, id DESC LIMIT 1'
+);
 const updateSessionStatusStmt = db.prepare(
   'UPDATE recording_sessions SET status = ? WHERE id = ?'
 );
@@ -563,6 +578,10 @@ export function getActiveSession(): Session | null {
 
 export function getMostRecentSession(): Session | null {
   return (getMostRecentSessionStmt.get() as Session) ?? null;
+}
+
+export function getLastSessionForElement(elementName: string): Session | null {
+  return (getLastSessionForElementStmt.get(elementName) as Session) ?? null;
 }
 
 export function getSessionById(id: number): Session | null {
