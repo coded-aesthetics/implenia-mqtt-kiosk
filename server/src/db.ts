@@ -33,6 +33,22 @@ export interface Session {
    * `autoUploadOnConnectivity` or a reboot, long after the pause.
    */
   paused: number;
+  /**
+   * The deepest drilling depth this session recorded, in metres — the one
+   * number that says whether work actually happened here.
+   *
+   * Written once, when the session ends (`recordMaxDepth`), rather than read
+   * out of `session_readings` when somebody asks: a shift's sessions hold a
+   * few hundred thousand readings each, and a `MAX()` per session is ~20 ms on
+   * a developer machine and several times that on the kiosk's Celeron — which
+   * the element list would pay on every render.
+   *
+   * Null means "not computed", which is every session recorded before this
+   * column existed until `backfillMaxDepth` reaches it. Readers treat null and
+   * 0 alike: both mean "no depth to show", and 0 is a real answer — somebody
+   * started a recording, fiddled, and paused again.
+   */
+  max_depth: number | null;
 }
 
 export interface SessionStats {
@@ -249,6 +265,12 @@ db.exec(`
   // completing exactly as it did.
   if (!has('paused')) {
     db.exec('ALTER TABLE recording_sessions ADD COLUMN paused INTEGER NOT NULL DEFAULT 0');
+  }
+  // How deep this session drilled, written when it ends. Nullable on purpose:
+  // null is "not computed yet", which is every session that predates the
+  // column. See `Session.max_depth` and `element-progress.ts`.
+  if (!has('max_depth')) {
+    db.exec('ALTER TABLE recording_sessions ADD COLUMN max_depth REAL');
   }
 }
 
@@ -653,6 +675,96 @@ export interface CompletedElement {
 export function getCompletedElements(): CompletedElement[] {
   const rows = getCompletedElementsStmt.all() as { element_name: string; last_upload: number }[];
   return rows.map((r) => ({ elementName: r.element_name, lastUpload: r.last_upload }));
+}
+
+/** An element this kiosk has recorded, as `getStartedElements` reports it. */
+export interface StartedElement {
+  elementName: string;
+  /**
+   * The deepest drilling depth recorded here across every session, or 0 when
+   * there is none to show. 0 covers two cases on purpose — a session that
+   * drilled nothing, and one whose depth has not been computed yet (see
+   * `Session.max_depth`) — because the honest statement about both is the
+   * weaker one: somebody started a recording here.
+   */
+  tiefe: number;
+  /** When the last session for this element ended, or started if it has not. */
+  letzteAufzeichnung: number;
+}
+
+/*
+ * Every element this kiosk holds a session for, deepest depth and last
+ * activity.
+ *
+ * No status filter, deliberately: the question is "has anybody worked here",
+ * and a session that is still waiting to upload, was paused, or recorded
+ * nothing at all answers yes. That is the difference from
+ * `getCompletedElements`, which answers "is this element finished".
+ */
+const getStartedElementsStmt = db.prepare(`
+  SELECT element_name,
+         MAX(COALESCE(max_depth, 0)) AS tiefe,
+         MAX(COALESCE(ended_at, started_at)) AS letzte
+  FROM recording_sessions
+  GROUP BY element_name
+  ORDER BY letzte DESC
+`);
+
+export function getStartedElements(): StartedElement[] {
+  const rows = getStartedElementsStmt.all() as {
+    element_name: string; tiefe: number | null; letzte: number;
+  }[];
+  return rows.map((r) => ({
+    elementName: r.element_name,
+    tiefe: r.tiefe ?? 0,
+    letzteAufzeichnung: r.letzte,
+  }));
+}
+
+/**
+ * The deepest value a session recorded for one sensor, counting real drilling
+ * only.
+ *
+ * The same two filters every depth read in this kiosk uses: `phase = 'bohren'`
+ * drops the Rohrverlängerung phantom depths (see rohrwechsel.ts) and
+ * `upload_status != 'clipped'` the readings held back with them. Without them
+ * the answer is the frozen depth of a pipe change, which is not a depth the
+ * hole ever had.
+ */
+const maxSensorValueStmt = db.prepare(`
+  SELECT MAX(value_numeric) AS max FROM session_readings
+  WHERE session_id = ? AND sensor_id = ?
+    AND phase = 'bohren' AND upload_status != 'clipped'
+`);
+
+export function maxDrilledValue(sessionId: number, sensorId: string): number | null {
+  const row = maxSensorValueStmt.get(sessionId, sensorId) as { max: number | null } | undefined;
+  return row?.max ?? null;
+}
+
+const setSessionMaxDepthStmt = db.prepare(
+  'UPDATE recording_sessions SET max_depth = ? WHERE id = ?'
+);
+
+export function setSessionMaxDepth(sessionId: number, tiefe: number): void {
+  setSessionMaxDepthStmt.run(tiefe, sessionId);
+}
+
+/**
+ * Sessions whose depth has never been computed, newest first.
+ *
+ * `status != 'recording'` because a running session's depth is not final yet —
+ * it is written when the session ends.
+ */
+const getSessionsWithoutMaxDepthStmt = db.prepare(`
+  SELECT * FROM recording_sessions
+  WHERE max_depth IS NULL AND status != 'recording'
+  ORDER BY started_at DESC
+  LIMIT ?
+`);
+
+export function getSessionsWithoutMaxDepth(limit: number): Session[] {
+  return getSessionsWithoutMaxDepthStmt.all(limit) as Session[];
 }
 
 export function deleteSessionWithReadings(id: number): void {

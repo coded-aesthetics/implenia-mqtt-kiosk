@@ -15,6 +15,13 @@ interface Props {
    * own it, because the server already knows that one.
    */
   startModus?: OperatingMode | null;
+  /**
+   * Whether this kiosk has recorded this element before, which is what the
+   * start button is worded from: „fortsetzen" for a pillar somebody has
+   * already worked on, „beginnen" for a fresh one. Same local lookup the
+   * restored phase comes from (`useElementRueckkehr`), so it answers offline.
+   */
+  bereitsAufgezeichnet?: boolean;
   elementName?: string;
   recordingState: RecordingState;
   uploadProgress: UploadProgress | null;
@@ -39,7 +46,7 @@ interface ExportOption {
   exported: boolean;
 }
 
-export function RecordingBar({ currentPage, elementName, startModus = null, recordingState, uploadProgress, geologie }: Props) {
+export function RecordingBar({ currentPage, elementName, startModus = null, bereitsAufgezeichnet = false, recordingState, uploadProgress, geologie }: Props) {
   const rohrwechsel = recordingState.rohrwechsel;
   const operatingMode = recordingState.operatingMode;
   const [loading, setLoading] = useState(false);
@@ -458,7 +465,8 @@ export function RecordingBar({ currentPage, elementName, startModus = null, reco
           onClick={startRecording}
           disabled={loading}
         >
-          {loading ? 'Wird gestartet...' : 'Aufzeichnung beginnen'}
+          {loading ? 'Wird gestartet...'
+            : bereitsAufgezeichnet ? 'Aufzeichnung fortsetzen' : 'Aufzeichnung beginnen'}
         </button>
       )}
 

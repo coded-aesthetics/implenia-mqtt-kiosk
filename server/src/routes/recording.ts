@@ -7,8 +7,9 @@ import {
   getSessions, getSessionById, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
   getSessionReadingCount, setOperatingModeRow, getMostRecentSession, getCompletedElements,
   unclipSessionReadings, getActiveSession, setDrillingEndedAt, setGeologyConfirmedAt,
-  setSessionPaused,
+  setSessionPaused, getStartedElements,
 } from '../db.js';
+import { recordMaxDepth } from '../element-progress.js';
 import {
   commitDefaultGeology, commitGeology, getGeologyContext, hasGeologyReadings, recordLiveLayer,
   type GeologyCommitResult, type GeologyLayerInput,
@@ -220,6 +221,23 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       }
 
       const result = endRecording();
+      /*
+       * How deep this session drilled, stored on the row now that it is final.
+       *
+       * Here rather than inside `endRecording` so the depth query never sits
+       * between the ingestion layer and the database (see element-progress.ts
+       * for the import direction). Its own try/catch for the same reason the
+       * geology commit has one: a stop must not fail over a number the element
+       * list uses to label a tile, and `backfillMaxDepth` picks up anything
+       * missed at the next start.
+       */
+      if (active) {
+        try {
+          recordMaxDepth(active);
+        } catch (err) {
+          log.warn('Session %d: could not compute the drilled depth: %s', active.id, (err as Error).message);
+        }
+      }
       broadcastMessage({ type: 'recording-state', ...getRecordingState() });
 
       // Auto-upload in the background — don't block the HTTP response
@@ -597,5 +615,19 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
 
   app.get('/api/recording/completed-elements', async (_request, reply) => {
     return reply.send({ elements: getCompletedElements() });
+  });
+
+  /*
+   * Every element this kiosk has recorded, with the depth it reached.
+   *
+   * Not the same question as `completed-elements`, which answers "is this
+   * element finished" and is what moves a tile into the resume row. This one
+   * answers "has anybody worked here", for the elements that are still on the
+   * shift assignment: a paused pillar is unfinished and belongs in the main
+   * grid, but a tile that looks exactly like an untouched one is how a worker
+   * re-drills a hole somebody is halfway through.
+   */
+  app.get('/api/recording/started-elements', async (_request, reply) => {
+    return reply.send({ elements: getStartedElements() });
   });
 }

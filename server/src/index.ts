@@ -18,6 +18,7 @@ import { registerDeviceRoutes } from './routes/devices.js';
 import {
   ensureLogSensor, resumeRecording, autoUploadOnConnectivity, uploadPendingSessionsAtBoot,
 } from './recording.js';
+import { backfillMaxDepth } from './element-progress.js';
 import { registerLogRoutes } from './routes/logs.js';
 import { registerVerfahrenRoutes } from './routes/verfahren.js';
 import { registerTranscribeRoutes } from './routes/transcribe.js';
@@ -93,6 +94,23 @@ async function start(): Promise<void> {
   // Start HTTP server
   await app.listen({ port: config.PORT, host: '0.0.0.0' });
   log.info('Listening on http://0.0.0.0:%d', config.PORT);
+
+  /*
+   * Fill in the drilled depth of sessions recorded before it was stored.
+   *
+   * After listen and on a timer, because better-sqlite3 is synchronous: a
+   * shift's worth of `MAX()` over a few hundred thousand readings each is a
+   * second or more with the event loop held, and that belongs nowhere near a
+   * request or the first readings after a restart. An update *is* a restart, so
+   * this has run by the time anybody opens the element list on a new version.
+   */
+  setTimeout(() => {
+    try {
+      backfillMaxDepth();
+    } catch (err) {
+      log.warn('Depth backfill failed: %s', (err as Error).message);
+    }
+  }, 10_000).unref();
 }
 
 // Graceful shutdown

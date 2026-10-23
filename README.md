@@ -1313,6 +1313,83 @@ deliberately skipping the sign-off — a hands-free operator has no spoken way o
 that screen — but it does mean the phrase is now the one way to finish an
 element in a single action.
 
+### A pillar somebody has already drilled does not look untouched
+
+```
+GET /api/recording/started-elements   → [{ elementName, tiefe, letzteAufzeichnung }]
+```
+
+A paused element is *unfinished*, so it stays in the main grid of the element
+list — and until now its tile was pixel-identical to one nobody had ever
+opened. `getCompletedElements` deliberately skips a paused session (see above),
+which is right for the resume row and left the main grid with nothing at all to
+say. A worker coming back after a shift change had no way to tell a hole
+somebody is six metres into from one that has not been started, and the kiosk
+knew the whole time.
+
+The tile now carries the **depth reached**, with a dashed warning border:
+*bis 6,20 m*. It is the depth and not the phase because the phase is a flag the
+operator sets — a session that says Auffüllen may hold no readings at all —
+whereas a depth of 0 says exactly what happened: somebody tapped start, fiddled,
+and stopped again. That case reads *begonnen*, which is also what a session
+whose depth has not been computed yet says: both are the weaker claim, and both
+are true. The element screen's start button follows the same answer, reading
+`Aufzeichnung fortsetzen` rather than `… beginnen` for a pillar this kiosk has
+recorded before (the same local `last-session` lookup the restored phase comes
+from, so it answers offline).
+
+**The depth is stored on the session row when the session ends**, not read out
+of `session_readings` when somebody asks. A captured session holds ~276 000
+readings, ~27 000 of them depths, and `MAX(value_numeric)` over those is ~20 ms
+on a developer machine — several times that on the kiosk's Celeron, per
+session, on a screen a worker returns to all day. Three details hang off that:
+
+- **It is resolved by role, never by name** (`Bohrtiefe` for Injektionsbohren,
+  `Tiefe` for DSV), out of the session's own pinned `sensor_map`, with the
+  local CSVs as the fallback for sessions recorded before roles were persisted.
+- **The two filters every depth read here uses**: `phase = 'bohren'` and
+  `upload_status != 'clipped'`, or the answer is the frozen depth of a
+  Rohrverlängerung — a depth the hole never had.
+- **`backfillMaxDepth` fills in what predates the column**, once per start,
+  after `listen`, newest first and capped at 30 sessions. better-sqlite3 is
+  synchronous, so a shift's worth of those queries inside a request would stall
+  ingestion and the WebSocket for a second or more; at startup nothing is being
+  recorded, and an update *is* a restart. It is also the safety net for a
+  session that ended through some path that forgot to compute it.
+
+### During a recording, the only element that can be opened is the one being recorded
+
+Opening another element mid-recording was allowed, and quietly wrong in two
+ways at once. The element screens draw the **rig's** live readings, so another
+element's screen paired *that* element's Soll values with *this* element's Ist
+values. And the header's phase stepper there writes to the running session: one
+tap on what looked like an untouched pillar moved the phase of the one in the
+ground — `Status`, which implenia-web's Herstellprotokoll segments every KPI by,
+in a document that is signed and archived.
+
+So the element list leaves the other tiles visible and **inert** — subdued, and
+`disabled` rather than a tap that explains itself afterwards. The list is how a
+worker checks what else is on the shift, so emptying it would be worse than one
+that cannot be tapped; and the one tile that *is* tappable carries the live dot.
+
+Two consequences worth knowing:
+
+- **The search box is replaced by the explanation for the duration.** Every
+  result would be a locked tile, so the box leads nowhere — and that row is the
+  only space on the screen for the sentence. At 1024x768 the content column has
+  415px with the recording bar up and needs 419 for six tiles and the resume
+  row, measured on the rendered page; the search row is 80 of those pixels and
+  the hint takes 40 of them back. Without the sentence a dimmed tile that does
+  nothing is indistinguishable from a frozen screen, which is the one thing
+  this kiosk must never look like.
+- **A redirect covers the ways in that bypass a tile** — a reload on such a
+  URL, a typed hash, a second tab, the `öffne <element>` voice command. `App`
+  sends `element`, `bohren` and `ausrichten` routes naming any other element to
+  the recording element's own screen. The geology sign-off is exempt: it is
+  about the *session* and is always reached with the recording element's name.
+  Keeping the rule in one place is why the voice command was left alone rather
+  than growing a second copy of the condition.
+
 ### Why the profile is always complete
 
 A profile is flat and gapless — each layer runs to the next — so a single ground-type code asserts the ground continues to the bottom of the hole. There is no way to record "sand from 2 m, and no claim below that": **partial geology is not representable.** Back-filling the unconfirmed stretches from the Vorgabe is therefore the only option that neither discards what the operator saw nor invents a boundary they rejected, and the `(Vorgabe)` suffix in the `Geologie` text is how a reader tells the two apart.
@@ -1601,6 +1678,7 @@ server/src/
   vorgabe-geology.ts  — Planned profile from "Geologie n" / "Tiefe Geologie n"
   element-completion.ts — Ausführungsdatum writes (sentinel date + data-version stamp)
   element-device.ts     — Element name → platform device id (resolve + cache)
+  element-progress.ts   — How deep an element got here (stored at the stop, backfilled at boot)
   herstellen-sensors.ts — Element sensor defs: fetch, filter, offline cache
   session-export.ts   — Stream-driven .xlsx export (HDI/IVL) for implenia-web import
   grid-reduce.ts      — Readings → one row per interval, last value per sensor (pure)
