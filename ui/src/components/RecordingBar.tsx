@@ -56,17 +56,6 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
   const [exportOptions, setExportOptions] = useState<ExportOption[]>([]);
   const [exportTick, setExportTick] = useState(0);
 
-  // Remember the element name across recording → upload → idle transitions.
-  // recordingState.elementName goes null after upload completes, but the
-  // "Wiederaufnehmen" button still needs the name.
-  const [lastElementName, setLastElementName] = useState<string | null>(null);
-  useEffect(() => {
-    if (recordingState.elementName) {
-      setLastElementName(recordingState.elementName);
-    }
-  }, [recordingState.elementName]);
-  const effectiveElementName = recordingState.elementName ?? lastElementName;
-
   /*
    * "Abschließen" confirmation state.
    *
@@ -101,10 +90,6 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
     if (!recordingState.active) setAbschliessenPending(false);
   }, [recordingState.active]);
 
-  // "Wiederaufnehmen" state (undo auto-completion after upload)
-  const [resumePending, setResumePending] = useState(false);
-  const [resumed, setResumed] = useState(false);
-
   // Determine current display status
   const status: SessionStatus = (() => {
     if (emptyWarning) return 'empty';
@@ -120,11 +105,8 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
     if (recordingState.active) {
       setLastUploadResult(null);
       setEmptyWarning(false);
-      setResumePending(false);
-      setResumed(false);
-      setLastElementName(recordingState.elementName);
     }
-  }, [recordingState.active, recordingState.elementName]);
+  }, [recordingState.active]);
 
   // Track upload completion
   useEffect(() => {
@@ -147,16 +129,6 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
     return () => clearTimeout(id);
   }, [emptyWarning]);
 
-  // Same for the resume confirmation. Without it the bar stays up on *every*
-  // screen until the next recording starts — including the element list, where
-  // it costs the row of resume tiles its space at 1024x768 — reporting a
-  // resume the worker has long since acted on.
-  useEffect(() => {
-    if (!resumed) return;
-    const id = setTimeout(() => setResumed(false), 10_000);
-    return () => clearTimeout(id);
-  }, [resumed]);
-
   // Fetch which streams can be exported once a session has ended.
   useEffect(() => {
     const sessionId = recordingState.sessionId;
@@ -178,13 +150,42 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
     };
   }, [status, recordingState.sessionId, exportTick]);
 
-  // Show on element/bohren pages, while recording, or while showing post-upload state
-  const hasPostUploadState = lastUploadResult !== null || resumed || emptyWarning;
+  /**
+   * Where the bar is shown, and what is allowed to summon it.
+   *
+   * On an element's own screens it is always there, so a message costs no
+   * layout at all — the idle state of this bar *is* the start button, and
+   * every state is one row of the same height.
+   *
+   * Everywhere else it appears only for **outstanding work**: a running
+   * recording, an upload in flight, or a session still waiting to go
+   * (`sessionId` stays set while it is `ended` or `partial`). A transient
+   * confirmation summoned it too, and the element list then jumped 47px as it
+   * appeared and 47px back ten seconds later — for a message about something
+   * already finished. It also cannot simply stay reserved there: a permanent
+   * bar leaves that grid 415px where six tiles and the „Abgeschlossene
+   * Elemente" row need 419.
+   *
+   * What a worker loses: the upload confirmation if they walk to the list
+   * while it runs. What they get instead is permanent and in the place they
+   * are looking — the element sits under „Abgeschlossene Elemente" with its
+   * date, and a failed upload still brings the bar up everywhere, because that
+   * one is outstanding work.
+   *
+   * `emptyWarning` counts as outstanding work, and that is the line this rule
+   * is drawn on: it says a recording ended having captured *nothing*, which is
+   * a warning and not a confirmation. Both stop buttons sit in this bar, which
+   * is on screen during a recording wherever the worker is standing, so a stop
+   * can perfectly well happen from the element list — and that is the one
+   * message that must not be swallowed because of where they were.
+   */
+  const offeneArbeit = recordingState.active || recordingState.sessionId !== null
+    || emptyWarning;
   // The geology sign-off carries its own Beenden and Zurück. A second Beenden
   // in the bar below it would stop without the profile — the one outcome that
   // screen exists to prevent.
   if (currentPage === 'geologie') return null;
-  if (currentPage !== 'element' && currentPage !== 'bohren' && !recordingState.active && !hasPostUploadState) return null;
+  if (currentPage !== 'element' && currentPage !== 'bohren' && !offeneArbeit) return null;
 
   async function startRecording() {
     if (!elementName) return;
@@ -333,29 +334,6 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
     }
   }
 
-  async function resumeElement() {
-    const name = effectiveElementName;
-    if (!name) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/elements/${encodeURIComponent(name)}/complete`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || `Fehler ${res.status}`);
-      }
-      setResumed(true);
-      setResumePending(false);
-    } catch (err) {
-      setError((err as Error).message);
-      setResumePending(false);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   /**
    * Readings are being held back as a pipe change.
    *
@@ -487,7 +465,7 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
             blinking dot refers to, and it said nothing. The duplicate on the
             element screen is the price, and a cheap one.
           */}
-          <span style={styles.elementNameLaufend}>{effectiveElementName}</span>
+          <span style={styles.elementNameLaufend}>{recordingState.elementName}</span>
           {!abschliessenPending && geologieButtons}
           {!abschliessenPending && geologie?.rueckmeldung && (
             <span style={styles.geoRueckmeldung}>✓ {geologie.rueckmeldung}</span>
@@ -514,8 +492,8 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
           {/*
             Still worded, and still the widest control here. It ends the
             element, releases the upload and writes the Ausführungsdatum —
-            recoverable via "Wiederaufnehmen", but not something to leave to
-            icon recognition.
+            recoverable from the element's „Abgeschlossene Elemente" tile, but
+            not something to leave to icon recognition.
 
             Two taps now. The finality of the geology profile is stated on the
             sign-off screen this leads to, not here: that screen *shows* the
@@ -603,27 +581,16 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
         </div>
       )}
 
-      {status === 'uploaded' && !resumed && (
+      {/*
+        The upload landed. A confirmation and nothing to do — the way back to
+        an element finished by mistake is its „Abgeschlossene Elemente" tile,
+        which does the same thing this used to and does not expire after ten
+        seconds. See "Transient messages never move the layout" in the README.
+      */}
+      {status === 'uploaded' && (
         <div style={styles.recordingRow}>
           <span style={styles.successIcon}>✓</span>
           <span style={styles.successLabel}>Erfolgreich hochgeladen</span>
-          <button
-            style={{
-              ...styles.button,
-              ...(resumePending ? styles.resumeButtonConfirm : styles.resumeButtonDefault),
-            }}
-            onClick={() => { if (resumePending) resumeElement(); else setResumePending(true); }}
-            disabled={loading}
-          >
-            {resumePending ? 'Wirklich wiederaufnehmen?' : 'Wiederaufnehmen'}
-          </button>
-        </div>
-      )}
-
-      {resumed && (
-        <div style={styles.recordingRow}>
-          <span style={styles.successIcon}>✓</span>
-          <span style={styles.successLabel}>Element wiederaufgenommen</span>
         </div>
       )}
 
@@ -680,9 +647,19 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: 'var(--surface-0)',
     borderTop: '1px solid var(--border)',
   },
+  /*
+   * Every state of this bar is one row of the same height.
+   *
+   * 52px is the height of the buttons the row usually carries, so a row that
+   * holds only text — „Erfolgreich hochgeladen", „Keine Messwerte
+   * aufgezeichnet" — is exactly as tall as the start button it stands in for.
+   * Without it the bar measured 64px with a button and 47 with a message, and
+   * the screen above it moved by 17px twice per upload.
+   */
   recordingRow: {
     display: 'flex',
     alignItems: 'center',
+    minHeight: '52px',
     gap: '1rem',
     flexWrap: 'wrap',
     justifyContent: 'center',
@@ -737,14 +714,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   uploadButton: {
     backgroundColor: 'var(--color-accent-strong)',
-    color: '#fff',
-  },
-  resumeButtonDefault: {
-    backgroundColor: 'var(--color-accent-strong)',
-    color: '#fff',
-  },
-  resumeButtonConfirm: {
-    backgroundColor: 'var(--color-accent)',
     color: '#fff',
   },
   elementNameLaufend: {
@@ -802,6 +771,9 @@ const styles: Record<string, React.CSSProperties> = {
   uploadRow: {
     display: 'flex',
     alignItems: 'center',
+    // Same 52px as every other row: the progress bar must not make the bar a
+    // different height from the button that started the upload.
+    minHeight: '52px',
     gap: '1rem',
     width: '100%',
     maxWidth: '500px',
@@ -859,6 +831,7 @@ const styles: Record<string, React.CSSProperties> = {
   recordingRowFest: {
     display: 'flex',
     alignItems: 'center',
+    minHeight: '52px',
     gap: '0.75rem',
     flexWrap: 'nowrap',
     justifyContent: 'center',

@@ -501,15 +501,26 @@ export function ShiftAssignment({
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  // The vertical spacing here is measured, not chosen: at 1024x768 the full
-  // screen (search, six element tiles, the resume row and the import button) is
-  // 13px short of fitting while the recording bar is up, so each gap is as
-  // small as it can be and still read as a separation.
+  /*
+   * The vertical spacing here is measured, not chosen.
+   *
+   * At 1024x768 with the recording bar up, the content column gets 415px and
+   * the fullest screen — six element tiles, the „Abgeschlossene Elemente" row
+   * — needs 419. It was clipping those 4px off a centred grid with no
+   * scrollbar: the top row of tiles came out with its border cut. The bar
+   * reaches the list whenever an upload is still outstanding, so this is not
+   * a corner case.
+   *
+   * 1rem of page padding, 0.75rem under the search row and a 64px bottom bar
+   * buy 20px back, which leaves 16 to spare. Everything else here is already as small as it
+   * can be and still read as a separation; the next pixels would have to come
+   * out of the tiles, which are tap targets.
+   */
   page: {
     display: 'flex',
     justifyContent: 'center',
     height: '100%',
-    padding: '1.25rem',
+    padding: '1rem',
     boxSizing: 'border-box' as const,
   },
   // Search and import keep their place while the grids change underneath, so
@@ -525,7 +536,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     justifyContent: 'center',
     flexShrink: 0,
-    marginBottom: '1rem',
+    marginBottom: '0.75rem',
   },
   content: {
     flex: 1,
@@ -545,7 +556,9 @@ const styles: Record<string, React.CSSProperties> = {
     // so a second row here would push the button off the bottom.
     gap: '1rem',
     flexShrink: 0,
-    minHeight: '72px',
+    // 64, not 72: the tallest thing in here is the 56px import button, and the
+    // eight pixels went to the grid above — see `page`.
+    minHeight: '64px',
     marginTop: '1rem',
   },
   cacheBadge: {

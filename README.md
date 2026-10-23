@@ -1399,6 +1399,60 @@ Two consequences worth knowing:
   Keeping the rule in one place is why the voice command was left alone rather
   than growing a second copy of the condition.
 
+### The recording bar never moves the screen under a worker's finger
+
+Three measured defects, all of them the same mistake — letting a message
+decide a layout:
+
+| bar state | was | now |
+| --- | --- | --- |
+| idle (`Aufzeichnung fortsetzen`), recording, `✓ Erfolgreich hochgeladen` | 64 px | 64 px |
+| `✓ Element wiederaufgenommen` alone | 47 px | — (gone) |
+| start button **and** that message | **99 px** | impossible |
+| on the element list: absent → present → absent | grid shifts 47 px twice | only for outstanding work |
+
+- **Every state of the bar is one row of the same height.** `minHeight: 52px`
+  on the rows, which is the height of the buttons they usually carry, so a row
+  holding only text is exactly as tall as the start button it stands in for.
+- **Two messages could stack.** The upload confirmation and the resume
+  confirmation each ran their own 10-second timer; the first expired, the bar
+  fell back to idle and drew the start button, and the second was still up —
+  underneath it, 99 px of bar. There is one transient slot now.
+- **A transient message no longer summons the bar on screens that do not have
+  one.** On the element screens the bar is always present, so a message there
+  costs no layout at all. Everywhere else it appears only for *outstanding
+  work*: a running recording, an upload in flight, a session still waiting to
+  go. It cannot simply stay reserved on the element list either — a permanent
+  bar leaves that grid 415 px where six tiles and the „Abgeschlossene Elemente"
+  row need 419.
+
+What a worker loses is the upload confirmation if they walk to the list while
+it runs; what they get instead is permanent and in the place they are looking —
+the element sits under „Abgeschlossene Elemente" with its date. A *failed*
+upload still raises the bar everywhere, because that one is outstanding work —
+and so does „Keine Messwerte aufgezeichnet", which is where the line is drawn:
+it reports a recording that captured nothing, which is a warning and not a
+confirmation. Both stop buttons live in this bar, and the bar is on screen
+during a recording wherever the worker is standing, so that stop can perfectly
+well happen from the element list.
+
+**`Wiederaufnehmen` is gone from the bar.** It cleared the `Ausführungsdatum`,
+which `Aufzeichnung fortsetzen` does not do — but the same clear-and-open sits
+permanently on the element's „Abgeschlossene Elemente" tile, and a recovery
+path that expires after ten seconds is the kind of dead end this kiosk does not
+get to have. One gap worth knowing: with an *imported* Schichtauftrag the file
+is never pruned, so a finished element stays in the main grid and that tile
+never appears; there the completion stands until the next upload re-stamps it.
+
+**Still deliberately two rows:** an action error (`Fehler 409 …`) draws above
+the controls, because the control it reports on is the one the worker needs in
+order to retry. That is the case the reserved-slot/banner work is for.
+
+The element list's own spacing moved with this: the bar reaching the list over
+an outstanding upload is what made the 4 px it was already clipping visible, so
+the page padding is 1 rem, the search row's margin 0.75 rem and the bottom bar
+64 px — 20 px back, 16 of them spare.
+
 ### Why the profile is always complete
 
 A profile is flat and gapless — each layer runs to the next — so a single ground-type code asserts the ground continues to the bottom of the hole. There is no way to record "sand from 2 m, and no claim below that": **partial geology is not representable.** Back-filling the unconfirmed stretches from the Vorgabe is therefore the only option that neither discards what the operator saw nor invents a boundary they rejected, and the `(Vorgabe)` suffix in the `Geologie` text is how a reader tells the two apart.
