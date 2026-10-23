@@ -394,8 +394,8 @@ distinction the rest of this kiosk makes between *the platform said no* and
   "unfinished elements" *as of* `cachedAt`; an element this kiosk has uploaded
   since then is complete and would otherwise sit in the grid this morning
   looking like work to do. Dropped elements are not hidden — the list's
-  „Begonnene Elemente" row is built from those same local completions, with
-  their date, and resuming one still works.
+  „Abgeschlossene Elemente" row is built from those same local completions,
+  with their date, and resuming one still works.
 
 An import still outranks the cache, the cache is only ever written from a
 platform response (so serving it cannot re-date it), and an unreadable cache
@@ -997,7 +997,7 @@ awk '{c[$3]++} END{for(t in c) print c[t], t}' assets/<capture>.txt | sort -rn
 
 ## Element Completion
 
-An element is marked as produced by writing its `Ausführungsdatum` string sensor (CSV role `is_completed`). The kiosk does this itself after every session upload that actually put readings on the platform, so a worker never has to confirm anything — an empty session, or one whose every reading was clipped as a Rohrwechsel, finishes nothing — and clears it (empty string) when an operator resumes an already-uploaded element from "Begonnene Elemente".
+An element is marked as produced by writing its `Ausführungsdatum` string sensor (CSV role `is_completed`). The kiosk does this itself after every session upload that actually put readings on the platform, so a worker never has to confirm anything — an empty session, or one whose every reading was clipped as a Rohrwechsel, finishes nothing — and clears it (empty string) when an operator resumes an already-uploaded element from „Abgeschlossene Elemente".
 
 ```
 POST   /api/elements/:elementName/complete   → { ok, date } — manual completion
@@ -1227,7 +1227,7 @@ The data agrees, not just the UX. The operating mode never reaches a reading —
 
 **Which button it is comes from `?beenden=1` in the route, not from the operating mode.** The mode answers "which phase is the rig in", not "what did the operator ask for", and the two come apart in both directions. A Beenden on a session already past `Bohren` — its phase-step sign-off skipped because the context fetch failed, or left without committing — was answered by a button that committed and returned while the recording kept running, so the operator had to tap Beenden twice and the second button named a phase they were already in. Worse, `operatingMode` is null until the first `recording-state` message arrives, so a reload on this screen briefly showed the **stop** variant: one tap in that window ended a recording mid-Austausch, with Einbauen and Auffüllen never recorded and the upload released early. A URL survives a reload and a PM2 restart; WebSocket state does not.
 
-**Beenden is the backstop**, for a session that never left `Bohren` — drilled and stopped, or aborted. There the screen's button is `Beenden`: it commits, stops, and the auto-upload proceeds as always, with `Zurück zur Aufzeichnung` for a mis-tap. Grouting-only sessions, machines without geology, and a session that never went down stop exactly as they always have — and if the check itself fails for any reason, the stop proceeds. Geology never stands between an operator and finishing an element.
+**Beenden is the backstop**, for a session that never left `Bohren` — drilled and stopped, or aborted. There the screen's button is `Abschließen`: it commits, stops, and the auto-upload proceeds as always, with `Zurück zur Aufzeichnung` for a mis-tap. Grouting-only sessions, machines without geology, and a session that never went down stop exactly as they always have — and if the check itself fails for any reason, the stop proceeds. Geology never stands between an operator and finishing an element.
 
 `geology_confirmed_at` on the session is what keeps it to **once**: a profile already signed off is not rebuilt at the stop. Rebuilding would re-derive the back-fill from the Schichtauftrag, so a planned boundary the operator deleted on the sign-off screen would quietly come back.
 
@@ -1266,6 +1266,239 @@ Selection is held by layer **id**, not index, because every edit reshuffles indi
 Boundaries can also be dragged directly in the chart with 64 px touch handles, and obstructions drag freely through the profile.
 
 A restart on this screen leaves the session open, `resumeRecording` re-attaches it, and the operator taps the button again — no dead end, nothing lost.
+
+### Pausieren and Abschließen
+
+The recording bar carries two ways out, and only one of them finishes anything.
+
+**Pausieren** ends the session and finishes nothing: no geology sign-off, no
+upload-released completion (it still commits the profile — see below). The element stays resumable and reopens on the
+phase it was in. It exists because a good deal of the kiosk is gated on "is a
+recording running" — `POST /api/update` and the WLAN switch both refuse with a
+409 — so an operator who wanted to apply an update was tapping the stop button
+to get at it. That spent the element's one geology review: the sign-off came up
+over a session with a handful of readings, was confirmed because it was in the
+way, and `geology_confirmed_at` meant it was never offered again.
+
+**Abschließen** is the old `Beenden`: sign-off, upload, `Ausführungsdatum`. It
+is now tap-to-confirm (`Wirklich abschließen?`) like every other destructive
+control, and the confirmation hides the geology buttons and Pausieren for the
+duration — they would be the easiest mis-taps next to the button being
+confirmed.
+
+**They are hidden in place, and the confirm button reserves its wider label's
+width.** The row is shrink-to-fit and centred, so simply dropping 450px of
+controls moved the confirm button from x 715–895 to 437–686 — out from under
+the finger that had just tapped it. The second tap then landed on bare bar,
+which the outside-tap handler reads as "anything else" and cancels: a worker
+tapping twice in the same place could never finish an element. Measured at
+1024x768, with and without a long element name, on the element screen and on
+the list. `visibility: hidden` keeps the geometry and still takes no pointer
+events, which was the whole point of hiding them.
+
+Four things about the implementation are easy to get wrong:
+
+- **A pause commits its geology like any other stop.** It skips the things
+  that *finish* an element — the `Ausführungsdatum`, and the sign-off screen
+  the bar routes through — but `recordLiveLayer` writes every tap straight into
+  `session_readings` as `pending`, so a session paused after one tap used to
+  upload exactly one `GeoDIN` row and nothing else. implenia-web derives layers
+  by change detection, so that single row reads as "this ground from 2,0 m to
+  the bottom of the hole": a partial profile, reported as complete, in a signed
+  document, from an upload that succeeded. Committing costs the pause nothing
+  it was protecting — the review is spent by `geology_confirmed_at`, which only
+  the sign-off sets, so a paused element is asked again when it is resumed and
+  drilled further.
+
+- **`paused` is a column on the session row, not a state of its own.** The
+  resume path already does everything a pause needs — the session ends, the
+  element stays open, starting again reopens it on its phase — so the flag only
+  has to suppress the two things that *finish* an element.
+- **Completion hangs off the upload, not the stop.** `autoMarkComplete` runs
+  inside `uploadSession`, which can run minutes or a reboot later from
+  `autoUploadOnConnectivity` or `uploadPendingSessionsAtBoot`. A flag held in
+  memory, or a check at the stop, would stamp an `Ausführungsdatum` for a paused
+  element the next time the link came back.
+- **`getCompletedElements` keys off `status = 'uploaded'`**, so it needs the
+  flag too. Without it a paused session's readings upload, the element shows as
+  done on the element list, and the kiosk contradicts the platform — which is
+  the confusion Pausieren exists to remove, arriving by the back door.
+
+The readings upload either way. Getting measurements off the machine is never
+the thing to defer, the platform upserts on `(sensor_id, date)`, and a resumed
+element appends.
+
+**Known gap:** the voice command `recording.stop` ("aufzeichnung beenden",
+"stop") still goes straight to the finishing path, with no spoken equivalent of
+the confirmation and no spoken Pausieren. That is consistent with the voice stop
+deliberately skipping the sign-off — a hands-free operator has no spoken way off
+that screen — but it does mean the phrase is now the one way to finish an
+element in a single action.
+
+### A pillar somebody has already drilled does not look untouched
+
+```
+GET /api/recording/started-elements   → [{ elementName, tiefe, letzteAufzeichnung }]
+```
+
+A paused element is *unfinished*, so it stays in the main grid of the element
+list — and until now its tile was pixel-identical to one nobody had ever
+opened. `getCompletedElements` deliberately skips a paused session (see above),
+which is right for the „Abgeschlossene Elemente" row below the grid and left
+the grid itself with nothing at all to say. A worker coming back after a shift change had no way to tell a hole
+somebody is six metres into from one that has not been started, and the kiosk
+knew the whole time.
+
+**The lookup behind all of this is re-asked whenever a session starts or
+ends.** `useElementRueckkehr` keyed its fetch on the element name alone, and
+the screen does not reload: a worker who recorded a fresh pillar, stepped to
+Austausch and tapped Pausieren was still holding the answer from before the
+recording — `bekannt: false`, `modus: null`. The phase fell back to Bohren, the
+button said „Aufzeichnung beginnen", and starting again opened the new session
+in `bohren` while the rig was doing the slurry exchange, which is what the
+Herstellprotokoll reads as drilling. Pause-and-resume on one screen is the
+feature's main path, so this is the state it had to be right in.
+
+The tile now carries the **depth reached**, with a dashed warning border:
+*bis 6,20 m*. It is the depth and not the phase because the phase is a flag the
+operator sets — a session that says Auffüllen may hold no readings at all —
+whereas a depth of 0 says exactly what happened: somebody tapped start, fiddled,
+and stopped again. That case reads *begonnen*, which is also what a session
+whose depth has not been computed yet says: both are the weaker claim, and both
+are true.
+
+**The row below the grid is called „Abgeschlossene Elemente"**, and it used to
+be called „Begonnene". Those elements are the opposite of what the grid's new
+marker means: a session uploaded without a pause, so the `Ausführungsdatum`
+went to the platform and the element dropped off the shift assignment. The row
+exists only so an operator can take one back — tapping it clears the completion
+before opening. With both rows dashed and both saying "begonnen", the screen
+was offering one word for two opposite states. The identifiers followed the
+label (`allCompleted`, `completedTile…`), because the collision started there. The element screen's start button follows the same answer, reading
+`Aufzeichnung fortsetzen` rather than `… beginnen` for a pillar this kiosk has
+recorded before (the same local `last-session` lookup the restored phase comes
+from, so it answers offline).
+
+**The depth is stored on the session row when the session ends**, not read out
+of `session_readings` when somebody asks. A captured session holds ~276 000
+readings, ~27 000 of them depths, and `MAX(value_numeric)` over those is ~20 ms
+on a developer machine — several times that on the kiosk's Celeron, per
+session, on a screen a worker returns to all day. Three details hang off that:
+
+- **It is resolved by role, never by name** (`Bohrtiefe` for Injektionsbohren,
+  `Tiefe` for DSV), out of the session's own pinned `sensor_map`, with the
+  local CSVs as the fallback for sessions recorded before roles were persisted.
+- **The two filters every depth read here uses**: `phase = 'bohren'` and
+  `upload_status != 'clipped'`, or the answer is the frozen depth of a
+  Rohrverlängerung — a depth the hole never had.
+- **`backfillMaxDepth` fills in what predates the column**, once per start,
+  after `listen`, newest first and capped at 30 sessions. better-sqlite3 is
+  synchronous, so a shift's worth of those queries inside a request would stall
+  ingestion and the WebSocket for a second or more; at startup nothing is being
+  recorded, and an update *is* a restart. It is also the safety net for a
+  session that ended through some path that forgot to compute it.
+
+### During a recording, the only element that can be opened is the one being recorded
+
+Opening another element mid-recording was allowed, and quietly wrong in two
+ways at once. The element screens draw the **rig's** live readings, so another
+element's screen paired *that* element's Soll values with *this* element's Ist
+values. And the header's phase stepper there writes to the running session: one
+tap on what looked like an untouched pillar moved the phase of the one in the
+ground — `Status`, which implenia-web's Herstellprotokoll segments every KPI by,
+in a document that is signed and archived.
+
+So the element list leaves the other tiles visible and **inert** — subdued, and
+`disabled` rather than a tap that explains itself afterwards. The list is how a
+worker checks what else is on the shift, so emptying it would be worse than one
+that cannot be tapped; and the one tile that *is* tappable carries the live dot.
+
+Two consequences worth knowing:
+
+- **The search box is replaced by the explanation for the duration.** Every
+  result would be a locked tile, so the box leads nowhere — and that row is the
+  only space on the screen for the sentence. At 1024x768 the content column has
+  415px with the recording bar up and needs 419 for six tiles and the resume
+  row, measured on the rendered page; the search row is 80 of those pixels and
+  the hint takes 40 of them back. Without the sentence a dimmed tile that does
+  nothing is indistinguishable from a frozen screen, which is the one thing
+  this kiosk must never look like.
+- **A redirect covers the ways in that bypass a tile** — a reload on such a
+  URL, a typed hash, a second tab, the `öffne <element>` voice command. `App`
+  sends `element`, `bohren` and `ausrichten` routes naming any other element to
+  the recording element's own screen. The geology sign-off is exempt: it is
+  about the *session* and is always reached with the recording element's name.
+  Keeping the rule in one place is why the voice command was left alone rather
+  than growing a second copy of the condition.
+
+### The recording bar never moves the screen under a worker's finger
+
+Three measured defects, all of them the same mistake — letting a message
+decide a layout:
+
+| bar state | was | now |
+| --- | --- | --- |
+| idle (`Aufzeichnung fortsetzen`), recording, `✓ Erfolgreich hochgeladen` | 64 px | 64 px |
+| `✓ Element wiederaufgenommen` alone | 47 px | — (gone) |
+| start button **and** that message | **99 px** | impossible |
+| on the element list: absent → present → absent | grid shifts 47 px twice | only for outstanding work |
+
+- **Every state of the bar is one row of the same height.** `minHeight: 52px`
+  on the rows, which is the height of the buttons they usually carry, so a row
+  holding only text is exactly as tall as the start button it stands in for.
+- **A message that leaves by itself says how long it has.** A line under it
+  shrinks from both ends over the same ten seconds the timer runs — one
+  constant (`MELDUNG_MS`) feeds the timeout and the animation, so they cannot
+  disagree. It is a `scaleX` keyframe, which the compositor handles without a
+  layout pass per frame, and it lives inside the row's own 52px, so the bar is
+  the same height with it as without. Without it a message is simply gone the
+  next time a worker looks up, and nothing says whether it was missed or never
+  there.
+- **Two messages could stack.** The upload confirmation and the resume
+  confirmation each ran their own 10-second timer; the first expired, the bar
+  fell back to idle and drew the start button, and the second was still up —
+  underneath it, 99 px of bar. There is one transient slot now.
+- **A success is only recorded if there is a bar on screen to show it.** The
+  confirmation belongs to the moment it happens. Tapping Pausieren on the
+  element list used to flash it for the few hundred milliseconds between the
+  upload landing and the server clearing the recording state — and then show
+  it again, in full, on whatever element was opened next, which could be a
+  different pillar than the one it was about. A *failure* is recorded wherever
+  it happens: that is not a confirmation, it is work still to do.
+- **A transient message no longer summons the bar on screens that do not have
+  one.** On the element screens the bar is always present, so a message there
+  costs no layout at all. Everywhere else it appears only for *outstanding
+  work*: a running recording, an upload in flight, a session still waiting to
+  go. It cannot simply stay reserved on the element list either — a permanent
+  bar leaves that grid 415 px where six tiles and the „Abgeschlossene Elemente"
+  row need 419.
+
+What a worker loses is the upload confirmation if they walk to the list while
+it runs; what they get instead is permanent and in the place they are looking —
+the element sits under „Abgeschlossene Elemente" with its date. A *failed*
+upload still raises the bar everywhere, because that one is outstanding work —
+and so does „Keine Messwerte aufgezeichnet", which is where the line is drawn:
+it reports a recording that captured nothing, which is a warning and not a
+confirmation. Both stop buttons live in this bar, and the bar is on screen
+during a recording wherever the worker is standing, so that stop can perfectly
+well happen from the element list.
+
+**`Wiederaufnehmen` is gone from the bar.** It cleared the `Ausführungsdatum`,
+which `Aufzeichnung fortsetzen` does not do — but the same clear-and-open sits
+permanently on the element's „Abgeschlossene Elemente" tile, and a recovery
+path that expires after ten seconds is the kind of dead end this kiosk does not
+get to have. One gap worth knowing: with an *imported* Schichtauftrag the file
+is never pruned, so a finished element stays in the main grid and that tile
+never appears; there the completion stands until the next upload re-stamps it.
+
+**Still deliberately two rows:** an action error (`Fehler 409 …`) draws above
+the controls, because the control it reports on is the one the worker needs in
+order to retry. That is the case the reserved-slot/banner work is for.
+
+The element list's own spacing moved with this: the bar reaching the list over
+an outstanding upload is what made the 4 px it was already clipping visible, so
+the page padding is 1 rem, the search row's margin 0.75 rem and the bottom bar
+64 px — 20 px back, 16 of them spare.
 
 ### Why the profile is always complete
 
@@ -1555,6 +1788,7 @@ server/src/
   vorgabe-geology.ts  — Planned profile from "Geologie n" / "Tiefe Geologie n"
   element-completion.ts — Ausführungsdatum writes (sentinel date + data-version stamp)
   element-device.ts     — Element name → platform device id (resolve + cache)
+  element-progress.ts   — How deep an element got here (stored at the stop, backfilled at boot)
   herstellen-sensors.ts — Element sensor defs: fetch, filter, offline cache
   session-export.ts   — Stream-driven .xlsx export (HDI/IVL) for implenia-web import
   grid-reduce.ts      — Readings → one row per interval, last value per sensor (pure)

@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { navigate } from '../hooks/useHashRouter';
 import type { ShiftAssignmentState } from '../hooks/useImplenia';
+import { fortschrittText } from '../utils/fortschritt';
 
 interface Props {
   shift: ShiftAssignmentState;
@@ -14,6 +15,14 @@ interface Props {
 interface CompletedElement {
   elementName: string;
   lastUpload: number;
+}
+
+/** An element this kiosk holds recordings for, as `started-elements` reports it. */
+interface StartedElement {
+  elementName: string;
+  /** The deepest drilling depth recorded here, or 0 when there is none. */
+  tiefe: number;
+  letzteAufzeichnung: number;
 }
 
 function ImportButton({ onImport }: { onImport: Props['onImport'] }) {
@@ -103,6 +112,36 @@ function CacheBadge({ cachedAt }: { cachedAt: number | null }) {
   );
 }
 
+/**
+ * Which elements this kiosk has already recorded, and how deep they got.
+ *
+ * Separate from `useCompletedElements`, which answers the other question —
+ * "is this element finished" — and moves a tile into the „Abgeschlossene
+ * Elemente" row. An
+ * element that was paused is *unfinished*, so it stays in the main grid, and
+ * before this it looked exactly like one nobody had touched: same tile, same
+ * nothing. That is how somebody re-drills a hole another shift is halfway
+ * through.
+ *
+ * Refetched whenever the recording stops or starts, because the depth is
+ * written when the session ends — so the tile carries it the moment the worker
+ * comes back to the list.
+ */
+function useStartedElements(recordingElement?: string | null) {
+  const [elements, setElements] = useState<StartedElement[]>([]);
+
+  useEffect(() => {
+    let aktuell = true;
+    fetch('/api/recording/started-elements')
+      .then((r) => (r.ok ? r.json() : { elements: [] }))
+      .then((data) => { if (aktuell) setElements(data.elements ?? []); })
+      .catch(() => { if (aktuell) setElements([]); });
+    return () => { aktuell = false; };
+  }, [recordingElement]);
+
+  return elements;
+}
+
 function useCompletedElements() {
   const [elements, setElements] = useState<CompletedElement[]>([]);
 
@@ -142,6 +181,7 @@ export function ShiftAssignment({
   const isCached = shift.source === 'cache';
   const [search, setSearch] = useState('');
   const completedElements = useCompletedElements();
+  const startedElements = useStartedElements(recordingElement);
 
   if (!hasApiKey && !isImported && !shift.loading) {
     return (
@@ -240,12 +280,55 @@ export function ShiftAssignment({
 
   const { data } = shift;
   const unfinishedNames = new Set(data.measuring_devices.map((d) => d.name));
-  const lower = search.toLowerCase();
-  const isSearching = search.length > 0;
+  const fortschritt = new Map(startedElements.map((e) => [e.elementName, e]));
 
-  // Already-uploaded elements the operator may want to pick up again. Anything
-  // still in the shift assignment belongs in the unfinished grid instead.
-  const allStarted = completedElements.filter((e) => !unfinishedNames.has(e.elementName));
+  /*
+   * While a recording runs, the only element that can be opened is the one
+   * being recorded.
+   *
+   * Not a restriction for its own sake: the element screens draw the *rig's*
+   * live readings, so another element's screen shows that element's Soll
+   * values beside this element's Ist values — and the header's phase stepper
+   * there writes to the running session, so an operator correcting the phase
+   * on what looks like an untouched pillar moves the phase of the one in the
+   * ground. `Status` is what implenia-web's Herstellprotokoll segments every
+   * KPI by, so that is a signed document reporting the wrong phase.
+   *
+   * The tiles are left visible and inert rather than removed: the list is how
+   * a worker checks what else is on the shift, and a grid that emptied itself
+   * during a recording would be worse than one that cannot be tapped. App's
+   * own redirect covers the ways in that do not go through a tile — a reload,
+   * a typed hash, a second tab.
+   */
+  const gesperrt = (name: string): boolean => !!recordingElement && name !== recordingElement;
+  /*
+   * Searching is off while a recording runs, and the search row carries the
+   * explanation instead.
+   *
+   * Every result would be a tile that cannot be opened, so the box leads
+   * nowhere — and the row it occupies is the only space on this screen that
+   * can hold the sentence. At 1024x768 with the recording bar up, six tiles
+   * and the resume row need 419px and the content column had 415 of them:
+   * clipped by 4 before any of this, and a line of text would have cost 30
+   * more. The sentence in a 40px row instead of the 64px input leaves exactly
+   * enough. Measured on the rendered page, not derived — the grid is centred
+   * and `overflow: hidden`, so it loses pixels off the top and bottom with no
+   * scrollbar and nothing saying so.
+   *
+   * `isSearching` is computed from it rather than the state being cleared, so
+   * a filter typed before the recording started cannot keep filtering a list
+   * whose search box is no longer on screen.
+   */
+  const suchbar = !recordingElement;
+  const lower = search.toLowerCase();
+  const isSearching = suchbar && search.length > 0;
+
+  // Elements this kiosk has *finished*: a session uploaded without a pause, so
+  // the Ausführungsdatum went to the platform and the element dropped off the
+  // shift assignment. This row is the only way back to one. Anything still in
+  // the shift assignment is unfinished and belongs in the grid above, where a
+  // tile that carries recordings says so with its depth.
+  const allCompleted = completedElements.filter((e) => !unfinishedNames.has(e.elementName));
 
   // Two rows of today's work plus one row of elements to resume is what fits at
   // 1024x768. The caps apply to the search results too: the grid is clipped
@@ -254,7 +337,7 @@ export function ShiftAssignment({
   // scrollbar and no way to reach them. Truncated, the screen says so and the
   // next typed character narrows it.
   const MAX_UNFINISHED = 6;
-  const MAX_STARTED = 3;
+  const MAX_COMPLETED = 3;
 
   /**
    * The element being recorded comes first.
@@ -276,33 +359,53 @@ export function ShiftAssignment({
    * And the same for the resumed ones, because a running recording can be
    * here instead: "Wiederaufnehmen" clears the completion and refetches, and
    * when that refetch fails — offline, which is the whole scenario this exists
-   * for — the element stays listed as begonnen while being recorded. Three
+   * for — the element stays listed as abgeschlossen while being recorded. Three
    * tiles fit, so without the hoist it can be cut from the screen entirely.
    */
-  const startedMatches = isSearching
-    ? allStarted.filter((e) => e.elementName.toLowerCase().includes(lower))
-    : [...allStarted].sort((a, b) =>
+  const completedMatches = isSearching
+    ? allCompleted.filter((e) => e.elementName.toLowerCase().includes(lower))
+    : [...allCompleted].sort((a, b) =>
       Number(b.elementName === recordingElement) - Number(a.elementName === recordingElement));
 
   const unfinishedTiles = unfinishedMatches.slice(0, MAX_UNFINISHED);
-  const startedTiles = startedMatches.slice(0, MAX_STARTED);
+  const completedTiles = completedMatches.slice(0, MAX_COMPLETED);
   const hiddenCount =
     unfinishedMatches.length - unfinishedTiles.length
-    + (startedMatches.length - startedTiles.length);
+    + (completedMatches.length - completedTiles.length);
 
-  const nothingFound = isSearching && unfinishedTiles.length + startedTiles.length === 0;
+  const nothingFound = isSearching && unfinishedTiles.length + completedTiles.length === 0;
 
   return (
     <div style={styles.page}>
       <div style={styles.inner}>
         <div style={styles.topBar}>
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Element suchen..."
-            style={styles.searchInput}
-          />
+          {suchbar ? (
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Element suchen..."
+              style={styles.searchInput}
+            />
+          ) : (
+            /*
+              Why the other tiles do not react to a tap. Without it a dimmed
+              tile that does nothing is indistinguishable from a frozen screen,
+              which is the one thing this kiosk must never look like.
+            */
+            <div style={styles.gesperrtHinweis}>
+              Während der Aufzeichnung kann nur „
+              {/*
+                The name is capped, not the sentence: the part that explains
+                anything is at the end of it. A long element name — the field
+                has produced 70-character ones — wrapped this to two lines,
+                which eats the 16px of slack the grid below has and clips the
+                top row of tiles with no scrollbar.
+              */}
+              <span style={styles.gesperrtName}>{recordingElement}</span>
+              " geöffnet werden
+            </div>
+          )}
         </div>
 
         <div style={styles.content}>
@@ -310,48 +413,63 @@ export function ShiftAssignment({
 
           {unfinishedTiles.length > 0 && (
             <div style={styles.grid}>
-              {unfinishedTiles.map((device) => (
-                <button
-                  key={device.id}
-                  onClick={() => navigate(`element/${encodeURIComponent(device.name)}`)}
-                  style={device.name === recordingElement
-                    ? { ...styles.tile, ...styles.recordingTile }
-                    : styles.tile}
-                >
-                  <div style={styles.tileName}>{device.name}</div>
-                  {device.name === recordingElement && (
-                    <div style={styles.recordingBadge}>
-                      <span style={styles.recordingDot} />
-                      Aufzeichnung läuft
-                    </div>
-                  )}
-                </button>
-              ))}
+              {unfinishedTiles.map((device) => {
+                const begonnen = fortschritt.get(device.name);
+                return (
+                  <button
+                    key={device.id}
+                    onClick={() => navigate(`element/${encodeURIComponent(device.name)}`)}
+                    disabled={gesperrt(device.name)}
+                    style={{
+                      ...styles.tile,
+                      ...(begonnen ? styles.angefangenTile : {}),
+                      ...(device.name === recordingElement ? styles.recordingTile : {}),
+                      ...(gesperrt(device.name) ? styles.tileGesperrt : {}),
+                    }}
+                  >
+                    <div style={styles.tileName}>{device.name}</div>
+                    {device.name === recordingElement ? (
+                      <div style={styles.recordingBadge}>
+                        <span style={styles.recordingDot} />
+                        Aufzeichnung läuft
+                      </div>
+                    ) : begonnen && (
+                      /*
+                        Depth, not phase: it is the one number that says whether
+                        anybody has drilled here. See `fortschrittText`.
+                      */
+                      <div style={styles.angefangenText}>{fortschrittText(begonnen.tiefe)}</div>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
 
-          {startedTiles.length > 0 && (
+          {completedTiles.length > 0 && (
             <>
-              <div style={styles.sectionLabel}>Begonnene Elemente</div>
+              <div style={styles.sectionLabel}>Abgeschlossene Elemente</div>
               <div style={styles.grid}>
-                {startedTiles.map((el) => (
+                {completedTiles.map((el) => (
                   <button
                     key={el.elementName}
                     onClick={() => resumeAndOpen(el.elementName, shift.refetch)}
+                    disabled={gesperrt(el.elementName)}
                     style={{
                       ...styles.tile,
-                      ...styles.startedTile,
+                      ...styles.completedTile,
                       ...(el.elementName === recordingElement ? styles.recordingTile : {}),
+                      ...(gesperrt(el.elementName) ? styles.tileGesperrt : {}),
                     }}
                   >
-                    <div style={styles.startedTileName}>{el.elementName}</div>
+                    <div style={styles.completedTileName}>{el.elementName}</div>
                     {el.elementName === recordingElement ? (
                       <div style={styles.recordingBadge}>
                         <span style={styles.recordingDot} />
                         Aufzeichnung läuft
                       </div>
                     ) : (
-                      <div style={styles.startedTileDate}>
+                      <div style={styles.completedTileDate}>
                         {new Date(el.lastUpload).toLocaleDateString('de-DE', {
                           day: '2-digit', month: '2-digit', year: 'numeric',
                         })}
@@ -363,7 +481,11 @@ export function ShiftAssignment({
             </>
           )}
 
-          {hiddenCount > 0 && (
+          {/*
+            Not while a recording runs: it tells the worker to type a name, and
+            the search box it means is gone for the duration (see `suchbar`).
+          */}
+          {suchbar && hiddenCount > 0 && (
             <div style={styles.moreHint}>
               {hiddenCount === 1
                 ? '1 weiteres Element — Namen eingeben, um es zu finden'
@@ -388,15 +510,26 @@ export function ShiftAssignment({
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  // The vertical spacing here is measured, not chosen: at 1024x768 the full
-  // screen (search, six element tiles, the resume row and the import button) is
-  // 13px short of fitting while the recording bar is up, so each gap is as
-  // small as it can be and still read as a separation.
+  /*
+   * The vertical spacing here is measured, not chosen.
+   *
+   * At 1024x768 with the recording bar up, the content column gets 415px and
+   * the fullest screen — six element tiles, the „Abgeschlossene Elemente" row
+   * — needs 419. It was clipping those 4px off a centred grid with no
+   * scrollbar: the top row of tiles came out with its border cut. The bar
+   * reaches the list whenever an upload is still outstanding, so this is not
+   * a corner case.
+   *
+   * 1rem of page padding, 0.75rem under the search row and a 64px bottom bar
+   * buy 20px back, which leaves 16 to spare. Everything else here is already as small as it
+   * can be and still read as a separation; the next pixels would have to come
+   * out of the tiles, which are tap targets.
+   */
   page: {
     display: 'flex',
     justifyContent: 'center',
     height: '100%',
-    padding: '1.25rem',
+    padding: '1rem',
     boxSizing: 'border-box' as const,
   },
   // Search and import keep their place while the grids change underneath, so
@@ -412,7 +545,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     justifyContent: 'center',
     flexShrink: 0,
-    marginBottom: '1rem',
+    marginBottom: '0.75rem',
   },
   content: {
     flex: 1,
@@ -432,7 +565,9 @@ const styles: Record<string, React.CSSProperties> = {
     // so a second row here would push the button off the bottom.
     gap: '1rem',
     flexShrink: 0,
-    minHeight: '72px',
+    // 64, not 72: the tallest thing in here is the 56px import button, and the
+    // eight pixels went to the grid above — see `page`.
+    minHeight: '64px',
     marginTop: '1rem',
   },
   cacheBadge: {
@@ -456,6 +591,30 @@ const styles: Record<string, React.CSSProperties> = {
   cacheBadgeSub: {
     fontSize: '1rem',
     color: 'var(--color-warning-text)',
+  },
+  // In the search row's place while a recording runs — and shorter than the
+  // 64px input it replaces, because the grid needs those pixels: with six
+  // tiles, the resume row and the recording bar up, the content column
+  // overflows its 415px by 4 and clips them off a centred grid with no
+  // scrollbar. 40px leaves it ~20px of room. It is a line of text, not a tap
+  // target, so the glove minimum does not apply to it.
+  gesperrtHinweis: {
+    display: 'flex',
+    alignItems: 'center',
+    minHeight: '40px',
+    fontSize: '1.1rem',
+    fontWeight: 600,
+    color: 'var(--text-secondary)',
+    textAlign: 'center' as const,
+    whiteSpace: 'nowrap' as const,
+  },
+  gesperrtName: {
+    display: 'inline-block',
+    maxWidth: '340px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+    verticalAlign: 'bottom',
   },
   searchInput: {
     width: '100%',
@@ -594,18 +753,46 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: 'var(--color-danger)',
     flexShrink: 0,
   },
-  // Dashed border reads as "half finished" — the element has data but is being
-  // picked up again.
-  startedTile: {
+  // An element in today's list that this kiosk already holds recordings for —
+  // paused, or stopped and not yet uploaded. Same dashed border as the resume
+  // row below, which is the screen's existing word for "has data", on the main
+  // grid's own background so it reads as unfinished work rather than as
+  // something demoted.
+  angefangenTile: {
+    border: '2px dashed var(--color-warning)',
+  },
+  angefangenText: {
+    fontSize: '1.1rem',
+    fontWeight: 600,
+    color: 'var(--color-warning-text)',
+  },
+  // Not openable while a recording runs. Subdued rather than hidden, and
+  // `disabled` rather than a tap that explains itself: there is one thing to
+  // tap on this screen during a recording and it is the tile with the live
+  // dot.
+  //
+  // 0.6 and not 0.4: at 0.4 the tile's own name came out at about 2.3:1
+  // against the page, which is below anything this kiosk shows a worker and
+  // worse again in sunlight — and the tiles are left on screen precisely so
+  // the rest of the shift can still be read. 0.6 is ~4:1 and still reads as
+  // unavailable at a glance.
+  tileGesperrt: {
+    opacity: 0.6,
+    cursor: 'default',
+  },
+  // Finished here, and offered only so an operator can take one back. Lighter
+  // than the grid above and with a grey dashed border rather than the warning
+  // one, because the row above is where the open work is.
+  completedTile: {
     backgroundColor: 'var(--surface-2)',
     border: '2px dashed var(--border)',
   },
-  startedTileName: {
+  completedTileName: {
     fontSize: '1.6rem',
     fontWeight: 700,
     wordBreak: 'break-word' as const,
   },
-  startedTileDate: {
+  completedTileDate: {
     fontSize: '1rem',
     color: 'var(--text-muted)',
   },

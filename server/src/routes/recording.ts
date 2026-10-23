@@ -7,7 +7,9 @@ import {
   getSessions, getSessionById, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
   getSessionReadingCount, setOperatingModeRow, getMostRecentSession, getCompletedElements,
   unclipSessionReadings, getActiveSession, setDrillingEndedAt, setGeologyConfirmedAt,
+  setSessionPaused, getStartedElements,
 } from '../db.js';
+import { recordMaxDepth } from '../element-progress.js';
 import {
   commitDefaultGeology, commitGeology, getGeologyContext, hasGeologyReadings, recordLiveLayer,
   type GeologyCommitResult, type GeologyLayerInput,
@@ -149,11 +151,51 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
   app.post('/api/recording/stop', async (request, reply) => {
     try {
       const { layers, hinweis } = readGeologyBody(request.body);
+      /*
+       * Pausieren: end the session without finishing the element.
+       *
+       * No geology commit and no `Ausführungsdatum` — the operator stopped to
+       * reach something the recording guard blocks (an update, the WLAN
+       * switch), not because the pillar is done. The readings upload normally;
+       * getting them off the machine is never the thing to defer.
+       *
+       * It is a flag on the stop rather than a state of its own because the
+       * resume path already does everything else: the session ends, the
+       * element stays resumable, and starting again reopens it on its phase.
+       */
+      const pause = (request.body as { pause?: unknown } | null | undefined)?.pause === true;
 
       // Read the session before ending it: afterwards there is no active one.
       const active = getActiveSession();
       let geology: GeologyCommitResult | undefined;
       let geologieFehler: string | undefined;
+      if (active && pause) {
+        // Before endRecording, so the row already carries the flag by the time
+        // the auto-upload below can read it.
+        setSessionPaused(active.id, true);
+        log.info('Session %d paused', active.id);
+      }
+      /*
+       * The geology is committed on **both** paths, pause included.
+       *
+       * A pause skips the things that *finish* an element — the
+       * Ausführungsdatum, and the sign-off screen the recording bar routes
+       * through. It must not skip the back-fill, and the first version did:
+       * `recordLiveLayer` writes each tap straight into `session_readings` as
+       * `pending`, so a worker who drilled to 2 m, tapped „Sand" and then
+       * paused to apply an update uploaded exactly one `GeoDIN` row and
+       * nothing else. implenia-web turns that into "this ground from 2.0 m to
+       * the bottom of the hole" — the partial profile that
+       * "every committed profile is complete" exists to prevent, in a signed
+       * document, from an upload that reported success.
+       *
+       * Committing here costs the pause nothing it was protecting: the review
+       * is spent by `geology_confirmed_at`, which only the sign-off sets, so a
+       * paused element is still asked about its ground when it is resumed and
+       * drilled further. What it writes is what any other unreviewed stop
+       * writes — the observations, with the stretches nobody confirmed filled
+       * in from the Schichtauftrag and marked „(Vorgabe)".
+       */
       if (active) {
         /*
          * Its own try/catch, and that is the whole point of it.
@@ -201,6 +243,23 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
       }
 
       const result = endRecording();
+      /*
+       * How deep this session drilled, stored on the row now that it is final.
+       *
+       * Here rather than inside `endRecording` so the depth query never sits
+       * between the ingestion layer and the database (see element-progress.ts
+       * for the import direction). Its own try/catch for the same reason the
+       * geology commit has one: a stop must not fail over a number the element
+       * list uses to label a tile, and `backfillMaxDepth` picks up anything
+       * missed at the next start.
+       */
+      if (active) {
+        try {
+          recordMaxDepth(active);
+        } catch (err) {
+          log.warn('Session %d: could not compute the drilled depth: %s', active.id, (err as Error).message);
+        }
+      }
       broadcastMessage({ type: 'recording-state', ...getRecordingState() });
 
       // Auto-upload in the background — don't block the HTTP response
@@ -578,5 +637,19 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
 
   app.get('/api/recording/completed-elements', async (_request, reply) => {
     return reply.send({ elements: getCompletedElements() });
+  });
+
+  /*
+   * Every element this kiosk has recorded, with the depth it reached.
+   *
+   * Not the same question as `completed-elements`, which answers "is this
+   * element finished" and is what moves a tile into the resume row. This one
+   * answers "has anybody worked here", for the elements that are still on the
+   * shift assignment: a paused pillar is unfinished and belongs in the main
+   * grid, but a tile that looks exactly like an untouched one is how a worker
+   * re-drills a hole somebody is halfway through.
+   */
+  app.get('/api/recording/started-elements', async (_request, reply) => {
+    return reply.send({ elements: getStartedElements() });
   });
 }

@@ -78,6 +78,16 @@
   50% { opacity: 0.4; }
 }
 
+/* How much time a self-dismissing message in the recording bar has left.
+   scaleX rather than width: it runs on the compositor, and the kiosk's
+   Celeron has better things to do than lay out a bar sixty times a second.
+   The duration is passed inline from the same constant as the timer, so the
+   two cannot drift. */
+@keyframes restzeit {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+
 /* ── Replay panel: range slider thumb ─────────────────────────── */
 /* Dev-only — the replay timeline needs a visible thumb over its
    custom track, which inline styles cannot target. */

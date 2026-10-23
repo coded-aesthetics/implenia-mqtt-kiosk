@@ -80,7 +80,7 @@ export function cacheServesFailure(err: unknown): boolean {
  * finished yesterday evening sits in the grid this morning looking like work
  * to do, which is how an element gets drilled twice.
  *
- * They are not hidden: the element list's „Begonnene Elemente" row is built
+ * They are not hidden: the element list's „Abgeschlossene Elemente" row is built
  * from the same local completions, so a dropped element appears there with its
  * date and can still be resumed.
  */

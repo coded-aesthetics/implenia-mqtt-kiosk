@@ -23,6 +23,32 @@ export interface Session {
   drilling_ended_at: number | null;
   /** When the operator signed the geology profile off, if they have. */
   geology_confirmed_at: number | null;
+  /**
+   * Whether the operator paused rather than finished this session.
+   *
+   * A paused session is an ordinary ended session in every respect but one:
+   * its upload must not stamp an `Ausführungsdatum`. See `autoMarkComplete`'s
+   * caller in recording.ts. Completion hangs off the *upload*, not the stop,
+   * so the flag has to live on the row — the upload can run minutes later from
+   * `autoUploadOnConnectivity` or a reboot, long after the pause.
+   */
+  paused: number;
+  /**
+   * The deepest drilling depth this session recorded, in metres — the one
+   * number that says whether work actually happened here.
+   *
+   * Written once, when the session ends (`recordMaxDepth`), rather than read
+   * out of `session_readings` when somebody asks: a shift's sessions hold a
+   * few hundred thousand readings each, and a `MAX()` per session is ~20 ms on
+   * a developer machine and several times that on the kiosk's Celeron — which
+   * the element list would pay on every render.
+   *
+   * Null means "not computed", which is every session recorded before this
+   * column existed until `backfillMaxDepth` reaches it. Readers treat null and
+   * 0 alike: both mean "no depth to show", and 0 is a real answer — somebody
+   * started a recording, fiddled, and paused again.
+   */
+  max_depth: number | null;
 }
 
 export interface SessionStats {
@@ -233,6 +259,19 @@ db.exec(`
   if (!has('geology_confirmed_at')) {
     db.exec('ALTER TABLE recording_sessions ADD COLUMN geology_confirmed_at INTEGER');
   }
+  // Set by Pausieren, which ends the session without finishing the element:
+  // no geology commit, and no Ausführungsdatum when the readings upload.
+  // Defaults to 0, so every session recorded before this existed keeps
+  // completing exactly as it did.
+  if (!has('paused')) {
+    db.exec('ALTER TABLE recording_sessions ADD COLUMN paused INTEGER NOT NULL DEFAULT 0');
+  }
+  // How deep this session drilled, written when it ends. Nullable on purpose:
+  // null is "not computed yet", which is every session that predates the
+  // column. See `Session.max_depth` and `element-progress.ts`.
+  if (!has('max_depth')) {
+    db.exec('ALTER TABLE recording_sessions ADD COLUMN max_depth REAL');
+  }
 }
 
 {
@@ -320,7 +359,7 @@ const getSessionsStmt = db.prepare(
 const getCompletedElementsStmt = db.prepare(`
   SELECT element_name, MAX(COALESCE(ended_at, started_at)) as last_upload
   FROM recording_sessions
-  WHERE status = 'uploaded'
+  WHERE status = 'uploaded' AND paused = 0
   GROUP BY element_name
   ORDER BY last_upload DESC
 `);
@@ -638,6 +677,96 @@ export function getCompletedElements(): CompletedElement[] {
   return rows.map((r) => ({ elementName: r.element_name, lastUpload: r.last_upload }));
 }
 
+/** An element this kiosk has recorded, as `getStartedElements` reports it. */
+export interface StartedElement {
+  elementName: string;
+  /**
+   * The deepest drilling depth recorded here across every session, or 0 when
+   * there is none to show. 0 covers two cases on purpose — a session that
+   * drilled nothing, and one whose depth has not been computed yet (see
+   * `Session.max_depth`) — because the honest statement about both is the
+   * weaker one: somebody started a recording here.
+   */
+  tiefe: number;
+  /** When the last session for this element ended, or started if it has not. */
+  letzteAufzeichnung: number;
+}
+
+/*
+ * Every element this kiosk holds a session for, deepest depth and last
+ * activity.
+ *
+ * No status filter, deliberately: the question is "has anybody worked here",
+ * and a session that is still waiting to upload, was paused, or recorded
+ * nothing at all answers yes. That is the difference from
+ * `getCompletedElements`, which answers "is this element finished".
+ */
+const getStartedElementsStmt = db.prepare(`
+  SELECT element_name,
+         MAX(COALESCE(max_depth, 0)) AS tiefe,
+         MAX(COALESCE(ended_at, started_at)) AS letzte
+  FROM recording_sessions
+  GROUP BY element_name
+  ORDER BY letzte DESC
+`);
+
+export function getStartedElements(): StartedElement[] {
+  const rows = getStartedElementsStmt.all() as {
+    element_name: string; tiefe: number | null; letzte: number;
+  }[];
+  return rows.map((r) => ({
+    elementName: r.element_name,
+    tiefe: r.tiefe ?? 0,
+    letzteAufzeichnung: r.letzte,
+  }));
+}
+
+/**
+ * The deepest value a session recorded for one sensor, counting real drilling
+ * only.
+ *
+ * The same two filters every depth read in this kiosk uses: `phase = 'bohren'`
+ * drops the Rohrverlängerung phantom depths (see rohrwechsel.ts) and
+ * `upload_status != 'clipped'` the readings held back with them. Without them
+ * the answer is the frozen depth of a pipe change, which is not a depth the
+ * hole ever had.
+ */
+const maxSensorValueStmt = db.prepare(`
+  SELECT MAX(value_numeric) AS max FROM session_readings
+  WHERE session_id = ? AND sensor_id = ?
+    AND phase = 'bohren' AND upload_status != 'clipped'
+`);
+
+export function maxDrilledValue(sessionId: number, sensorId: string): number | null {
+  const row = maxSensorValueStmt.get(sessionId, sensorId) as { max: number | null } | undefined;
+  return row?.max ?? null;
+}
+
+const setSessionMaxDepthStmt = db.prepare(
+  'UPDATE recording_sessions SET max_depth = ? WHERE id = ?'
+);
+
+export function setSessionMaxDepth(sessionId: number, tiefe: number): void {
+  setSessionMaxDepthStmt.run(tiefe, sessionId);
+}
+
+/**
+ * Sessions whose depth has never been computed, newest first.
+ *
+ * `status != 'recording'` because a running session's depth is not final yet —
+ * it is written when the session ends.
+ */
+const getSessionsWithoutMaxDepthStmt = db.prepare(`
+  SELECT * FROM recording_sessions
+  WHERE max_depth IS NULL AND status != 'recording'
+  ORDER BY started_at DESC
+  LIMIT ?
+`);
+
+export function getSessionsWithoutMaxDepth(limit: number): Session[] {
+  return getSessionsWithoutMaxDepthStmt.all(limit) as Session[];
+}
+
 export function deleteSessionWithReadings(id: number): void {
   db.transaction(() => {
     db.prepare('DELETE FROM session_readings WHERE session_id = ?').run(id);
@@ -690,6 +819,10 @@ export function getOperatingMode(sessionId: number): string | null {
 const setDrillingEndedAtStmt = db.prepare(
   'UPDATE recording_sessions SET drilling_ended_at = ? WHERE id = ?'
 );
+const setSessionPausedStmt = db.prepare(
+  'UPDATE recording_sessions SET paused = ? WHERE id = ?'
+);
+
 const setGeologyConfirmedAtStmt = db.prepare(
   'UPDATE recording_sessions SET geology_confirmed_at = ? WHERE id = ?'
 );
@@ -708,6 +841,10 @@ export function setDrillingEndedAt(sessionId: number, at: number | null): void {
 /** Mark the geology profile as signed off, or clear it with null. */
 export function setGeologyConfirmedAt(sessionId: number, at: number | null): void {
   setGeologyConfirmedAtStmt.run(at, sessionId);
+}
+
+export function setSessionPaused(sessionId: number, paused: boolean): void {
+  setSessionPausedStmt.run(paused ? 1 : 0, sessionId);
 }
 
 export function setOperatingModeRow(sessionId: number, mode: string): void {

@@ -119,7 +119,12 @@ export function App() {
    * What this element was last doing here: whether it has been recorded at all,
    * and the phase its last session was in. Local lookup, so it answers offline.
    */
-  const rueckkehr = useElementRueckkehr(route.params.name ?? null);
+  const rueckkehr = useElementRueckkehr(
+    route.params.name ?? null,
+    // Re-asked whenever a session starts or ends, because that is when the
+    // answer changes and this screen does not reload. See the hook.
+    `${recordingState.active}:${recordingState.sessionId}`,
+  );
 
   /**
    * The phase before a recording exists.
@@ -279,6 +284,41 @@ export function App() {
   }, [
     recordingState.active, recordingState.sessionId, recordingState.elementName,
     screen, route.page,
+  ]);
+
+  /**
+   * While a recording runs, the element screens belong to the element being
+   * recorded.
+   *
+   * Opening another one was allowed and quietly wrong in two ways at once.
+   * These screens draw the *rig's* live readings, so another element's screen
+   * paired that element's Soll values with this element's Ist values; and the
+   * header's phase stepper there writes to the running session, so an operator
+   * stepping the phase on what looks like an untouched pillar moved the phase
+   * of the one in the ground — `Status`, which implenia-web's
+   * Herstellprotokoll segments every KPI by.
+   *
+   * The element list keeps the other tiles visible and inert, which is where a
+   * worker meets this rule. This covers the ways in that bypass a tile: a
+   * reload on such a URL, a typed hash, a second tab, a voice command on an
+   * older bundle. Only the element's own screens — the geology sign-off is
+   * about the *session* and is always reached with the recording element's own
+   * name.
+   *
+   * It lands on `element/<name>`, the route that means "open this element", so
+   * a tilted element still goes wherever opening it goes.
+   */
+  useEffect(() => {
+    const { active, elementName } = recordingState;
+    if (!active || !elementName) return;
+    if (screen !== 'app') return;
+    const offen = route.params.name;
+    if (!offen || offen === elementName) return;
+    if (route.page !== 'element' && route.page !== 'bohren' && route.page !== 'ausrichten') return;
+    navigate(`element/${encodeURIComponent(elementName)}`);
+  }, [
+    recordingState.active, recordingState.elementName,
+    route.page, route.params.name, screen,
   ]);
 
   /**
@@ -788,6 +828,10 @@ export function App() {
         // resumed element's Auffüllen screen opens in Auffüllen rather than
         // silently stepping back to Bohren under the operator's finger.
         startModus={modusIstLokal ? angezeigterModus : null}
+        // Has this kiosk recorded this element before? The start button says
+        // „fortsetzen" rather than „beginnen" if it has — the same local
+        // lookup the restored phase comes from.
+        bereitsAufgezeichnet={rueckkehr.bekannt}
         recordingState={recordingState}
         uploadProgress={uploadProgress}
         geologie={geologie}

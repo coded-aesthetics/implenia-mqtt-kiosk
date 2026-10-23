@@ -604,8 +604,27 @@ const MODI: readonly string[] = ['bohren', 'austausch', 'einbauen', 'auffuellen'
  * knowing whether an element has been recorded must not drag an operator onto
  * a screen they did not ask for; leaving them on the drilling screen is what
  * the kiosk did before any of this existed.
+ *
+ * **`stand` is what makes a pause and a resume on one screen work.** The
+ * answer goes stale the moment a recording for this element ends, and the
+ * screen it is on does not reload: a worker who recorded a fresh pillar,
+ * stepped to Austausch and tapped Pausieren was still holding the answer from
+ * before the recording — `bekannt: false`, `modus: null`. So the phase fell
+ * back to Bohren, the button said „Aufzeichnung beginnen", and starting again
+ * opened the new session in `bohren` while the rig was doing the slurry
+ * exchange, which is what implenia-web's Herstellprotokoll reads as drilling.
+ * Pass anything that changes when a session starts or ends — App passes the
+ * recording state's own identity.
+ *
+ * Refetching does **not** show a loading state: the answer is keyed by name,
+ * so the previous one stands until the new one lands. Without that the phase
+ * screen would flip to Bohren and back for the few milliseconds the local
+ * request takes.
  */
-export function useElementRueckkehr(elementName: string | null): ElementRueckkehr {
+export function useElementRueckkehr(
+  elementName: string | null,
+  stand?: string | number | null,
+): ElementRueckkehr {
   const [antwort, setAntwort] = useState<{ name: string; wert: ElementRueckkehr } | null>(null);
 
   useEffect(() => {
@@ -631,7 +650,7 @@ export function useElementRueckkehr(elementName: string | null): ElementRueckkeh
         setAntwort({ name: elementName, wert: { status: 'fehler', bekannt: true, modus: null } });
       });
     return () => { aktuell = false; };
-  }, [elementName]);
+  }, [elementName, stand]);
 
   // Keyed on the name, so switching elements reads as "loading" rather than
   // handing the new element the previous one's phase for a frame.

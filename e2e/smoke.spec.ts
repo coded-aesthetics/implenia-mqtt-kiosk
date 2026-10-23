@@ -61,7 +61,7 @@ const DRILLING = '/#/bohren/P-01';
 
 /** The recording bar is driven by a WebSocket push, so wait for the live state. */
 async function waitForRecordingBar(page: Page) {
-  await expect(page.getByRole('button', { name: 'Beenden' }))
+  await expect(page.getByRole('button', { name: 'Abschließen' }))
     .toBeVisible({ timeout: 15_000 });
 }
 
@@ -101,7 +101,11 @@ test('the recording bar stays a single row while recording', async ({ page }) =>
   const controls = [
     page.getByTestId('geologie-schicht'),
     page.getByTestId('geologie-hindernis'),
-    page.getByRole('button', { name: 'Beenden' }),
+    // Pausieren joined this row, which is what makes the single-row assertion
+    // below load bearing rather than historical: the row had about 6px to
+    // spare at 1024px before the element name was allowed to shrink for it.
+    page.getByRole('button', { name: 'Pausieren' }),
+    page.getByRole('button', { name: 'Abschließen' }),
   ];
   for (const c of controls) await expect(c).toBeVisible();
 
