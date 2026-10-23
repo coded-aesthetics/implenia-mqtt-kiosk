@@ -39,6 +39,48 @@ interface Props {
 
 type SessionStatus = 'idle' | 'recording' | 'ended' | 'empty' | 'uploading' | 'uploaded' | 'partial';
 
+/**
+ * How long a message that reports something already finished stays up.
+ *
+ * One constant for the timer and for the bar that counts it down — they are
+ * the same ten seconds, and a worker watching one of them run out while the
+ * other is still going would have no reason to trust either.
+ */
+const MELDUNG_MS = 10_000;
+
+/**
+ * A message that will disappear by itself, with the time it has left.
+ *
+ * The indicator is the point: a line that is simply gone the next time you
+ * look says nothing about whether it was dismissed, missed, or never there.
+ * This one shrinks from both ends under the message, so at a glance across
+ * the cab it reads as "still there, nearly done" without being read at all.
+ *
+ * It sits inside the row's own 52px rather than under it, so the bar is the
+ * same 64px it is in every other state — see `recordingRow`.
+ */
+function FluechtigeMeldung(
+  { icon, iconStyle, label, labelStyle, farbe }: {
+    icon: string;
+    iconStyle: React.CSSProperties;
+    label: string;
+    labelStyle: React.CSSProperties;
+    farbe: string;
+  },
+) {
+  return (
+    <div style={styles.fluechtig}>
+      <div style={styles.fluechtigZeile}>
+        <span style={iconStyle}>{icon}</span>
+        <span style={labelStyle}>{label}</span>
+      </div>
+      <div style={styles.restzeitSpur}>
+        <div style={{ ...styles.restzeit, backgroundColor: farbe }} />
+      </div>
+    </div>
+  );
+}
+
 interface ExportOption {
   stream: string;
   label: string;
@@ -142,14 +184,14 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
   // Auto-dismiss success message after 10 seconds
   useEffect(() => {
     if (lastUploadResult !== 'uploaded') return;
-    const id = setTimeout(() => setLastUploadResult(null), 10_000);
+    const id = setTimeout(() => setLastUploadResult(null), MELDUNG_MS);
     return () => clearTimeout(id);
   }, [lastUploadResult]);
 
   // Auto-dismiss empty session warning after 10 seconds
   useEffect(() => {
     if (!emptyWarning) return;
-    const id = setTimeout(() => setEmptyWarning(false), 10_000);
+    const id = setTimeout(() => setEmptyWarning(false), MELDUNG_MS);
     return () => clearTimeout(id);
   }, [emptyWarning]);
 
@@ -551,10 +593,13 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
       )}
 
       {status === 'empty' && (
-        <div style={styles.recordingRow}>
-          <span style={styles.warningIcon}>!</span>
-          <span style={styles.warningLabel}>Keine Messwerte aufgezeichnet</span>
-        </div>
+        <FluechtigeMeldung
+          icon="!"
+          iconStyle={styles.warningIcon}
+          label="Keine Messwerte aufgezeichnet"
+          labelStyle={styles.warningLabel}
+          farbe="var(--color-warning)"
+        />
       )}
 
       {status === 'ended' && (
@@ -617,10 +662,13 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
         seconds. See "Transient messages never move the layout" in the README.
       */}
       {status === 'uploaded' && (
-        <div style={styles.recordingRow}>
-          <span style={styles.successIcon}>✓</span>
-          <span style={styles.successLabel}>Erfolgreich hochgeladen</span>
-        </div>
+        <FluechtigeMeldung
+          icon="✓"
+          iconStyle={styles.successIcon}
+          label="Erfolgreich hochgeladen"
+          labelStyle={styles.successLabel}
+          farbe="var(--color-success)"
+        />
       )}
 
       {status === 'partial' && uploadProgress && (
@@ -675,6 +723,36 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '0.35rem 1.5rem',
     backgroundColor: 'var(--surface-0)',
     borderTop: '1px solid var(--border)',
+  },
+  // A self-dismissing message: the text, and the time it has left under it.
+  // Same 52px as every other row, so the bar does not change height for it.
+  fluechtig: {
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    minHeight: '52px',
+    gap: '0.4rem',
+  },
+  fluechtigZeile: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '1rem',
+    justifyContent: 'center',
+  },
+  // As wide as the message it belongs to, and no taller than it has to be:
+  // this is a picture of a timer, not a control, so the glove minimum does
+  // not apply. 4px is what still reads across a cab in daylight.
+  restzeitSpur: {
+    height: '4px',
+    borderRadius: '2px',
+    overflow: 'hidden',
+  },
+  restzeit: {
+    height: '100%',
+    borderRadius: '2px',
+    // From both ends towards the middle, under a centred message.
+    transformOrigin: 'center',
+    animation: `restzeit ${MELDUNG_MS}ms linear forwards`,
   },
   /*
    * Every state of this bar is one row of the same height.

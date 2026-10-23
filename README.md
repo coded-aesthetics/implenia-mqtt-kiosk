@@ -1414,6 +1414,14 @@ decide a layout:
 - **Every state of the bar is one row of the same height.** `minHeight: 52px`
   on the rows, which is the height of the buttons they usually carry, so a row
   holding only text is exactly as tall as the start button it stands in for.
+- **A message that leaves by itself says how long it has.** A line under it
+  shrinks from both ends over the same ten seconds the timer runs — one
+  constant (`MELDUNG_MS`) feeds the timeout and the animation, so they cannot
+  disagree. It is a `scaleX` keyframe, which the compositor handles without a
+  layout pass per frame, and it lives inside the row's own 52px, so the bar is
+  the same height with it as without. Without it a message is simply gone the
+  next time a worker looks up, and nothing says whether it was missed or never
+  there.
 - **Two messages could stack.** The upload confirmation and the resume
   confirmation each ran their own 10-second timer; the first expired, the bar
   fell back to idle and drew the start button, and the second was still up —
