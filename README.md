@@ -1418,6 +1418,13 @@ decide a layout:
   confirmation each ran their own 10-second timer; the first expired, the bar
   fell back to idle and drew the start button, and the second was still up —
   underneath it, 99 px of bar. There is one transient slot now.
+- **A success is only recorded if there is a bar on screen to show it.** The
+  confirmation belongs to the moment it happens. Tapping Pausieren on the
+  element list used to flash it for the few hundred milliseconds between the
+  upload landing and the server clearing the recording state — and then show
+  it again, in full, on whatever element was opened next, which could be a
+  different pillar than the one it was about. A *failure* is recorded wherever
+  it happens: that is not a confirmation, it is work still to do.
 - **A transient message no longer summons the bar on screens that do not have
   one.** On the element screens the bar is always present, so a message there
   costs no layout at all. Everywhere else it appears only for *outstanding

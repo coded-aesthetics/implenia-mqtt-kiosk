@@ -108,10 +108,34 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
     }
   }, [recordingState.active]);
 
-  // Track upload completion
+  /*
+   * Where the worker is standing when an upload finishes, for the effect
+   * below. A ref and not a dependency: re-running that effect on a route
+   * change is exactly the bug it is written to avoid.
+   */
+  const aufElementseite = currentPage === 'element' || currentPage === 'bohren';
+  const elementseiteRef = useRef(aufElementseite);
+  elementseiteRef.current = aufElementseite;
+
+  /*
+   * Track upload completion.
+   *
+   * **A success is only recorded if there is a bar on screen to show it.** The
+   * confirmation belongs to the moment it happens, and the bar is only up on
+   * the element list while there is outstanding work — so a worker who tapped
+   * Pausieren there saw it flash for the few hundred milliseconds between the
+   * upload landing and the server clearing the recording state, and then saw
+   * it again, in full, on whatever element they opened next. Which could be a
+   * different pillar: the message names none.
+   *
+   * A failure is kept wherever it happened. That one is not a confirmation,
+   * it is work still to do, and it holds the bar up on every screen until it
+   * is retried.
+   */
   useEffect(() => {
     if (uploadProgress && uploadProgress.currentSensor === null && uploadProgress.sensorsTotal > 0) {
-      setLastUploadResult(uploadProgress.sensorsFailed > 0 ? 'partial' : 'uploaded');
+      if (uploadProgress.sensorsFailed > 0) setLastUploadResult('partial');
+      else if (elementseiteRef.current) setLastUploadResult('uploaded');
     }
   }, [uploadProgress]);
 
@@ -185,7 +209,12 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
   // in the bar below it would stop without the profile — the one outcome that
   // screen exists to prevent.
   if (currentPage === 'geologie') return null;
-  if (currentPage !== 'element' && currentPage !== 'bohren' && !offeneArbeit) return null;
+  /*
+   * The success is never shown off an element's own screen — not even for the
+   * moment the session is still reported while the upload's last message is
+   * already in. That overlap is what made it flicker on the element list.
+   */
+  if (!aufElementseite && (lastUploadResult === 'uploaded' || !offeneArbeit)) return null;
 
   async function startRecording() {
     if (!elementName) return;
