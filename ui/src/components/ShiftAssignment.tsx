@@ -394,7 +394,16 @@ export function ShiftAssignment({
               which is the one thing this kiosk must never look like.
             */
             <div style={styles.gesperrtHinweis}>
-              Während der Aufzeichnung kann nur „{recordingElement}" geöffnet werden
+              Während der Aufzeichnung kann nur „
+              {/*
+                The name is capped, not the sentence: the part that explains
+                anything is at the end of it. A long element name — the field
+                has produced 70-character ones — wrapped this to two lines,
+                which eats the 16px of slack the grid below has and clips the
+                top row of tiles with no scrollbar.
+              */}
+              <span style={styles.gesperrtName}>{recordingElement}</span>
+              " geöffnet werden
             </div>
           )}
         </div>
@@ -597,6 +606,15 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     color: 'var(--text-secondary)',
     textAlign: 'center' as const,
+    whiteSpace: 'nowrap' as const,
+  },
+  gesperrtName: {
+    display: 'inline-block',
+    maxWidth: '340px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+    verticalAlign: 'bottom',
   },
   searchInput: {
     width: '100%',
@@ -750,9 +768,16 @@ const styles: Record<string, React.CSSProperties> = {
   },
   // Not openable while a recording runs. Subdued rather than hidden, and
   // `disabled` rather than a tap that explains itself: there is one thing to
-  // tap on this screen during a recording and it is the tile with the live dot.
+  // tap on this screen during a recording and it is the tile with the live
+  // dot.
+  //
+  // 0.6 and not 0.4: at 0.4 the tile's own name came out at about 2.3:1
+  // against the page, which is below anything this kiosk shows a worker and
+  // worse again in sunlight — and the tiles are left on screen precisely so
+  // the rest of the shift can still be read. 0.6 is ~4:1 and still reads as
+  // unavailable at a glance.
   tileGesperrt: {
-    opacity: 0.4,
+    opacity: 0.6,
     cursor: 'default',
   },
   // Finished here, and offered only so an operator can take one back. Lighter

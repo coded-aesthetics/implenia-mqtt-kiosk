@@ -174,7 +174,29 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
         // the auto-upload below can read it.
         setSessionPaused(active.id, true);
         log.info('Session %d paused', active.id);
-      } else if (active) {
+      }
+      /*
+       * The geology is committed on **both** paths, pause included.
+       *
+       * A pause skips the things that *finish* an element — the
+       * Ausführungsdatum, and the sign-off screen the recording bar routes
+       * through. It must not skip the back-fill, and the first version did:
+       * `recordLiveLayer` writes each tap straight into `session_readings` as
+       * `pending`, so a worker who drilled to 2 m, tapped „Sand" and then
+       * paused to apply an update uploaded exactly one `GeoDIN` row and
+       * nothing else. implenia-web turns that into "this ground from 2.0 m to
+       * the bottom of the hole" — the partial profile that
+       * "every committed profile is complete" exists to prevent, in a signed
+       * document, from an upload that reported success.
+       *
+       * Committing here costs the pause nothing it was protecting: the review
+       * is spent by `geology_confirmed_at`, which only the sign-off sets, so a
+       * paused element is still asked about its ground when it is resumed and
+       * drilled further. What it writes is what any other unreviewed stop
+       * writes — the observations, with the stretches nobody confirmed filled
+       * in from the Schichtauftrag and marked „(Vorgabe)".
+       */
+      if (active) {
         /*
          * Its own try/catch, and that is the whole point of it.
          *

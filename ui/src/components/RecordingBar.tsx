@@ -60,14 +60,21 @@ const MELDUNG_MS = 10_000;
  * same 64px it is in every other state — see `recordingRow`.
  */
 function FluechtigeMeldung(
-  { icon, iconStyle, label, labelStyle, farbe }: {
+  { icon, iconStyle, label, labelStyle, farbe, seit }: {
     icon: string;
     iconStyle: React.CSSProperties;
     label: string;
     labelStyle: React.CSSProperties;
     farbe: string;
+    /** When the message went up, so a redraw resumes instead of restarting. */
+    seit: number | null;
   },
 ) {
+  // A negative delay starts the animation that far in, which is what makes
+  // the bar pick up where it left off when this node is drawn again on
+  // another screen. Clamped, because a clock that moved backwards must not
+  // hand the animation a positive delay and freeze it at full width.
+  const verstrichen = seit === null ? 0 : Math.min(Math.max(Date.now() - seit, 0), MELDUNG_MS);
   return (
     <div style={styles.fluechtig}>
       <div style={styles.fluechtigZeile}>
@@ -75,7 +82,9 @@ function FluechtigeMeldung(
         <span style={labelStyle}>{label}</span>
       </div>
       <div style={styles.restzeitSpur}>
-        <div style={{ ...styles.restzeit, backgroundColor: farbe }} />
+        <div
+          style={{ ...styles.restzeit, backgroundColor: farbe, animationDelay: `-${verstrichen}ms` }}
+        />
       </div>
     </div>
   );
@@ -180,6 +189,22 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
       else if (elementseiteRef.current) setLastUploadResult('uploaded');
     }
   }, [uploadProgress]);
+
+  /*
+   * When the message on screen started, so the countdown can be drawn from
+   * what is left rather than from scratch.
+   *
+   * The bar returns null on screens it does not belong on, which destroys the
+   * DOM node without unmounting the component: the `setTimeout` keeps running
+   * while the CSS animation does not. Walking to the element list eight
+   * seconds into a message and back therefore restarted the bar at full width
+   * and then dismissed it two seconds later — the countdown and the timer
+   * saying different things, which is exactly what makes both worthless.
+   */
+  const [meldungSeit, setMeldungSeit] = useState<number | null>(null);
+  useEffect(() => {
+    if (lastUploadResult === 'uploaded' || emptyWarning) setMeldungSeit(Date.now());
+  }, [lastUploadResult, emptyWarning]);
 
   // Auto-dismiss success message after 10 seconds
   useEffect(() => {
@@ -337,6 +362,13 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
    * pause the thing it exists not to be.
    */
   async function pauseRecording() {
+    // Same reading check the ordinary stop makes. A session that captured
+    // nothing — the box was down, the topics are wrong — ends as if it had
+    // never been reported, so without this the bar drops straight back to the
+    // start button and nothing anywhere says the shift recorded no data. It
+    // is the one message this bar is allowed to raise on any screen, and
+    // Pausieren is now the stop button a worker reaches for first.
+    const hadReadings = recordingState.readingCount > 0;
     setLoading(true);
     setError(null);
     try {
@@ -348,6 +380,9 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || `Fehler ${res.status}`);
+      }
+      if (!hadReadings) {
+        setEmptyWarning(true);
       }
     } catch (err) {
       setError((err as Error).message);
@@ -453,15 +488,35 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
    * planned layer and the plan says which, so leaving it is a single tap. That
    * was two taps and a full-screen picker before.
    */
+  /*
+   * Hidden during the Abschließen confirmation, and **hidden in place**.
+   *
+   * `visibility: hidden` rather than not rendering them: the row is
+   * shrink-to-fit and centred, so dropping 450px of controls moved the
+   * confirm button from x 715–895 to 437–686 — out from under the finger that
+   * had just tapped it. The second tap then landed on bare bar, which the
+   * outside-tap handler reads as "anything else" and cancels, so a worker
+   * tapping twice in the same place could never finish an element. Measured
+   * at 1024x768; it is why `abschliessenButton` reserves its wide label's
+   * width too.
+   *
+   * They still cannot be mis-tapped: a `visibility: hidden` element takes no
+   * pointer events, which was the whole reason for hiding them.
+   */
+  const verstecktWennBestaetigt: React.CSSProperties | null = abschliessenPending
+    ? { visibility: 'hidden' }
+    : null;
+
   const geologieButtons = geologie?.verfuegbar ? (
     <>
       <button
         data-testid="geologie-schicht"
-        style={
-          geologie.auswahl === 'schicht' ? styles.geoButtonOffen
+        style={{
+          ...(geologie.auswahl === 'schicht' ? styles.geoButtonOffen
             : geologie.vorschlag ? styles.geoButtonVorschlag
-              : styles.geoButton
-        }
+              : styles.geoButton),
+          ...verstecktWennBestaetigt,
+        }}
         onClick={() => {
           if (geologie.vorschlag && geologie.auswahl !== 'schicht') {
             geologie.erfasse(geologie.vorschlag.nr, nameVon(geologie.vorschlag.nr));
@@ -485,7 +540,7 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
       {geologie.imHindernis ? (
         <button
           data-testid="geologie-hindernis"
-          style={styles.geoButtonHindernisEnde}
+          style={{ ...styles.geoButtonHindernisEnde, ...verstecktWennBestaetigt }}
           onClick={() => geologie.beendeHindernis()}
         >
           Hindernis Ende
@@ -493,9 +548,12 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
       ) : (
         <button
           data-testid="geologie-hindernis"
-          style={geologie.auswahl === 'hindernis'
-            ? styles.geoButtonHindernisOffen
-            : styles.geoButtonHindernis}
+          style={{
+            ...(geologie.auswahl === 'hindernis'
+              ? styles.geoButtonHindernisOffen
+              : styles.geoButtonHindernis),
+            ...verstecktWennBestaetigt,
+          }}
           onClick={() => geologie.oeffne('hindernis')}
         >
           Hindernis
@@ -537,29 +595,31 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
             element screen is the price, and a cheap one.
           */}
           <span style={styles.elementNameLaufend}>{recordingState.elementName}</span>
-          {!abschliessenPending && geologieButtons}
-          {!abschliessenPending && geologie?.rueckmeldung && (
-            <span style={styles.geoRueckmeldung}>✓ {geologie.rueckmeldung}</span>
+          {geologieButtons}
+          {geologie?.rueckmeldung && (
+            <span style={{ ...styles.geoRueckmeldung, ...verstecktWennBestaetigt }}>
+              ✓ {geologie.rueckmeldung}
+            </span>
           )}
-          {!abschliessenPending && geologie?.fehler && (
-            <span style={styles.geoFehler}>{geologie.fehler}</span>
+          {geologie?.fehler && (
+            <span style={{ ...styles.geoFehler, ...verstecktWennBestaetigt }}>
+              {geologie.fehler}
+            </span>
           )}
           {/*
             Pausieren sits before Abschließen because it is the weaker of the
             two and the one a worker reaching for "stop" usually wants. Hidden
-            while the confirmation is up: it would otherwise be the easiest
-            mis-tap next to the button being confirmed, and a mis-tap there
-            ends the recording for real.
+            while the confirmation is up — it would otherwise be the easiest
+            mis-tap next to the button being confirmed — but hidden *in place*,
+            see `verstecktWennBestaetigt`.
           */}
-          {!abschliessenPending && (
-            <button
-              style={{ ...styles.button, ...styles.pauseButton }}
-              onClick={pauseRecording}
-              disabled={loading}
-            >
-              Pausieren
-            </button>
-          )}
+          <button
+            style={{ ...styles.button, ...styles.pauseButton, ...verstecktWennBestaetigt }}
+            onClick={pauseRecording}
+            disabled={loading || abschliessenPending}
+          >
+            Pausieren
+          </button>
           {/*
             Still worded, and still the widest control here. It ends the
             element, releases the upload and writes the Ausführungsdatum —
@@ -575,6 +635,7 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
             ref={abschliessenRef}
             style={{
               ...styles.button,
+              ...styles.abschliessenButton,
               ...(abschliessenPending ? styles.stopButtonConfirm : styles.stopButtonDefault),
             }}
             onClick={() => {
@@ -599,6 +660,7 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
           label="Keine Messwerte aufgezeichnet"
           labelStyle={styles.warningLabel}
           farbe="var(--color-warning)"
+          seit={meldungSeit}
         />
       )}
 
@@ -668,6 +730,7 @@ export function RecordingBar({ currentPage, elementName, startModus = null, bere
           label="Erfolgreich hochgeladen"
           labelStyle={styles.successLabel}
           farbe="var(--color-success)"
+          seit={meldungSeit}
         />
       )}
 
@@ -785,6 +848,13 @@ const styles: Record<string, React.CSSProperties> = {
   startButton: {
     backgroundColor: 'var(--color-success-strong)',
     color: '#fff',
+  },
+  // Wide enough for „Wirklich abschließen?" at rest, so the button does not
+  // grow — and therefore does not move, in a centred row — between the tap
+  // that asks and the tap that confirms. Measured: 180px at rest, 250px
+  // confirming. The element name gives up the difference (`flexShrink: 1`).
+  abschliessenButton: {
+    minWidth: '250px',
   },
   /*
    * The documented danger pattern: muted at rest, solid on the confirmation.

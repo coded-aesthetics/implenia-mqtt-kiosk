@@ -1271,8 +1271,8 @@ A restart on this screen leaves the session open, `resumeRecording` re-attaches 
 
 The recording bar carries two ways out, and only one of them finishes anything.
 
-**Pausieren** ends the session and nothing else: no geology sign-off, no
-upload-released completion. The element stays resumable and reopens on the
+**Pausieren** ends the session and finishes nothing: no geology sign-off, no
+upload-released completion (it still commits the profile — see below). The element stays resumable and reopens on the
 phase it was in. It exists because a good deal of the kiosk is gated on "is a
 recording running" — `POST /api/update` and the WLAN switch both refuse with a
 409 — so an operator who wanted to apply an update was tapping the stop button
@@ -1284,9 +1284,31 @@ way, and `geology_confirmed_at` meant it was never offered again.
 is now tap-to-confirm (`Wirklich abschließen?`) like every other destructive
 control, and the confirmation hides the geology buttons and Pausieren for the
 duration — they would be the easiest mis-taps next to the button being
-confirmed, and the row has no width to spare with all five controls up.
+confirmed.
 
-Three things about the implementation are easy to get wrong:
+**They are hidden in place, and the confirm button reserves its wider label's
+width.** The row is shrink-to-fit and centred, so simply dropping 450px of
+controls moved the confirm button from x 715–895 to 437–686 — out from under
+the finger that had just tapped it. The second tap then landed on bare bar,
+which the outside-tap handler reads as "anything else" and cancels: a worker
+tapping twice in the same place could never finish an element. Measured at
+1024x768, with and without a long element name, on the element screen and on
+the list. `visibility: hidden` keeps the geometry and still takes no pointer
+events, which was the whole point of hiding them.
+
+Four things about the implementation are easy to get wrong:
+
+- **A pause commits its geology like any other stop.** It skips the things
+  that *finish* an element — the `Ausführungsdatum`, and the sign-off screen
+  the bar routes through — but `recordLiveLayer` writes every tap straight into
+  `session_readings` as `pending`, so a session paused after one tap used to
+  upload exactly one `GeoDIN` row and nothing else. implenia-web derives layers
+  by change detection, so that single row reads as "this ground from 2,0 m to
+  the bottom of the hole": a partial profile, reported as complete, in a signed
+  document, from an upload that succeeded. Committing costs the pause nothing
+  it was protecting — the review is spent by `geology_confirmed_at`, which only
+  the sign-off sets, so a paused element is asked again when it is resumed and
+  drilled further.
 
 - **`paused` is a column on the session row, not a state of its own.** The
   resume path already does everything a pause needs — the session ends, the
@@ -1326,6 +1348,16 @@ which is right for the „Abgeschlossene Elemente" row below the grid and left
 the grid itself with nothing at all to say. A worker coming back after a shift change had no way to tell a hole
 somebody is six metres into from one that has not been started, and the kiosk
 knew the whole time.
+
+**The lookup behind all of this is re-asked whenever a session starts or
+ends.** `useElementRueckkehr` keyed its fetch on the element name alone, and
+the screen does not reload: a worker who recorded a fresh pillar, stepped to
+Austausch and tapped Pausieren was still holding the answer from before the
+recording — `bekannt: false`, `modus: null`. The phase fell back to Bohren, the
+button said „Aufzeichnung beginnen", and starting again opened the new session
+in `bohren` while the rig was doing the slurry exchange, which is what the
+Herstellprotokoll reads as drilling. Pause-and-resume on one screen is the
+feature's main path, so this is the state it had to be right in.
 
 The tile now carries the **depth reached**, with a dashed warning border:
 *bis 6,20 m*. It is the depth and not the phase because the phase is a flag the

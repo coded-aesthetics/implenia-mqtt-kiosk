@@ -248,6 +248,50 @@ describe('POST /api/recording/stop with a geology profile', () => {
   });
 });
 
+describe('Pausieren commits its geology like any other stop', () => {
+  /*
+   * A pause skips what *finishes* an element — the Ausführungsdatum, and the
+   * sign-off the recording bar routes through. It must not skip the
+   * back-fill: `recordLiveLayer` writes each tap into `session_readings` as
+   * `pending`, so a session paused after one tap used to upload exactly one
+   * `GeoDIN` row. implenia-web derives layers by change detection, so that
+   * single row reads as "this ground from here to the bottom of the hole" —
+   * a partial profile reported as a complete one, in a signed document.
+   */
+  it('back-fills the plan around what the operator entered', async () => {
+    const id = activeDrilledSession();
+    db.setElementVorgaben('P-01', {
+      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': TON },
+      float_sensors: { 'Tiefe Geologie 1': 3, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
+    });
+    await app.inject({
+      method: 'POST', url: '/api/recording/geology', payload: { nr: TON },
+    });
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/recording/stop', payload: { pause: true },
+    });
+
+    expect(res.statusCode).toBe(200);
+    // Not the lone TON the live entry wrote: the stretch above it the
+    // operator never confirmed comes from the Schichtauftrag.
+    expect(geoDin(id)).toEqual([SAND, TON]);
+    expect(db.getSessionById(id)?.paused).toBe(1);
+  });
+
+  it('leaves the review for the next session', async () => {
+    // What the pause protects is the element's one geology sign-off, and that
+    // is spent by `geology_confirmed_at` — which only the sign-off sets. A
+    // paused element is still asked when it is resumed and drilled further.
+    const id = activeDrilledSession();
+    await app.inject({
+      method: 'POST', url: '/api/recording/stop', payload: { pause: true },
+    });
+
+    expect(db.getSessionById(id)?.geology_confirmed_at).toBeNull();
+  });
+});
+
 describe('POST /api/recording/geology', () => {
   it('records a layer at the current depth and reports it', async () => {
     const id = activeDrilledSession(3);

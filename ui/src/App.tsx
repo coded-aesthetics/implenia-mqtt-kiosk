@@ -119,7 +119,12 @@ export function App() {
    * What this element was last doing here: whether it has been recorded at all,
    * and the phase its last session was in. Local lookup, so it answers offline.
    */
-  const rueckkehr = useElementRueckkehr(route.params.name ?? null);
+  const rueckkehr = useElementRueckkehr(
+    route.params.name ?? null,
+    // Re-asked whenever a session starts or ends, because that is when the
+    // answer changes and this screen does not reload. See the hook.
+    `${recordingState.active}:${recordingState.sessionId}`,
+  );
 
   /**
    * The phase before a recording exists.
