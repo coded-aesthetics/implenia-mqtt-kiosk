@@ -1227,7 +1227,7 @@ The data agrees, not just the UX. The operating mode never reaches a reading —
 
 **Which button it is comes from `?beenden=1` in the route, not from the operating mode.** The mode answers "which phase is the rig in", not "what did the operator ask for", and the two come apart in both directions. A Beenden on a session already past `Bohren` — its phase-step sign-off skipped because the context fetch failed, or left without committing — was answered by a button that committed and returned while the recording kept running, so the operator had to tap Beenden twice and the second button named a phase they were already in. Worse, `operatingMode` is null until the first `recording-state` message arrives, so a reload on this screen briefly showed the **stop** variant: one tap in that window ended a recording mid-Austausch, with Einbauen and Auffüllen never recorded and the upload released early. A URL survives a reload and a PM2 restart; WebSocket state does not.
 
-**Beenden is the backstop**, for a session that never left `Bohren` — drilled and stopped, or aborted. There the screen's button is `Beenden`: it commits, stops, and the auto-upload proceeds as always, with `Zurück zur Aufzeichnung` for a mis-tap. Grouting-only sessions, machines without geology, and a session that never went down stop exactly as they always have — and if the check itself fails for any reason, the stop proceeds. Geology never stands between an operator and finishing an element.
+**Beenden is the backstop**, for a session that never left `Bohren` — drilled and stopped, or aborted. There the screen's button is `Abschließen`: it commits, stops, and the auto-upload proceeds as always, with `Zurück zur Aufzeichnung` for a mis-tap. Grouting-only sessions, machines without geology, and a session that never went down stop exactly as they always have — and if the check itself fails for any reason, the stop proceeds. Geology never stands between an operator and finishing an element.
 
 `geology_confirmed_at` on the session is what keeps it to **once**: a profile already signed off is not rebuilt at the stop. Rebuilding would re-derive the back-fill from the Schichtauftrag, so a planned boundary the operator deleted on the sign-off screen would quietly come back.
 
@@ -1266,6 +1266,52 @@ Selection is held by layer **id**, not index, because every edit reshuffles indi
 Boundaries can also be dragged directly in the chart with 64 px touch handles, and obstructions drag freely through the profile.
 
 A restart on this screen leaves the session open, `resumeRecording` re-attaches it, and the operator taps the button again — no dead end, nothing lost.
+
+### Pausieren and Abschließen
+
+The recording bar carries two ways out, and only one of them finishes anything.
+
+**Pausieren** ends the session and nothing else: no geology sign-off, no
+upload-released completion. The element stays resumable and reopens on the
+phase it was in. It exists because a good deal of the kiosk is gated on "is a
+recording running" — `POST /api/update` and the WLAN switch both refuse with a
+409 — so an operator who wanted to apply an update was tapping the stop button
+to get at it. That spent the element's one geology review: the sign-off came up
+over a session with a handful of readings, was confirmed because it was in the
+way, and `geology_confirmed_at` meant it was never offered again.
+
+**Abschließen** is the old `Beenden`: sign-off, upload, `Ausführungsdatum`. It
+is now tap-to-confirm (`Wirklich abschließen?`) like every other destructive
+control, and the confirmation hides the geology buttons and Pausieren for the
+duration — they would be the easiest mis-taps next to the button being
+confirmed, and the row has no width to spare with all five controls up.
+
+Three things about the implementation are easy to get wrong:
+
+- **`paused` is a column on the session row, not a state of its own.** The
+  resume path already does everything a pause needs — the session ends, the
+  element stays open, starting again reopens it on its phase — so the flag only
+  has to suppress the two things that *finish* an element.
+- **Completion hangs off the upload, not the stop.** `autoMarkComplete` runs
+  inside `uploadSession`, which can run minutes or a reboot later from
+  `autoUploadOnConnectivity` or `uploadPendingSessionsAtBoot`. A flag held in
+  memory, or a check at the stop, would stamp an `Ausführungsdatum` for a paused
+  element the next time the link came back.
+- **`getCompletedElements` keys off `status = 'uploaded'`**, so it needs the
+  flag too. Without it a paused session's readings upload, the element shows as
+  done on the element list, and the kiosk contradicts the platform — which is
+  the confusion Pausieren exists to remove, arriving by the back door.
+
+The readings upload either way. Getting measurements off the machine is never
+the thing to defer, the platform upserts on `(sensor_id, date)`, and a resumed
+element appends.
+
+**Known gap:** the voice command `recording.stop` ("aufzeichnung beenden",
+"stop") still goes straight to the finishing path, with no spoken equivalent of
+the confirmation and no spoken Pausieren. That is consistent with the voice stop
+deliberately skipping the sign-off — a hands-free operator has no spoken way off
+that screen — but it does mean the phrase is now the one way to finish an
+element in a single action.
 
 ### Why the profile is always complete
 

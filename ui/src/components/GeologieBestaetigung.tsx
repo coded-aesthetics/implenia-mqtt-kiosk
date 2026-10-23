@@ -185,7 +185,7 @@ type PickerZiel =
   | { art: 'typ'; index: number }
   | { art: 'neu'; kind: PickerArt; tiefe: number };
 
-const STANDARD_AKTION = { label: 'Beenden', laufend: 'Wird beendet…' };
+const STANDARD_AKTION = { label: 'Abschließen', laufend: 'Wird abgeschlossen…' };
 
 export function GeologieBestaetigung({
   sessionId, elementName, onBeenden, aktion = STANDARD_AKTION, zurueck,
@@ -524,6 +524,16 @@ export function GeologieBestaetigung({
             {offeneGrenzen > 0
               ? `${offeneGrenzen} Grenze(n) aus der Vorgabe übernommen (gestrichelt)`
               : 'Alle Grenzen während der Herstellung erfasst'}
+          </span>
+          {/*
+            Said here rather than on the button that leads here, because this
+            screen is the one that *shows* what becomes final — and because it
+            is true of both variants: the commit at the phase step sets
+            `geology_confirmed_at`, and the stop then leaves the profile alone.
+            Only a step back into Bohren asks again.
+          */}
+          <span style={styles.endgueltig}>
+            Grenzen jetzt korrigieren — nach dem Bestätigen ist das Profil endgültig.
           </span>
         </div>
         <div style={styles.aktionen}>
@@ -944,6 +954,10 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 600,
   },
   aktionen: { display: 'flex', gap: 'var(--space-sm)', flexShrink: 0 },
+  endgueltig: {
+    fontSize: 'var(--font-base)',
+    color: 'var(--text-muted)',
+  },
   zurueck: {
     minWidth: 240,
     minHeight: 'var(--tap-min)',

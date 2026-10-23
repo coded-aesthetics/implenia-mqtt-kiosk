@@ -228,7 +228,10 @@ other.
   `string_sensors` as `map[string]string` and rejects a null with a 422
   (`expected string`). Empty un-completes the element — the rework path.
 - **Who writes it:** only the kiosk. After every successful session upload
-  (`uploadSession` → `autoMarkComplete`), on the manual
+  (`uploadSession` → `autoMarkComplete`) **except a paused one** — Pausieren
+  ends a session without finishing the element, and because completion hangs off
+  the upload rather than the stop, the flag is read there (see README →
+  "Pausieren and Abschließen") — on the manual
   `POST /api/elements/:name/complete`, and `''` on `DELETE …/complete` when an
   operator resumes an already-uploaded element. The backend never writes it;
   implenia-web writes it only from its legacy importers.

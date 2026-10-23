@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { imageDataURI, findByNr } from '@coded-aesthetics/din4023';
 import type { OperatingMode, RecordingState, UploadProgress } from '../hooks/useWebSocket';
 import { hasPipeHandling } from '../utils/operating-mode';
@@ -59,6 +59,40 @@ export function RecordingBar({ currentPage, elementName, startModus = null, reco
     }
   }, [recordingState.elementName]);
   const effectiveElementName = recordingState.elementName ?? lastElementName;
+
+  /*
+   * "Abschließen" confirmation state.
+   *
+   * It was a single tap, and it commits the geology profile, releases the
+   * upload and stamps the Ausführungsdatum. Workers were tapping it to reach
+   * the things the recording guard blocks — an update, the WLAN switch — and
+   * the geology sign-off that followed was the only one they would ever get
+   * for that element. "Pausieren" is now the button for that, and this one
+   * asks first.
+   */
+  const [abschliessenPending, setAbschliessenPending] = useState(false);
+  const abschliessenRef = useRef<HTMLButtonElement | null>(null);
+
+  /*
+   * Tapping anything else cancels, per the tap-to-confirm pattern. Without it
+   * the pending state is a dead end on a touchscreen: the row hides the
+   * controls that would otherwise have served as "anything else", so there is
+   * nothing left in the bar to tap that means no.
+   */
+  useEffect(() => {
+    if (!abschliessenPending) return;
+    const abbrechen = (e: PointerEvent): void => {
+      if (abschliessenRef.current?.contains(e.target as Node)) return;
+      setAbschliessenPending(false);
+    };
+    document.addEventListener('pointerdown', abbrechen, true);
+    return () => document.removeEventListener('pointerdown', abbrechen, true);
+  }, [abschliessenPending]);
+
+  // A recording that stops for any reason leaves the confirmation behind.
+  useEffect(() => {
+    if (!recordingState.active) setAbschliessenPending(false);
+  }, [recordingState.active]);
 
   // "Wiederaufnehmen" state (undo auto-completion after upload)
   const [resumePending, setResumePending] = useState(false);
@@ -209,6 +243,38 @@ export function RecordingBar({ currentPage, elementName, startModus = null, reco
       }
     }
     await stopNow();
+  }
+
+  /**
+   * Pausieren.
+   *
+   * Ends the session and finishes nothing: no geology sign-off, no
+   * Ausführungsdatum. The element stays resumable and reopens on its phase, so
+   * this is the button for stopping to apply an update or switch the WLAN —
+   * the cases that were being served by Beenden, at the cost of the element's
+   * one geology review.
+   *
+   * Never routes through the sign-off. Reviewing a profile here would make the
+   * pause the thing it exists not to be.
+   */
+  async function pauseRecording() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/recording/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pause: true }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `Fehler ${res.status}`);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function stopNow() {
@@ -414,25 +480,57 @@ export function RecordingBar({ currentPage, elementName, startModus = null, reco
             element screen is the price, and a cheap one.
           */}
           <span style={styles.elementNameLaufend}>{effectiveElementName}</span>
-          {geologieButtons}
-          {geologie?.rueckmeldung && (
+          {!abschliessenPending && geologieButtons}
+          {!abschliessenPending && geologie?.rueckmeldung && (
             <span style={styles.geoRueckmeldung}>✓ {geologie.rueckmeldung}</span>
           )}
-          {geologie?.fehler && (
+          {!abschliessenPending && geologie?.fehler && (
             <span style={styles.geoFehler}>{geologie.fehler}</span>
+          )}
+          {/*
+            Pausieren sits before Abschließen because it is the weaker of the
+            two and the one a worker reaching for "stop" usually wants. Hidden
+            while the confirmation is up: it would otherwise be the easiest
+            mis-tap next to the button being confirmed, and a mis-tap there
+            ends the recording for real.
+          */}
+          {!abschliessenPending && (
+            <button
+              style={{ ...styles.button, ...styles.pauseButton }}
+              onClick={pauseRecording}
+              disabled={loading}
+            >
+              Pausieren
+            </button>
           )}
           {/*
             Still worded, and still the widest control here. It ends the
             element, releases the upload and writes the Ausführungsdatum —
             recoverable via "Wiederaufnehmen", but not something to leave to
             icon recognition.
+
+            Two taps now. The finality of the geology profile is stated on the
+            sign-off screen this leads to, not here: that screen *shows* the
+            profile, and a warning about something the worker cannot see yet is
+            a weaker warning than the same sentence beside the picture of it.
           */}
           <button
-            style={{ ...styles.button, ...styles.stopButton }}
-            onClick={stopRecording}
+            ref={abschliessenRef}
+            style={{
+              ...styles.button,
+              ...(abschliessenPending ? styles.stopButtonConfirm : styles.stopButtonDefault),
+            }}
+            onClick={() => {
+              if (abschliessenPending) {
+                setAbschliessenPending(false);
+                void stopRecording();
+              } else {
+                setAbschliessenPending(true);
+              }
+            }}
             disabled={loading}
           >
-            Beenden
+            {abschliessenPending ? 'Wirklich abschließen?' : 'Abschließen'}
           </button>
         </div>
       )}
@@ -596,9 +694,26 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: 'var(--color-success-strong)',
     color: '#fff',
   },
-  stopButton: {
-    backgroundColor: 'var(--color-danger-strong)',
+  /*
+   * The documented danger pattern: muted at rest, solid on the confirmation.
+   * It used to be solid red at rest, which read as "the button for stopping"
+   * rather than "the destructive one", and it was a single tap.
+   */
+  stopButtonDefault: {
+    backgroundColor: 'var(--surface-3)',
+    color: 'var(--color-danger)',
+  },
+  stopButtonConfirm: {
+    backgroundColor: 'var(--color-danger)',
     color: '#fff',
+  },
+  // Narrower floor than the 180px base: it shares the row with both geology
+  // buttons and Abschließen, and 1024px has no room to spare. Still far above
+  // the 64px tap-target minimum.
+  pauseButton: {
+    backgroundColor: 'var(--surface-3)',
+    color: 'var(--text-primary)',
+    minWidth: '150px',
   },
   exportButton: {
     backgroundColor: 'var(--color-accent-strong)',
@@ -632,19 +747,23 @@ const styles: Record<string, React.CSSProperties> = {
     // digits are what is being read off them.
     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
     whiteSpace: 'nowrap' as const,
-    flexShrink: 0,
     /*
-     * Measured at 1024x768: with both geology buttons at their 150px floor and
-     * Beenden at 180, the name has 428px to work with — about 31 characters,
-     * which covers every element name the pilot sites use ("Pfahl 2.1 Achse
-     * C/14 P-0147" is 27 and renders in full).
+     * Measured at 1024x768: with both geology buttons at their 150px floor,
+     * Pausieren at 150 and Abschließen at 180, the name no longer has the
+     * 428px it had before Pausieren joined the row.
      *
-     * Capped below that anyway, because the failure past it is the bad kind:
-     * the row is `nowrap`, so an unbounded name pushes Beenden off a screen
-     * with no scrollbar — the same way a 71-character DIN name once did (see
+     * So it shrinks instead of being re-capped at a number: `flexShrink: 1`
+     * gives up exactly as much as the row is short, and no more — the full
+     * 420px is still there on a Verfahren without geology buttons, and in the
+     * confirmation state, where they are hidden.
+     *
+     * The cap stays, because the failure past it is the bad kind: the row is
+     * `nowrap`, so an unbounded name pushes Abschließen off a screen with no
+     * scrollbar — the same way a 71-character DIN name once did (see
      * geoLabel). Losing the tail of an unusually long name beats losing the
      * stop button, and the header still shows it in full on the element screen.
      */
+    flexShrink: 1,
     maxWidth: '420px',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
