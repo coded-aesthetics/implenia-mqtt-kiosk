@@ -394,8 +394,8 @@ distinction the rest of this kiosk makes between *the platform said no* and
   "unfinished elements" *as of* `cachedAt`; an element this kiosk has uploaded
   since then is complete and would otherwise sit in the grid this morning
   looking like work to do. Dropped elements are not hidden — the list's
-  „Begonnene Elemente" row is built from those same local completions, with
-  their date, and resuming one still works.
+  „Abgeschlossene Elemente" row is built from those same local completions,
+  with their date, and resuming one still works.
 
 An import still outranks the cache, the cache is only ever written from a
 platform response (so serving it cannot re-date it), and an unreadable cache
@@ -997,7 +997,7 @@ awk '{c[$3]++} END{for(t in c) print c[t], t}' assets/<capture>.txt | sort -rn
 
 ## Element Completion
 
-An element is marked as produced by writing its `Ausführungsdatum` string sensor (CSV role `is_completed`). The kiosk does this itself after every session upload that actually put readings on the platform, so a worker never has to confirm anything — an empty session, or one whose every reading was clipped as a Rohrwechsel, finishes nothing — and clears it (empty string) when an operator resumes an already-uploaded element from "Begonnene Elemente".
+An element is marked as produced by writing its `Ausführungsdatum` string sensor (CSV role `is_completed`). The kiosk does this itself after every session upload that actually put readings on the platform, so a worker never has to confirm anything — an empty session, or one whose every reading was clipped as a Rohrwechsel, finishes nothing — and clears it (empty string) when an operator resumes an already-uploaded element from „Abgeschlossene Elemente".
 
 ```
 POST   /api/elements/:elementName/complete   → { ok, date } — manual completion
@@ -1322,8 +1322,8 @@ GET /api/recording/started-elements   → [{ elementName, tiefe, letzteAufzeichn
 A paused element is *unfinished*, so it stays in the main grid of the element
 list — and until now its tile was pixel-identical to one nobody had ever
 opened. `getCompletedElements` deliberately skips a paused session (see above),
-which is right for the resume row and left the main grid with nothing at all to
-say. A worker coming back after a shift change had no way to tell a hole
+which is right for the „Abgeschlossene Elemente" row below the grid and left
+the grid itself with nothing at all to say. A worker coming back after a shift change had no way to tell a hole
 somebody is six metres into from one that has not been started, and the kiosk
 knew the whole time.
 
@@ -1333,7 +1333,16 @@ operator sets — a session that says Auffüllen may hold no readings at all —
 whereas a depth of 0 says exactly what happened: somebody tapped start, fiddled,
 and stopped again. That case reads *begonnen*, which is also what a session
 whose depth has not been computed yet says: both are the weaker claim, and both
-are true. The element screen's start button follows the same answer, reading
+are true.
+
+**The row below the grid is called „Abgeschlossene Elemente"**, and it used to
+be called „Begonnene". Those elements are the opposite of what the grid's new
+marker means: a session uploaded without a pause, so the `Ausführungsdatum`
+went to the platform and the element dropped off the shift assignment. The row
+exists only so an operator can take one back — tapping it clears the completion
+before opening. With both rows dashed and both saying "begonnen", the screen
+was offering one word for two opposite states. The identifiers followed the
+label (`allCompleted`, `completedTile…`), because the collision started there. The element screen's start button follows the same answer, reading
 `Aufzeichnung fortsetzen` rather than `… beginnen` for a pillar this kiosk has
 recorded before (the same local `last-session` lookup the restored phase comes
 from, so it answers offline).

@@ -154,7 +154,7 @@ describe('what the kiosk knows by itself', () => {
     }
   });
 
-  // Not merely hidden: the element list's „Begonnene Elemente" row is built
+  // Not merely hidden: the element list's „Abgeschlossene Elemente" row is built
   // from the same local completions, so a dropped element is still reachable.
   it('leaves an element finished before the list was taken on it', async () => {
     const id = db.createSession('P-01', '{}');

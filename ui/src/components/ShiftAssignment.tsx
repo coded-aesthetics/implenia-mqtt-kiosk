@@ -116,7 +116,8 @@ function CacheBadge({ cachedAt }: { cachedAt: number | null }) {
  * Which elements this kiosk has already recorded, and how deep they got.
  *
  * Separate from `useCompletedElements`, which answers the other question —
- * "is this element finished" — and moves a tile into the resume row. An
+ * "is this element finished" — and moves a tile into the „Abgeschlossene
+ * Elemente" row. An
  * element that was paused is *unfinished*, so it stays in the main grid, and
  * before this it looked exactly like one nobody had touched: same tile, same
  * nothing. That is how somebody re-drills a hole another shift is halfway
@@ -322,9 +323,12 @@ export function ShiftAssignment({
   const lower = search.toLowerCase();
   const isSearching = suchbar && search.length > 0;
 
-  // Already-uploaded elements the operator may want to pick up again. Anything
-  // still in the shift assignment belongs in the unfinished grid instead.
-  const allStarted = completedElements.filter((e) => !unfinishedNames.has(e.elementName));
+  // Elements this kiosk has *finished*: a session uploaded without a pause, so
+  // the Ausführungsdatum went to the platform and the element dropped off the
+  // shift assignment. This row is the only way back to one. Anything still in
+  // the shift assignment is unfinished and belongs in the grid above, where a
+  // tile that carries recordings says so with its depth.
+  const allCompleted = completedElements.filter((e) => !unfinishedNames.has(e.elementName));
 
   // Two rows of today's work plus one row of elements to resume is what fits at
   // 1024x768. The caps apply to the search results too: the grid is clipped
@@ -333,7 +337,7 @@ export function ShiftAssignment({
   // scrollbar and no way to reach them. Truncated, the screen says so and the
   // next typed character narrows it.
   const MAX_UNFINISHED = 6;
-  const MAX_STARTED = 3;
+  const MAX_COMPLETED = 3;
 
   /**
    * The element being recorded comes first.
@@ -355,21 +359,21 @@ export function ShiftAssignment({
    * And the same for the resumed ones, because a running recording can be
    * here instead: "Wiederaufnehmen" clears the completion and refetches, and
    * when that refetch fails — offline, which is the whole scenario this exists
-   * for — the element stays listed as begonnen while being recorded. Three
+   * for — the element stays listed as abgeschlossen while being recorded. Three
    * tiles fit, so without the hoist it can be cut from the screen entirely.
    */
-  const startedMatches = isSearching
-    ? allStarted.filter((e) => e.elementName.toLowerCase().includes(lower))
-    : [...allStarted].sort((a, b) =>
+  const completedMatches = isSearching
+    ? allCompleted.filter((e) => e.elementName.toLowerCase().includes(lower))
+    : [...allCompleted].sort((a, b) =>
       Number(b.elementName === recordingElement) - Number(a.elementName === recordingElement));
 
   const unfinishedTiles = unfinishedMatches.slice(0, MAX_UNFINISHED);
-  const startedTiles = startedMatches.slice(0, MAX_STARTED);
+  const completedTiles = completedMatches.slice(0, MAX_COMPLETED);
   const hiddenCount =
     unfinishedMatches.length - unfinishedTiles.length
-    + (startedMatches.length - startedTiles.length);
+    + (completedMatches.length - completedTiles.length);
 
-  const nothingFound = isSearching && unfinishedTiles.length + startedTiles.length === 0;
+  const nothingFound = isSearching && unfinishedTiles.length + completedTiles.length === 0;
 
   return (
     <div style={styles.page}>
@@ -433,30 +437,30 @@ export function ShiftAssignment({
             </div>
           )}
 
-          {startedTiles.length > 0 && (
+          {completedTiles.length > 0 && (
             <>
-              <div style={styles.sectionLabel}>Begonnene Elemente</div>
+              <div style={styles.sectionLabel}>Abgeschlossene Elemente</div>
               <div style={styles.grid}>
-                {startedTiles.map((el) => (
+                {completedTiles.map((el) => (
                   <button
                     key={el.elementName}
                     onClick={() => resumeAndOpen(el.elementName, shift.refetch)}
                     disabled={gesperrt(el.elementName)}
                     style={{
                       ...styles.tile,
-                      ...styles.startedTile,
+                      ...styles.completedTile,
                       ...(el.elementName === recordingElement ? styles.recordingTile : {}),
                       ...(gesperrt(el.elementName) ? styles.tileGesperrt : {}),
                     }}
                   >
-                    <div style={styles.startedTileName}>{el.elementName}</div>
+                    <div style={styles.completedTileName}>{el.elementName}</div>
                     {el.elementName === recordingElement ? (
                       <div style={styles.recordingBadge}>
                         <span style={styles.recordingDot} />
                         Aufzeichnung läuft
                       </div>
                     ) : (
-                      <div style={styles.startedTileDate}>
+                      <div style={styles.completedTileDate}>
                         {new Date(el.lastUpload).toLocaleDateString('de-DE', {
                           day: '2-digit', month: '2-digit', year: 'numeric',
                         })}
@@ -738,18 +742,19 @@ const styles: Record<string, React.CSSProperties> = {
     opacity: 0.4,
     cursor: 'default',
   },
-  // Dashed border reads as "half finished" — the element has data but is being
-  // picked up again.
-  startedTile: {
+  // Finished here, and offered only so an operator can take one back. Lighter
+  // than the grid above and with a grey dashed border rather than the warning
+  // one, because the row above is where the open work is.
+  completedTile: {
     backgroundColor: 'var(--surface-2)',
     border: '2px dashed var(--border)',
   },
-  startedTileName: {
+  completedTileName: {
     fontSize: '1.6rem',
     fontWeight: 700,
     wordBreak: 'break-word' as const,
   },
-  startedTileDate: {
+  completedTileDate: {
     fontSize: '1rem',
     color: 'var(--text-muted)',
   },
