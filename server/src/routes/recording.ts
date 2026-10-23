@@ -7,6 +7,7 @@ import {
   getSessions, getSessionById, getSessionStats, getExportedStreams, getSessionReadingsDetailed,
   getSessionReadingCount, setOperatingModeRow, getMostRecentSession, getCompletedElements,
   unclipSessionReadings, getActiveSession, setDrillingEndedAt, setGeologyConfirmedAt,
+  setSessionPaused,
 } from '../db.js';
 import {
   commitDefaultGeology, commitGeology, getGeologyContext, hasGeologyReadings, recordLiveLayer,
@@ -149,12 +150,30 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
   app.post('/api/recording/stop', async (request, reply) => {
     try {
       const { layers, hinweis } = readGeologyBody(request.body);
+      /*
+       * Pausieren: end the session without finishing the element.
+       *
+       * No geology commit and no `Ausführungsdatum` — the operator stopped to
+       * reach something the recording guard blocks (an update, the WLAN
+       * switch), not because the pillar is done. The readings upload normally;
+       * getting them off the machine is never the thing to defer.
+       *
+       * It is a flag on the stop rather than a state of its own because the
+       * resume path already does everything else: the session ends, the
+       * element stays resumable, and starting again reopens it on its phase.
+       */
+      const pause = (request.body as { pause?: unknown } | null | undefined)?.pause === true;
 
       // Read the session before ending it: afterwards there is no active one.
       const active = getActiveSession();
       let geology: GeologyCommitResult | undefined;
       let geologieFehler: string | undefined;
-      if (active) {
+      if (active && pause) {
+        // Before endRecording, so the row already carries the flag by the time
+        // the auto-upload below can read it.
+        setSessionPaused(active.id, true);
+        log.info('Session %d paused', active.id);
+      } else if (active) {
         /*
          * Its own try/catch, and that is the whole point of it.
          *

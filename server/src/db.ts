@@ -23,6 +23,16 @@ export interface Session {
   drilling_ended_at: number | null;
   /** When the operator signed the geology profile off, if they have. */
   geology_confirmed_at: number | null;
+  /**
+   * Whether the operator paused rather than finished this session.
+   *
+   * A paused session is an ordinary ended session in every respect but one:
+   * its upload must not stamp an `Ausführungsdatum`. See `autoMarkComplete`'s
+   * caller in recording.ts. Completion hangs off the *upload*, not the stop,
+   * so the flag has to live on the row — the upload can run minutes later from
+   * `autoUploadOnConnectivity` or a reboot, long after the pause.
+   */
+  paused: number;
 }
 
 export interface SessionStats {
@@ -233,6 +243,13 @@ db.exec(`
   if (!has('geology_confirmed_at')) {
     db.exec('ALTER TABLE recording_sessions ADD COLUMN geology_confirmed_at INTEGER');
   }
+  // Set by Pausieren, which ends the session without finishing the element:
+  // no geology commit, and no Ausführungsdatum when the readings upload.
+  // Defaults to 0, so every session recorded before this existed keeps
+  // completing exactly as it did.
+  if (!has('paused')) {
+    db.exec('ALTER TABLE recording_sessions ADD COLUMN paused INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 {
@@ -320,7 +337,7 @@ const getSessionsStmt = db.prepare(
 const getCompletedElementsStmt = db.prepare(`
   SELECT element_name, MAX(COALESCE(ended_at, started_at)) as last_upload
   FROM recording_sessions
-  WHERE status = 'uploaded'
+  WHERE status = 'uploaded' AND paused = 0
   GROUP BY element_name
   ORDER BY last_upload DESC
 `);
@@ -690,6 +707,10 @@ export function getOperatingMode(sessionId: number): string | null {
 const setDrillingEndedAtStmt = db.prepare(
   'UPDATE recording_sessions SET drilling_ended_at = ? WHERE id = ?'
 );
+const setSessionPausedStmt = db.prepare(
+  'UPDATE recording_sessions SET paused = ? WHERE id = ?'
+);
+
 const setGeologyConfirmedAtStmt = db.prepare(
   'UPDATE recording_sessions SET geology_confirmed_at = ? WHERE id = ?'
 );
@@ -708,6 +729,10 @@ export function setDrillingEndedAt(sessionId: number, at: number | null): void {
 /** Mark the geology profile as signed off, or clear it with null. */
 export function setGeologyConfirmedAt(sessionId: number, at: number | null): void {
   setGeologyConfirmedAtStmt.run(at, sessionId);
+}
+
+export function setSessionPaused(sessionId: number, paused: boolean): void {
+  setSessionPausedStmt.run(paused ? 1 : 0, sessionId);
 }
 
 export function setOperatingModeRow(sessionId: number, mode: string): void {

@@ -894,7 +894,13 @@ async function runUpload(
   // every reading was clipped as a Rohrwechsel — and stamping an
   // Ausführungsdatum for it would report a pillar as produced on the strength
   // of no data at all, and drop it out of the shift assignment.
-  if (finalStatus === 'uploaded' && getSessionStats(sessionId).uploaded > 0) {
+  //
+  // A paused session uploads its readings like any other and finishes nothing:
+  // the operator stopped to get at something the recording guard blocks, not
+  // because the element is done. Checked here rather than at the stop because
+  // this is where completion happens, and this can run minutes or a reboot
+  // later (`autoUploadOnConnectivity`, `uploadPendingSessionsAtBoot`).
+  if (finalStatus === 'uploaded' && !session.paused && getSessionStats(sessionId).uploaded > 0) {
     await autoMarkComplete(session);
   }
 

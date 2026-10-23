@@ -133,4 +133,36 @@ describe('auto-completion after upload', () => {
     expect(result.status).toBe('partial');
     expect(writeCompletion).not.toHaveBeenCalled();
   });
+
+  /*
+   * Pausieren ends a session without finishing the element, and completion
+   * hangs off the *upload* rather than the stop — which can run minutes or a
+   * reboot later. So the flag has to be read here, and these two tests are
+   * what keep that true.
+   */
+  it('finishes nothing for a paused session, but still uploads its readings', async () => {
+    const id = endedSession('F-05');
+    db.setSessionPaused(id, true);
+    db.insertSessionReading(id, 'testsensor', 'sensor-abc', 'float', 3.5, null);
+
+    const result = await recording.uploadSession(id);
+
+    expect(result.status).toBe('uploaded');
+    expect(db.getSessionStats(id).uploaded).toBe(1);
+    expect(writeCompletion).not.toHaveBeenCalled();
+  });
+
+  it('keeps a paused element off the completed list', async () => {
+    // The list is what the element screen reads, and it keys off `uploaded` —
+    // so without the flag a pause would show the pillar as done locally while
+    // the platform still has it open. That is the confusion Pausieren exists
+    // to remove, arriving by the back door.
+    const id = endedSession('F-06');
+    db.setSessionPaused(id, true);
+    db.insertSessionReading(id, 'testsensor', 'sensor-abc', 'float', 4.5, null);
+
+    await recording.uploadSession(id);
+
+    expect(db.getCompletedElements().map((e) => e.elementName)).not.toContain('F-06');
+  });
 });
