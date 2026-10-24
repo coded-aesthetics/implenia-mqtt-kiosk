@@ -36,6 +36,7 @@
   /* ── Overlays & charts ───────────────────────────────────────── */
   --color-danger-overlay: rgba(183, 28, 28, 0.95);
   --color-success-overlay: rgba(27, 94, 32, 0.95);
+  --color-warning-overlay: rgba(230, 81, 0, 0.95);
   --surface-overlay: rgba(0, 0, 0, 0.75);
   --overlay-shadow: rgba(0, 0, 0, 0.25);
   --color-danger-tint: rgba(211, 47, 47, 0.08);

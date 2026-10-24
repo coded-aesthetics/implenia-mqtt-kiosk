@@ -89,11 +89,14 @@ export function VerbindungConfig({ config }: Props) {
       });
 
       if (res.ok) {
+        // A body that will not parse must not turn an accepted key into
+        // „Netzwerkfehler" — it only costs the warning this reads.
+        const saved = await res.json().catch(() => ({}));
         setApiKey('');
         const result = await validateApi();
         if (result.ok) {
           config.refetch();
-          setKeyOverlay({ type: 'success', title: 'API-Schlüssel gespeichert' });
+          setKeyOverlay(savedOverlay(saved));
         } else {
           try {
             await fetch('/api/config/api-key', { method: 'DELETE' });
@@ -324,6 +327,41 @@ export function VerbindungConfig({ config }: Props) {
 
     </div>
   );
+}
+
+/**
+ * What to say after the key was saved and accepted.
+ *
+ * A new key means a new construction site — one per pier on a bridge — and the
+ * kiosk has just moved everything it remembers per element with it. The plain
+ * success banner is right for that, with one exception worth a line: there are
+ * measurements on the machine that are not on the platform yet, and they belong
+ * to the pier just left.
+ *
+ * They need nothing from the operator — the kiosk kept that site's key and
+ * retries under it (site-credentials.ts) — so this states a fact rather than
+ * asking for anything. It is said at all because this is the one moment
+ * somebody is looking, and because a machine carrying unsent data is a machine
+ * that should not be wiped or handed on yet.
+ */
+function savedOverlay(saved: {
+  siteChanged?: boolean;
+  pendingReadings?: { sessions: number; readings: number } | null;
+}): OverlayState {
+  const pending = saved.siteChanged ? saved.pendingReadings : null;
+  if (!pending) {
+    return { type: 'success', title: 'API-Schlüssel gespeichert' };
+  }
+  // 143 characters with six-digit counts, against a measured budget of 160 —
+  // see `iconSmall` in CardOverlay. Longer and the last line is cut off.
+  return {
+    type: 'warning',
+    title: 'API-Schlüssel gespeichert — Daten der vorherigen Baustelle',
+    detail:
+      `${pending.readings} Messwerte aus ${pending.sessions} Aufzeichnung(en) der `
+      + 'vorherigen Baustelle werden automatisch mit deren Schlüssel hochgeladen, '
+      + 'sobald Verbindung besteht.',
+  };
 }
 
 function deriveKeyErrorDetail(apiError: string | undefined): string {

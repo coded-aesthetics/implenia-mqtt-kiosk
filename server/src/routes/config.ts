@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { getMeta, setMeta, deleteMeta, getUnsafeDataSummary, resetKiosk } from '../db.js';
+import {
+  getMeta, setMeta, deleteMeta, getUnsafeDataSummary, resetKiosk, getActiveSession,
+} from '../db.js';
 import { getApiConfig, fetchImplenia } from '../implenia-api.js';
 import { config as envConfig } from '../config.js';
 import { ingestion, DataIngestion } from '../ingestion.js';
@@ -13,6 +15,7 @@ import {
   TransportAlreadySetError, clearTransportCache,
 } from '../transport.js';
 import { clearVerfahrenCache } from '../sensor-meta.js';
+import { syncSite } from '../site.js';
 import { createLogger } from '../logger.js';
 import { registerMqttConfigRoutes } from './config-mqtt.js';
 import { registerRohrwechselConfigRoutes } from './config-rohrwechsel.js';
@@ -45,6 +48,16 @@ export function registerConfigRoutes(app: FastifyInstance): void {
     });
   });
 
+  /*
+   * Save the API key — which is also how the kiosk is moved to another site.
+   *
+   * One key per construction phase per site: a bridge's piers are separate BIM
+   * widgets with separate keys, and the key is switched on the way to the next
+   * one. So this is not only a credential write, it is the sentence "the
+   * machine is somewhere else now", and everything the kiosk remembers per
+   * element name has to move with it. `syncSite` is what does that; see
+   * site.ts.
+   */
   app.post('/api/config', async (request, reply) => {
     const { apiKey, apiUrl } = request.body as {
       apiKey?: string;
@@ -55,13 +68,54 @@ export function registerConfigRoutes(app: FastifyInstance): void {
       return reply.status(400).send({ error: 'apiKey is required' });
     }
 
+    /*
+     * Not while recording, same guard and same 409 as `POST /api/update` and
+     * the WLAN switch. The running session's sensor ids belong to the site
+     * being left: carrying it across would leave the kiosk recording one pier's
+     * pillar while believing it is on the next, and its upload would then be
+     * refused by the very key that was just entered.
+     */
+    const active = getActiveSession();
+    if (active) {
+      return reply.status(409).send({
+        error:
+          `Die Aufzeichnung für „${active.element_name}" läuft gerade. Ein neuer ` +
+          'API-Schlüssel gehört zu einer anderen Baustelle — bitte die Aufzeichnung ' +
+          'zuerst beenden und den Schlüssel danach wechseln.',
+      });
+    }
+
+    /*
+     * What is still on the machine, read *before* the switch.
+     *
+     * Reported, not blocked, and it needs nothing from the operator: the kiosk
+     * keeps each site's key, so a session left pending here goes on retrying
+     * under the key of the site it was recorded on (site-credentials.ts). It is
+     * in the answer because this is the one moment somebody is looking at the
+     * screen, and a machine carrying unsent data is one that should not be wiped
+     * or handed on yet.
+     */
+    const pending = getUnsafeDataSummary();
+
     setMeta('implenia_api_key', apiKey.trim());
     if (apiUrl && apiUrl.trim().length > 0) {
       setMeta('implenia_api_url', apiUrl.trim());
     }
 
-    log.info('API key updated via config page');
-    return reply.send({ ok: true });
+    const moved = syncSite();
+    log.info(
+      moved
+        ? 'API key updated via config page — kiosk moved to another site'
+        : 'API key updated via config page',
+    );
+
+    return reply.send({
+      ok: true,
+      siteChanged: moved,
+      // Only when it matters: unsent measurements are the one thing a key
+      // change can strand, so they are reported only alongside one.
+      pendingReadings: moved && pending.readings > 0 ? pending : null,
+    });
   });
 
   app.put('/api/config/api-url', async (request, reply) => {
@@ -78,6 +132,10 @@ export function registerConfigRoutes(app: FastifyInstance): void {
     }
 
     setMeta('implenia_api_url', apiUrl.trim());
+    // Refresh the stored credentials of the current site: the URL is not part
+    // of the site id, so nothing moves — but a left-behind pier's upload reads
+    // its URL from that row, and a stale one aims it at the previous backend.
+    syncSite();
     log.info('API URL updated via config page');
     return reply.send({ ok: true });
   });
