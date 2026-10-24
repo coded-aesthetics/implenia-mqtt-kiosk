@@ -31,14 +31,12 @@ let meta: typeof import('../sensor-meta.js');
 let recording: typeof import('../recording.js');
 
 const DEPTH_ID = 'sensor-tiefe';
-const NR_ID = 'sensor-geodin';
-const TEXT_ID = 'sensor-geologie';
+const PROFIL_ID = 'sensor-geologieprofil';
 
 /** DSV's roles: depth is `Tiefe` here, which is why nothing resolves by name. */
 const SENSOR_MAP = JSON.stringify({
   tiefe: { sensorId: DEPTH_ID, sensorType: 'float' },
-  geodin: { sensorId: NR_ID, sensorType: 'int' },
-  geologie: { sensorId: TEXT_ID, sensorType: 'string' },
+  geologieprofil: { sensorId: PROFIL_ID, sensorType: 'string' },
 });
 
 const T0 = 1_700_000_000_000;
@@ -90,8 +88,22 @@ function activeDrilledSession(to = 6): number {
   return id;
 }
 
+/**
+ * The ground types on record for a session, shallowest first.
+ *
+ * Reads the committed profile where there is one, and the live entries where
+ * there is not — which is what "on record" means to the operator, and keeps
+ * these assertions about the route's behaviour rather than its storage.
+ */
 function geoDin(id: number): number[] {
-  return db.getSessionSensorSeries(id, NR_ID).map((p) => Math.round(p.value));
+  const committed = db.getSessionSensorTextSeries(id, PROFIL_ID);
+  if (committed.length > 0) {
+    const profil = JSON.parse(committed[committed.length - 1].text) as {
+      layers: { nr: number }[];
+    };
+    return profil.layers.map((l) => l.nr);
+  }
+  return db.getSessionGeology(id).map((e) => e.nr);
 }
 
 describe('POST /api/recording/stop with a geology profile', () => {
@@ -127,7 +139,7 @@ describe('POST /api/recording/stop with a geology profile', () => {
     });
 
     const groups = db.getSessionUploadGroups(id);
-    expect(groups.some((g) => g.sensorId === NR_ID)).toBe(true);
+    expect(groups.some((g) => g.sensorId === PROFIL_ID)).toBe(true);
   });
 
   it('back-fills the plan when no geology is sent at all', async () => {
@@ -252,11 +264,10 @@ describe('Pausieren commits its geology like any other stop', () => {
   /*
    * A pause skips what *finishes* an element — the Ausführungsdatum, and the
    * sign-off the recording bar routes through. It must not skip the
-   * back-fill: `recordLiveLayer` writes each tap into `session_readings` as
-   * `pending`, so a session paused after one tap used to upload exactly one
-   * `GeoDIN` row. implenia-web derives layers by change detection, so that
-   * single row reads as "this ground from here to the bottom of the hole" —
-   * a partial profile reported as a complete one, in a signed document.
+   * back-fill: a session paused after one tap holds exactly one layer, and a
+   * profile is flat and gapless, so that single layer reads as "this ground
+   * from here to the bottom of the hole" — a partial profile reported as a
+   * complete one, in a signed document.
    */
   it('back-fills the plan around what the operator entered', async () => {
     const id = activeDrilledSession();

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  CHUNK_ROWS, csvChunkProblem, isGriddableSensor, pinAnchorReadings, planCsvUpload,
+  CHUNK_ROWS, csvChunkProblem, isGriddableSensor, planCsvUpload,
   type CsvChunk, type UploadSensorMeta,
 } from './csv-upload.js';
 import type { SessionUploadGroup } from './db.js';
@@ -87,36 +87,30 @@ describe('isGriddableSensor', () => {
     expect(isGriddableSensor({ sensorType: 'float' }, { name: 'Bohrtiefe' })).toBe(false);
   });
 
-  it('refuses GeoDIN: a grid merges boundaries, and one row is one layer', () => {
-    expect(
-      isGriddableSensor({ sensorType: 'int' }, { name: 'GeoDIN', source: 'server', role: 'geology_nr' }),
-    ).toBe(false);
-    // Still refused if its CSV `Quelle` is ever corrected to `kiosk`, which is
-    // what RECORDABLE_ROLES exists to anticipate.
-    expect(
-      isGriddableSensor({ sensorType: 'int' }, { name: 'GeoDIN', source: 'mqtt', role: 'geology_nr' }),
-    ).toBe(false);
+  it('refuses the committed geology profile — it is one value, not a series', () => {
+    // A string sensor can never take this route: an empty cell writes an empty
+    // string rather than a NULL. The profile is additionally dated at a
+    // sentinel, so it is not session data at all.
+    expect(isGriddableSensor(
+      { sensorType: 'string' },
+      { name: 'Geologieprofil', source: 'kiosk', role: 'geology_profile' },
+    )).toBe(false);
   });
 
-  it('refuses the completion stamp and the geology text', () => {
+  it('refuses the completion stamp', () => {
     expect(
       isGriddableSensor(
         { sensorType: 'string' },
         { name: 'Ausführungsdatum', source: 'user', role: 'is_completed' },
       ),
     ).toBe(false);
-    expect(
-      isGriddableSensor(
-        { sensorType: 'string' },
-        { name: 'Geologie', source: 'user', role: 'geology_text' },
-      ),
-    ).toBe(false);
   });
 
-  it('accepts the depth sensor — its geology instants are pinned back in', () => {
-    // It carries the biggest channel of the session; leaving it ungridded to
-    // protect the geology join costs more than pinning the handful of readings
-    // that join actually needs. See pinAnchorReadings.
+  it('accepts the depth sensor, which nothing points into any more', () => {
+    // It carries the biggest channel of the session. A geology boundary used
+    // to borrow one of its readings' instants, so gridding it moved the
+    // reading a layer pointed at; a committed layer states its own depth, so
+    // the series reduces like any other.
     expect(isGriddableSensor(
       { sensorType: 'float' }, { name: 'Bohrtiefe', source: 'mqtt', role: 'depth' },
     )).toBe(true);
@@ -146,18 +140,18 @@ describe('planCsvUpload', () => {
     const groups = [
       group('s-rpm', 'float', [[0, 60]]),
       group('s-tiefe', 'float', [[0, 1.5]]),
-      group('s-geodin', 'int', [[0, 23]]),
+      group('s-status', 'int', [[0, 0]]),
       group('s-kommentar', 'string', [[0, 'Hindernis']]),
     ];
     const plan = planCsvUpload(groups, meta({
       's-rpm': { name: 'Drehzahl', role: 'rpm' },
       's-tiefe': { name: 'Bohrtiefe', role: 'depth' },
-      's-geodin': { name: 'GeoDIN', role: 'geology_nr' },
+      's-status': { name: 'Status', source: 'user', role: 'mode' },
       's-kommentar': { name: 'Kommentar' },
     }), GRID);
 
     expect(plan.gridded).toEqual(['Drehzahl', 'Bohrtiefe']);
-    expect(plan.leftovers.map((g) => g.sensorId)).toEqual(['s-geodin', 's-kommentar']);
+    expect(plan.leftovers.map((g) => g.sensorId)).toEqual(['s-status', 's-kommentar']);
   });
 
   it('writes a Zeitpunkt header with the platform spelling of each sensor', () => {
@@ -287,74 +281,6 @@ describe('planCsvUpload', () => {
     expect(Math.ceil(7799 / CHUNK_ROWS)).toBeLessThanOrEqual(10);
   });
 });
-
-// ── pinning the depth readings a geology boundary points at ─────────────────
-
-describe('pinAnchorReadings', () => {
-  const depth = {
-    sensorId: 's-tiefe',
-    sensorType: 'float',
-    name: 'Bohrtiefe',
-    readings: [0, 290, 580, 870].map((o) => ({ receivedAt: T0 + o, value: 1 + o / 1000 })),
-  };
-
-  it('picks exactly the readings a boundary was dated at', () => {
-    // A GeoDIN entry carries no depth of its own: implenia-web recovers the
-    // layer's depth by pairing the two series on millisecond equality. The grid
-    // re-dates the depth series, so the readings the boundaries point at have
-    // to reach the platform at their own instants as well.
-    const batch = pinAnchorReadings([T0 + 290, T0 + 580], depth)!;
-    expect(batch.sensorId).toBe('s-tiefe');
-    expect(batch.sensorType).toBe('float');
-    expect(batch.readings.map((r) => r.receivedAt)).toEqual([T0 + 290, T0 + 580]);
-  });
-
-  it('sends the recorded value, never an interpolated one', () => {
-    // The exact value exists — the boundary was dated at a real reading. There
-    // is nothing to estimate.
-    const batch = pinAnchorReadings([T0 + 580], depth)!;
-    expect(batch.readings).toEqual([{ receivedAt: T0 + 580, value: 1.58 }]);
-  });
-
-  it('is nothing for a Verfahren with no geology', () => {
-    expect(pinAnchorReadings([], depth)).toBeNull();
-  });
-
-  it('is nothing when the session has no depth sensor', () => {
-    expect(pinAnchorReadings([T0 + 290], null)).toBeNull();
-  });
-
-  it('is nothing when no depth reading matches — nothing to pin, nothing to send', () => {
-    expect(pinAnchorReadings([T0 + 123], depth)).toBeNull();
-  });
-
-  it('ignores an instant with no reading rather than inventing one', () => {
-    const batch = pinAnchorReadings([T0 + 290, T0 + 123], depth)!;
-    expect(batch.readings.map((r) => r.receivedAt)).toEqual([T0 + 290]);
-  });
-
-  it('sends one reading per instant when two share a millisecond', () => {
-    // The platform's upsert refuses a batch that names one (sensor_id, date)
-    // twice, and this batch is every boundary's anchor: a duplicate would fail
-    // all of them, identically on every retry. The last value wins, as it does
-    // on the per-sensor path.
-    const doubled = {
-      ...depth,
-      readings: [
-        { receivedAt: T0 + 290, value: 1.29 },
-        { receivedAt: T0 + 290, value: 1.31 },
-        { receivedAt: T0 + 580, value: 1.58 },
-      ],
-    };
-    const batch = pinAnchorReadings([T0 + 290, T0 + 580], doubled)!;
-    expect(batch.readings).toEqual([
-      { receivedAt: T0 + 290, value: 1.31 },
-      { receivedAt: T0 + 580, value: 1.58 },
-    ]);
-  });
-});
-
-// ── reading the platform's answer ───────────────────────────────────────────
 
 describe('csvChunkProblem', () => {
   const chunk: CsvChunk = {

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 /**
  * A sensor's role is pinned to the session that recorded it.
  *
- * A role (`depth`, `is_completed`, `geology_nr`, …) is a property of the
+ * A role (`depth`, `is_completed`, `geology_profile`, …) is a property of the
  * *element*: implenia-web's wizard stamps it into the sensor's `meta` when the
  * element is created, and the platform serves it back with
  * `include_meta=true`. The kiosk's copies of those same CSVs are whatever its
@@ -43,8 +43,7 @@ vi.mock('./connectivity.js', () => ({
  */
 let csvRoles: Record<string, string | null> = {
   depth: 'Bohrtiefe',
-  geology_nr: 'GeoDIN',
-  geology_text: 'Geologie',
+  geology_profile: 'Geologieprofil',
   is_completed: 'Ausführungsdatum',
 };
 
@@ -79,10 +78,13 @@ const ELEMENT_SENSORS = {
     },
   ],
   sensors_int: [
-    { id: 'si-nr', name: 'GeoDIN', meta: { source: 'server', role: 'geology_nr' } },
+    { id: 'si-status', name: 'Status', meta: { source: 'user', role: 'mode' } },
   ],
   sensors_string: [
-    { id: 'ss-text', name: 'Geologie', meta: { source: 'kiosk', role: 'geology_text' } },
+    {
+      id: 'ss-profil', name: 'Geologieprofil Alt',
+      meta: { source: 'kiosk', role: 'geology_profile' },
+    },
     {
       id: 'ss-done', name: 'Ausführungsdatum Alt',
       meta: { source: 'user', role: 'is_completed' },
@@ -107,8 +109,7 @@ beforeEach(() => {
   db.resetKiosk();
   csvRoles = {
     depth: 'Bohrtiefe',
-    geology_nr: 'GeoDIN',
-    geology_text: 'Geologie',
+    geology_profile: 'Geologieprofil',
     is_completed: 'Ausführungsdatum',
   };
 });
@@ -133,8 +134,7 @@ describe('what a session records about its sensors', () => {
       name: 'Bohrtiefe alt', role: 'depth',
     });
     expect(map['ausführungsdatum alt'].role).toBe('is_completed');
-    // A sensor with no role simply has none — not an empty string.
-    expect(map.geodin.role).toBe('geology_nr');
+    expect(map['geologieprofil alt'].role).toBe('geology_profile');
   });
 
   it('returns the real spelling, never the lowercased key', async () => {
@@ -167,7 +167,7 @@ describe('what a session records about its sensors', () => {
     }));
 
     expect(recording.sensorNameByRole(legacy, 'depth')).toBe('Bohrtiefe');
-    expect(recording.sensorNameByRole(legacy, 'geology_nr')).toBe('GeoDIN');
+    expect(recording.sensorNameByRole(legacy, 'geology_profile')).toBe('Geologieprofil');
   });
 
   it('reports no role where neither the session nor the CSVs have one', () => {

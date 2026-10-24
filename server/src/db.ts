@@ -220,6 +220,40 @@ db.exec(`
     defs         TEXT    NOT NULL,
     updated_at   INTEGER NOT NULL
   );
+
+  /*
+   * Geology the operator entered live, during drilling.
+   *
+   * The scratchpad between a tap and the commit, and nothing else. The
+   * committed profile is one JSON value in a Geologieprofil session reading;
+   * these rows are what it gets built from, together with the Schichtauftrag's
+   * back-fill.
+   *
+   * It exists because a layer now carries its own depth. The old shape stored
+   * a live entry as a GeoDIN session reading dated at the exact received_at of
+   * a depth reading, and recovered the depth by joining the two back together
+   * -- so the timestamp *was* the depth, and an instant off by one sample
+   * silently cost a layer. Here the depth is read off the latest depth reading
+   * once, at the moment of the tap, and stored as a number.
+   *
+   * The (session_id, depth) primary key is the replace rule: a second entry at
+   * the same depth corrects the first rather than stacking on it. Two ground
+   * types at one depth is not a profile, and the depth stands still for the
+   * whole of a Rohrverlaengerung, which is minutes of taps landing on one
+   * value.
+   *
+   * Nothing back-filled ever goes in here. That is what makes a re-commit keep
+   * its provenance for free: the old shape had to read its own committed
+   * series back and strip the back-filled rows out again.
+   */
+  CREATE TABLE IF NOT EXISTS session_geology (
+    session_id  INTEGER NOT NULL,
+    depth       REAL    NOT NULL,
+    nr          INTEGER NOT NULL,
+    text        TEXT,
+    observed_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, depth)
+  );
 `);
 
 // --- Additive migrations ---
@@ -1067,6 +1101,48 @@ export interface SeriesPoint {
  *
  * See getDepthSamplesStmt for why each filter is there.
  */
+const insertSessionGeologyStmt = db.prepare(
+  `INSERT OR REPLACE INTO session_geology (session_id, depth, nr, text, observed_at)
+   VALUES (?, ?, ?, ?, ?)`,
+);
+const getSessionGeologyStmt = db.prepare(
+  'SELECT depth, nr, text, observed_at FROM session_geology WHERE session_id = ? ORDER BY depth ASC',
+);
+
+/** One layer change the operator entered while drilling. */
+export interface SessionGeologyEntry {
+  /** Depth of the depth reading that was current when they tapped, in metres. */
+  depth: number;
+  /** DIN 4023 number. */
+  nr: number;
+  /** The operator's own description, where they gave one. */
+  text: string | null;
+  /** When the entry was made — diagnostics only; the depth is the datum. */
+  observedAt: number;
+}
+
+/**
+ * Record one live geology entry, replacing any entry at the same depth.
+ *
+ * The replace is the point: see the `session_geology` DDL. It is also what the
+ * operator means — a second tap before the hole has moved is a correction.
+ */
+export function insertSessionGeology(
+  sessionId: number, depth: number, nr: number, text: string | null, observedAt: number,
+): void {
+  insertSessionGeologyStmt.run(sessionId, depth, nr, text, observedAt);
+}
+
+/** Every live geology entry of a session, shallowest first. */
+export function getSessionGeology(sessionId: number): SessionGeologyEntry[] {
+  const rows = getSessionGeologyStmt.all(sessionId) as {
+    depth: number; nr: number; text: string | null; observed_at: number;
+  }[];
+  return rows.map((r) => ({
+    depth: r.depth, nr: r.nr, text: r.text, observedAt: r.observed_at,
+  }));
+}
+
 export function getSessionDepthSamples(
   sessionId: number, sensorId: string, bis?: number | null,
 ): SeriesPoint[] {

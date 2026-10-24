@@ -1,71 +1,93 @@
 /**
- * Worker-observed geology — the write side of the `GeoDIN` contract shared
- * with implenia-web.
+ * Worker-observed geology — the write side of the `Geologieprofil` contract
+ * shared with implenia-web.
  *
- * The contract already existed before this module: both herstellen CSVs define
- * `Geologie` (Text, role `geology_text`) and `GeoDIN` (Integer, role
- * `geology_nr`), and implenia-web derives the layers a worker actually saw by
- * change detection over the `GeoDIN` series, each new code starting a layer at
- * the depth of *the same reading*. Nothing had ever written it.
+ * A committed profile is **one JSON value** in a `Geologieprofil` string
+ * sensor (CSV role `geology_profile`), dated at the sentinel
+ * `2000-01-01T00:00:00Z`:
  *
- * Three properties of the write are load-bearing:
+ *     {"end":12.4,"layers":[{"t":0.0,"nr":12,"name":"Steine"},
+ *                           {"t":2.0,"nr":60,"name":"Hindernis Beton","q":"vorgabe"}]}
  *
- * 1. **Every reading is dated at the exact `received_at` of a recorded depth
- *    reading.** web aligns by millisecond equality and drops rows missing
- *    either value, so a reading dated at "now" produces no layer at all —
- *    silently. See depth-timestamp.ts, which owns the inversion.
+ * Inserts upsert on `(sensor_id, date)`, so the profile is one overwritable
+ * slot: a re-commit replaces rather than appends, and nothing accumulates.
+ * Same sentinel, and the same reasoning, as `Ausführungsdatum`.
  *
- * 2. **An obstruction is not a separate concept.** DIN 4023 numbers 59–64
+ * **Why it is not a time series any more.** It used to be uploaded as a
+ * `GeoDIN` integer series plus a `Geologie` text series, and implenia-web
+ * turned that back into layers by change detection — each new code starting a
+ * layer at the depth of *the same reading*, matched on millisecond equality.
+ * A `GeoDIN` reading carried no depth, so the timestamp was the entire depth
+ * mechanism: a reading dated one sample out produced no layer at all, and the
+ * profile uploaded cleanly, appeared in raw charts, and showed zero observed
+ * layers in the protocol. Five mechanisms existed only to protect that one
+ * borrowed integer, and one of them had already been cut by a compression
+ * change that guarded `GeoDIN` from the grid while thinning the depth series
+ * it pointed at.
+ *
+ * That join was never designed. The third-party software that wrote every
+ * `GeoDIN` row on the platform grew out of a CSV upload, where one row carries
+ * one timestamp and every column on it, so the alignment came for free. It only
+ * became load-bearing when a writer had to date a geology reading on its own.
+ *
+ * Four properties of the write survive from that contract, for their own
+ * reasons rather than by inheritance:
+ *
+ * 1. **An obstruction is not a separate concept.** DIN 4023 numbers 59–64
  *    (`Hindernis Stahl/Beton/Holz/Sonstiges`, `Hohlräume`, `Findling`) live in
  *    the same number space as soils and rocks, so an obstruction is a thin
- *    layer and entering and leaving it are two ordinary code changes. web's
- *    existing reader renders it correctly with no change at all.
+ *    layer and entering and leaving it are two ordinary layers.
+ * 2. **Every committed profile is complete, and says which parts were
+ *    observed.** Partial geology is not representable — a single code asserts
+ *    the ground runs to the bottom of the hole — so back-filling the
+ *    unconfirmed stretches from the Schichtauftrag is the only option that
+ *    neither discards what the operator saw nor invents a boundary they
+ *    rejected. Provenance is the per-layer `q` field now, not a ` (Vorgabe)`
+ *    suffix smuggled through display text, which is also what lets anything
+ *    aggregating "ground types actually encountered" exclude the back-fill
+ *    instead of string-matching for it.
+ * 3. **A layer carries its *start* depth.** `mergeProfile` extends the
+ *    shallowest layer up to 0 unless it is an obstruction — asserting the drill
+ *    met concrete from the surface is a claim nobody made — so a profile
+ *    legitimately begins below 0 with the stretch above making no claim. End
+ *    depths per layer cannot express that.
+ * 4. **`end` is written, not derived.** `profileEndTiefe` can land deeper than
+ *    any recorded reading when the hole stopped short of the plan, so a reader
+ *    recomputing it from the depth series would get a different number.
  *
- * 3. **The profile committed at stop is complete, and says which parts were
- *    observed.** Partial geology is not representable: a single code asserts
- *    the ground runs to the bottom of the hole, so there is no way to say "sand
- *    from 2 m, and I make no claim below that". Back-filling the unconfirmed
- *    stretches from the Schichtauftrag is therefore the only option that
- *    neither discards what the operator did see nor invents a boundary they
- *    rejected — and the stretches that came from the plan say so, in the
- *    `Geologie` text, with a `(Vorgabe)` suffix.
- *
- * See the "Worker-observed geology" section in CLAUDE.md before changing any of
- * this.
+ * Live entries go to `session_geology`, as depths. See the "Worker-observed
+ * geology" section in CLAUDE.md before changing any of this.
  */
 
 import { findByNr } from '@coded-aesthetics/din4023';
 import {
-  deletePendingSensorReadingAt,
   deletePendingSensorReadings,
   inTransaction,
   getElementVorgaben,
   getSessionDepthSamples,
-  getSessionSensorSeries,
+  getSessionGeology,
   getSessionSensorTextSeries,
+  insertSessionGeology,
   insertSessionReading,
   type Session,
 } from './db.js';
-import {
-  alignBoundaries, drilledDepth, observedLayers, type DepthSample,
-} from './depth-timestamp.js';
+import { drilledDepth, type DepthSample } from './depth-timestamp.js';
 import { createLogger } from './logger.js';
 import { parseSensorMap, sensorNameByRole } from './recording.js';
-import { mergeProfile, type MergedProfile } from './geology-profile.js';
+import { mergeProfile, profileEndTiefe, type MergedProfile } from './geology-profile.js';
 import { parseVorgabeGeology, type VorgabeProfile } from './vorgabe-geology.js';
 
 const log = createLogger('geology');
 
 /**
- * Suffix marking a boundary the operator never confirmed.
+ * The instant a committed profile is stored at.
  *
- * In the text series rather than anywhere else because nothing else survives
- * the trip: the backend stores numbers and strings, and `GeoDIN` has no room
- * for provenance. `Geologie` is written by nobody but this kiosk — the CSV
- * calls it `user` and no importer touches it — so the suffix cannot collide
- * with another writer's convention.
+ * A fixed date makes the profile a single overwritable slot per element rather
+ * than a time series: inserts upsert on `(sensor_id, date)`, so a re-commit
+ * replaces the previous profile and clearing one is possible. The same
+ * sentinel implenia-web uses for materialized per-element values.
  */
-export const VORGABE_SUFFIX = ' (Vorgabe)';
+export const PROFILE_SENTINEL_AT = Date.UTC(2000, 0, 1);
 
 /**
  * How far the hole must have moved for the session to count as having drilled.
@@ -86,29 +108,38 @@ export interface GeologyLayerInput {
   /** DIN 4023 `GeologieEintrag.nr`. */
   nr: number;
   /**
-   * Overrides the DIN name in the `Geologie` text series.
+   * Overrides the DIN name in the layer's `name` field.
    *
    * Only for a layer the operator described themselves. Left out, the name
    * comes from the DIN tables here, so a profile reads the same however the
    * recording was stopped — and a client cannot label a layer as something it
-   * is not.
+   * is not. `nr` stays authoritative either way; `name` is a label.
    */
   name?: string;
   /** Observed during production, or carried over from the Schichtauftrag. */
   quelle?: Quelle;
 }
 
+/** One layer as it goes on the wire. */
+interface WireLayer {
+  t: number;
+  nr: number;
+  name?: string;
+  q?: 'vorgabe';
+}
+
 /**
- * The human-readable value of the `Geologie` text series for a ground type.
+ * The human-readable label for a ground type.
  *
  * From the DIN 4023 tables the din4023 package owns, rather than a copy kept
  * here: the numbers and names are generated data belonging to that repo, and a
  * second copy would be wrong the first time a table changed. Only the root
  * entry of the package is used, which carries the tables and no React.
  *
- * Nothing in implenia-web reads this series — `GeoDIN` is what layers are
- * derived from — so a number that is not in the tables degrades to its bare
- * value rather than failing anything.
+ * It is carried in the value even though implenia-web can resolve `nr` itself:
+ * the two repos version the DIN tables independently, so the name recorded
+ * here is what the operator was actually shown at sign-off rather than what
+ * the entry is called wherever it is later read.
  */
 export function geologieText(nr: number, override?: string): string {
   const eigen = override?.trim();
@@ -120,37 +151,34 @@ export function geologieText(nr: number, override?: string): string {
 interface GeologySensors {
   depthName: string;
   depthId: string;
-  nrName: string;
-  nrId: string;
-  nrType: string;
-  textName: string | null;
-  textId: string | null;
-  textType: string | null;
+  profilName: string;
+  profilId: string;
+  profilType: string;
 }
 
 /**
  * Resolve the geology sensors for a session, or explain why it cannot be done.
  *
  * By role throughout, never by name: `depth` is `Bohrtiefe` for
- * Injektionsbohren and `Tiefe` for DSV. Both halves of the resolution come
- * from the session's own `sensor_map` — the role→name step as much as the
- * name→id one — so a recording keeps behaving the way it did when it started.
+ * Injektionsbohren and Ankerbohren but `Tiefe` for DSV. Both halves of the
+ * resolution come from the session's own `sensor_map` — the role→name step as
+ * much as the name→id one — so a recording keeps behaving the way it did when
+ * it started.
  *
  * Taking the name from the current sensor CSVs instead was the subtle half of
  * this. A role is a property of the element: the platform stamps each sensor's
  * meta when the element is created, the kiosk's CSV copy is whatever its last
- * release shipped, and the kiosk self-updates hourly — so a renamed sensor or
- * a moved role made this resolve to a name that is not in this session's map,
- * for an older element or simply for a session that outlived an update. See
+ * release shipped, and the kiosk self-updates — so a renamed sensor or a moved
+ * role made this resolve to a name that is not in this session's map, for an
+ * older element or simply for a session that outlived an update. See
  * `sensorNameByRole`.
  */
 function resolveSensors(session: Session): GeologySensors | { fehler: string } {
   const map = parseSensorMap(session.sensor_map);
   const depthName = sensorNameByRole(map, 'depth');
-  const nrName = sensorNameByRole(map, 'geology_nr');
-  const textName = sensorNameByRole(map, 'geology_text');
+  const profilName = sensorNameByRole(map, 'geology_profile');
 
-  if (!nrName) {
+  if (!profilName) {
     return { fehler: 'Dieses Verfahren erfasst keine Geologie.' };
   }
   if (!depthName) {
@@ -158,8 +186,7 @@ function resolveSensors(session: Session): GeologySensors | { fehler: string } {
   }
 
   const depth = map.get(depthName.toLowerCase());
-  const nr = map.get(nrName.toLowerCase());
-  const text = textName ? map.get(textName.toLowerCase()) : undefined;
+  const profil = map.get(profilName.toLowerCase());
 
   if (!depth) {
     return {
@@ -167,19 +194,16 @@ function resolveSensors(session: Session): GeologySensors | { fehler: string } {
         + 'Die Geologie kann nicht zugeordnet werden; die Messwerte werden normal hochgeladen.',
     };
   }
-  if (!nr) {
+  if (!profil) {
     return {
-      fehler: `Der Sensor „${nrName}" fehlt in dieser Aufzeichnung. `
+      fehler: `Der Sensor „${profilName}" fehlt in dieser Aufzeichnung. `
         + 'Die Geologie kann nicht hochgeladen werden; die Messwerte werden normal hochgeladen.',
     };
   }
 
   return {
     depthName, depthId: depth.sensorId,
-    nrName, nrId: nr.sensorId, nrType: nr.sensorType,
-    textName: textName ?? null,
-    textId: text?.sensorId ?? null,
-    textType: text?.sensorType ?? null,
+    profilName, profilId: profil.sensorId, profilType: profil.sensorType,
   };
 }
 
@@ -194,19 +218,20 @@ function isError(r: GeologySensors | { fehler: string }): r is { fehler: string 
  * The operating mode never lands on a reading — `session_readings.phase` is
  * only `bohren` or `rohrwechsel` — so a depth recorded while the rig retracts
  * through Austausch, Einbauen and Auffüllen is stored as drilling data and
- * `getSessionDepthSamples` hands it straight to the aligner. Three things go
- * wrong when it does, all of them quiet:
+ * `getSessionDepthSamples` hands it straight on. Two things go wrong when it
+ * does, both quiet:
  *
- * 1. `alignBoundaries` sets its tolerance to the largest step between
- *    consecutive readings, and retraction can only widen it. That tolerance is
- *    the *only* guard against `aboveHole` — the fabricated 10 cm layers a
- *    resumed element would otherwise produce.
- * 2. A boundary whose descent reading was already consumed finds the same
- *    depth again on the way up, hours later, and is dated there. web reads the
- *    series in date order, so that layer lands out of sequence.
- * 3. `drilledDepth` is `max - min`, and once the pipes are back out `min`
+ * 1. `drilledDepth` is `max - min`, and once the pipes are back out `min`
  *    falls toward zero — making the "did this session drill?" gate more
  *    permissive than it means to be.
+ * 2. `maxTiefe` is the bottom of what was observed, and the merge bounds the
+ *    profile by it. Retraction cannot deepen it, but a session credited with
+ *    drilling it never did would be offered a sign-off for a hole that is not
+ *    there.
+ *
+ * The third reason this used to matter is gone with the alignment: a boundary
+ * can no longer be dated on the way back up, because boundaries are not dated
+ * at all.
  *
  * `drilling_ended_at` is stamped by the step out of `bohren`, which is also
  * when the sign-off is shown, so the profile is built from drilling alone
@@ -236,18 +261,19 @@ export interface GeologyContext {
   /** The planned profile, for back-filling what the operator did not confirm. */
   vorgabe: VorgabeProfile | null;
   /**
-   * The layers the operator entered during production, read back out of the
-   * recorded `GeoDIN` series the same way implenia-web will read it.
+   * The layers the operator entered during production, read out of
+   * `session_geology`.
    *
-   * Deliberately derived from the readings rather than remembered in the
-   * browser: a PM2 restart mid-element loses any client-side state, and the
-   * readings are what will actually be uploaded. If a live write ever lands off
-   * a depth reading's millisecond, the layer is missing here too — on the
-   * kiosk, in front of the operator, instead of weeks later in a protocol.
+   * Deliberately persisted rather than remembered in the browser: a PM2
+   * restart mid-element loses any client-side state. Each entry carries the
+   * depth that was current when the operator tapped, so nothing has to be
+   * recovered by joining series on a timestamp — which is what used to make a
+   * misaligned write cost a layer silently.
    *
-   * **Boundaries a previous commit back-filled are excluded** — see
-   * `observedOnly`. Without that a second pass reads the kiosk's own Vorgabe
-   * back-fill as observation, and the merge below has nothing left to mark.
+   * Nothing a previous commit back-filled appears here, because the back-fill
+   * is only ever written into the committed value. The old shape had to read
+   * its own series back and strip those rows out again to avoid reporting the
+   * plan as observation.
    */
   beobachtet: { tiefe: number; nr: number }[];
   /**
@@ -290,17 +316,14 @@ export function getGeologyContext(session: Session): GeologyContext {
     // "No geology sensors" is not a fault, so it carries no hinweis. A missing
     // sensor in an otherwise geology-capable Verfahren is, and does. Asked of
     // the same source resolveSensors just used, so the two cannot disagree.
-    const nrName = sensorNameByRole(parseSensorMap(session.sensor_map), 'geology_nr');
-    return nrName ? { ...leer, hinweis: sensors.fehler } : leer;
+    const profilName = sensorNameByRole(parseSensorMap(session.sensor_map), 'geology_profile');
+    return profilName ? { ...leer, hinweis: sensors.fehler } : leer;
   }
 
   const bis = drillingWindowEnd(session);
   const samples = depthSamples(session.id, sensors.depthId, bis);
   const gebohrteTiefe = drilledDepth(samples);
   const maxTiefe = samples.reduce((max, s) => (s.depth > max ? s.depth : max), 0);
-
-  const codes = getSessionSensorSeries(session.id, sensors.nrId, bis)
-    .map((p) => ({ receivedAt: p.receivedAt, nr: Math.round(p.value) }));
 
   let vorgabe: VorgabeProfile | null = null;
   try {
@@ -312,7 +335,9 @@ export function getGeologyContext(session: Session): GeologyContext {
     );
   }
 
-  const beobachtet = observedOnly(session, sensors, observedLayers(samples, codes));
+  const beobachtet = getSessionGeology(session.id)
+    .map((e) => ({ tiefe: e.depth, nr: e.nr }));
+
   return {
     verfuegbar: true,
     gebohrt: gebohrteTiefe >= MIN_DRILL_SPAN_M,
@@ -323,47 +348,6 @@ export function getGeologyContext(session: Session): GeologyContext {
     bestaetigt: session.geology_confirmed_at != null,
     profil: mergeProfile(vorgabe, beobachtet, maxTiefe),
   };
-}
-
-/**
- * Drop the boundaries a previous commit back-filled from the Schichtauftrag,
- * keeping the operator's own observations.
- *
- * Needed because the commit is repeatable and now routinely repeated: the
- * sign-off happens at the step out of `bohren`, and a step back to drill deeper
- * brings the operator through it again. On the second pass the `GeoDIN` series
- * already contains the whole committed profile, back-fill included, so reading
- * it back wholesale marks every planned boundary as observed — the profile
- * keeps its shape but loses the ` (Vorgabe)` suffix that says which parts
- * nobody actually saw.
- *
- * The suffix in the `Geologie` text is the only place that provenance survives
- * a commit, which is exactly what it is there for. Where the text sensor is
- * absent there is nothing to go on and everything reads as observed — the old
- * behaviour, and no worse than it was.
- *
- * Filtering *after* change detection rather than before is deliberate. The
- * detection is over the series as web will read it, and removing readings from
- * underneath it changes its answer: an observation repeated either side of a
- * back-filled boundary of a different type would collapse into one and lose a
- * real layer.
- */
-function observedOnly(
-  session: Session,
-  sensors: GeologySensors,
-  layers: readonly { receivedAt: number; tiefe: number; nr: number }[],
-): { tiefe: number; nr: number }[] {
-  if (!sensors.textId) return layers.map(({ tiefe, nr }) => ({ tiefe, nr }));
-
-  const vorgabeAt = new Set<number>();
-  for (const t of getSessionSensorTextSeries(session.id, sensors.textId)) {
-    if (t.text.endsWith(VORGABE_SUFFIX)) vorgabeAt.add(t.receivedAt);
-  }
-  if (vorgabeAt.size === 0) return layers.map(({ tiefe, nr }) => ({ tiefe, nr }));
-
-  return layers
-    .filter((l) => !vorgabeAt.has(l.receivedAt))
-    .map(({ tiefe, nr }) => ({ tiefe, nr }));
 }
 
 /**
@@ -399,46 +383,48 @@ export function commitDefaultGeology(session: Session): GeologyCommitResult | nu
  * operator was asked", not "a profile was written". Those two come apart on a
  * kiosk whose disk filled up for a minute, and without this check the stop
  * trusted the mark and skipped the back-fill: confirmed, nothing written, and
- * the element uploaded with no geology whatsoever. That is the silent, total
- * loss "every committed profile is complete" exists to prevent, so it is worth
- * one query.
+ * the element uploaded with no geology whatsoever.
  *
  * Deliberately only "any", not "complete": a live entry counts, and after a
- * failed commit it is indistinguishable from a profile the operator observed in
- * full (the replace-then-write transaction rolls back, leaving the live
- * readings exactly as they were). A profile that lost its back-fill is a
- * narrower failure than one that lost everything, and telling those two apart
- * would take a second mark rather than a read.
+ * failed commit it is indistinguishable from a profile the operator observed
+ * in full. A profile that lost its back-fill is a narrower failure than one
+ * that lost everything, and telling those two apart would take a second mark
+ * rather than a read.
  */
 export function hasGeologyReadings(session: Session): boolean {
+  if (getSessionGeology(session.id).length > 0) return true;
   const sensors = resolveSensors(session);
   if (isError(sensors)) return false;
-  return getSessionSensorSeries(session.id, sensors.nrId).length > 0;
+  return getSessionSensorTextSeries(session.id, sensors.profilId).length > 0;
 }
 
 export interface GeologyCommitResult {
-  /** How many boundaries were written. */
+  /** How many layers the committed profile holds. */
   geschrieben: number;
-  /** Boundaries dropped because the hole never got that deep. */
+  /** Where the profile bottoms out, in metres. */
+  endTiefe: number;
+  /** Layers dropped because nobody drilled or planned that deep. */
   zuTief: number[];
-  /** Boundaries dropped because this session never recorded that shallow. */
-  zuFlach: number[];
-  /** Boundaries dropped for want of a distinct depth reading. */
-  nichtZuordenbar: number[];
-  /** Readings from an earlier commit that this one replaced. */
+  /** Whether this commit replaced an earlier one. */
   ersetzt: number;
   /** German, actionable — set only when something could not be done. */
   hinweis?: string;
 }
 
 /**
- * Write a geology profile into the session as `GeoDIN` + `Geologie` readings,
- * dated so implenia-web can align them.
+ * Write a geology profile into the session as one `Geologieprofil` reading.
  *
- * Repeatable: a previous commit's not-yet-uploaded geology readings are
- * removed first, so the operator can review, go back to recording, and stop
- * again without stacking two contradictory profiles. Only `pending` rows are
+ * Repeatable, and routinely repeated: the sign-off happens at the step out of
+ * `bohren`, and a step back to drill deeper brings the operator through it
+ * again. The previous commit's not-yet-uploaded reading is removed first, so
+ * two profiles never stack — and because it is one value at one instant, the
+ * replacement is a replacement rather than a merge. Only `pending` rows are
  * touched, so nothing already on the platform is ever removed.
+ *
+ * A profile is atomic, so a malformed one costs the whole profile rather than
+ * a layer. It is validated here, before the write, and `session_geology` plus
+ * the Schichtauftrag remain the local source of truth — so a failed or bad
+ * write can be re-committed from the recording.
  *
  * Never throws for a reason the caller cannot fix. Stopping a recording and
  * uploading its measurements must not depend on the geology working out.
@@ -448,7 +434,7 @@ export function commitGeology(
   layers: readonly GeologyLayerInput[],
 ): GeologyCommitResult {
   const empty: GeologyCommitResult = {
-    geschrieben: 0, zuTief: [], zuFlach: [], nichtZuordenbar: [], ersetzt: 0,
+    geschrieben: 0, endTiefe: 0, zuTief: [], ersetzt: 0,
   };
 
   const sensors = resolveSensors(session);
@@ -457,107 +443,112 @@ export function commitGeology(
     return { ...empty, hinweis: sensors.fehler };
   }
 
+  const samples = depthSamples(session.id, sensors.depthId, drillingWindowEnd(session));
+  const maxTiefe = samples.reduce((max, s) => (s.depth > max ? s.depth : max), 0);
+
+  let vorgabeEnd: number | null = null;
+  try {
+    vorgabeEnd = parseVorgabeGeology(getElementVorgaben(session.element_name))?.endTiefe ?? null;
+  } catch {
+    // A profile without the plan's bottom is bounded by the hole instead,
+    // which is the honest answer when the Schichtauftrag cannot be read.
+  }
+
+  // `tiefe >= 0` matters: a negative depth is not merely ignored downstream,
+  // it would sort ahead of the real first layer and claim ground above the
+  // surface.
   const usable = layers
-    // `tiefe >= 0` matters: a negative depth is not merely ignored downstream,
-    // it consumes the top-of-hole reading and pushes the real first layer down.
     .filter((l) => Number.isFinite(l.tiefe) && l.tiefe >= 0
       && Number.isInteger(l.nr) && l.nr > 0)
     .slice()
     .sort((a, b) => a.tiefe - b.tiefe);
 
-  const samples = depthSamples(session.id, sensors.depthId, drillingWindowEnd(session));
-  if (samples.length === 0) {
-    const hinweis = 'Für diese Aufzeichnung sind keine Tiefenmesswerte vorhanden. '
-      + 'Die Geologie kann keiner Tiefe zugeordnet werden.';
-    log.warn('Session %d: geology not committed — no depth readings', session.id);
-    return { ...empty, hinweis };
-  }
+  // A layer deeper than anything drilled *or* planned is a claim nobody made.
+  // Dropping it is validation now rather than data loss — there is no reading
+  // it failed to find — but keeping it would push `end` past the hole and
+  // render ground the drill never reached. The plan's bottom counts, because a
+  // planned layer below the deepest reading is legitimate on a hole that
+  // stopped short.
+  const grenze = Math.max(maxTiefe, vorgabeEnd ?? 0);
+  const zuTief = usable.filter((l) => l.tiefe > grenze).map((l) => l.tiefe);
+  const behalten = usable.filter((l) => l.tiefe <= grenze);
 
-  const { aligned, aboveHole, beyondHole, unalignable } = alignBoundaries(
-    samples, usable.map((l) => l.tiefe),
-  );
-
-  // alignBoundaries works on depths; map back to the layer each depth came
-  // from. At a repeated depth the *first* layer wins: a Schichtauftrag that
-  // names ground types without their end depths produces several layers at one
+  // At a repeated depth the *first* layer wins: a Schichtauftrag that names
+  // ground types without their end depths produces several layers at one
   // depth, and keeping the last committed the deepest planned type from 0 m —
   // failing in the wrong direction. The shallowest is the better guess.
   const byDepth = new Map<number, GeologyLayerInput>();
-  for (const l of usable) if (!byDepth.has(l.tiefe)) byDepth.set(l.tiefe, l);
+  for (const l of behalten) if (!byDepth.has(l.tiefe)) byDepth.set(l.tiefe, l);
+  const final = [...byDepth.values()];
+
+  if (final.length === 0) {
+    const hinweis = 'Für diese Aufzeichnung konnte kein Geologieprofil gebildet werden.';
+    log.warn('Session %d: geology not committed — no usable layers', session.id);
+    return { ...empty, zuTief, hinweis };
+  }
+
+  const endTiefe = profileEndTiefe(
+    final[final.length - 1].tiefe, vorgabeEnd, maxTiefe,
+  );
+
+  const wire: WireLayer[] = final.map((l) => {
+    const layer: WireLayer = {
+      t: l.tiefe,
+      nr: l.nr,
+      name: geologieText(l.nr, l.name),
+    };
+    if (l.quelle === 'vorgabe') layer.q = 'vorgabe';
+    return layer;
+  });
+  const value = JSON.stringify({ end: endTiefe, layers: wire });
 
   // One transaction: a failure between dropping the previous commit and
   // writing this one would leave the session with neither.
   const ersetzt = inTransaction(() => {
-    const weg = deletePendingSensorReadings(session.id, sensors.nrId)
-      + (sensors.textId ? deletePendingSensorReadings(session.id, sensors.textId) : 0);
-
-    for (const boundary of aligned) {
-      const layer = byDepth.get(boundary.depth);
-      if (!layer) continue;
-
-      insertSessionReading(
-        session.id, sensors.nrName, sensors.nrId, sensors.nrType,
-        layer.nr, null, { receivedAt: boundary.receivedAt },
-      );
-
-      if (sensors.textId && sensors.textName && sensors.textType) {
-        const base = geologieText(layer.nr, layer.name);
-        insertSessionReading(
-          session.id, sensors.textName, sensors.textId, sensors.textType,
-          null, layer.quelle === 'vorgabe' ? base + VORGABE_SUFFIX : base,
-          { receivedAt: boundary.receivedAt },
-        );
-      }
-    }
+    const weg = deletePendingSensorReadings(session.id, sensors.profilId);
+    insertSessionReading(
+      session.id, sensors.profilName, sensors.profilId, sensors.profilType,
+      null, value, { receivedAt: PROFILE_SENTINEL_AT },
+    );
     return weg;
   });
 
-  const result: GeologyCommitResult = {
-    geschrieben: aligned.length,
-    zuTief: beyondHole,
-    zuFlach: aboveHole,
-    nichtZuordenbar: unalignable,
-    ersetzt,
-  };
-
-  if (beyondHole.length > 0 || aboveHole.length > 0 || unalignable.length > 0) {
-    // Not errors the operator needs to act on: ground below the bottom of the
-    // hole, or above where this session began, which nothing here observed.
-    const tiefen = (ds: number[]): string => ds.map((d) => d.toFixed(2)).join(', ') || '–';
+  if (zuTief.length > 0) {
     log.info(
-      'Session %d: %d geology boundaries written; below the hole: %s; above this session: %s; unalignable: %s',
-      session.id, aligned.length,
-      tiefen(beyondHole), tiefen(aboveHole), tiefen(unalignable),
+      'Session %d: geology profile committed with %d layers to %s m; below the hole: %s',
+      session.id, final.length, endTiefe.toFixed(2),
+      zuTief.map((d) => d.toFixed(2)).join(', '),
     );
   } else {
-    log.info('Session %d: %d geology boundaries written', session.id, aligned.length);
+    log.info(
+      'Session %d: geology profile committed with %d layers to %s m',
+      session.id, final.length, endTiefe.toFixed(2),
+    );
   }
 
-  return result;
+  return { geschrieben: final.length, endTiefe, zuTief, ersetzt };
 }
 
 /**
  * Record one layer change at the depth the rig is at right now.
  *
  * The live path: the operator sees the ground change and taps. No depth comes
- * from the browser — this takes the most recent depth reading and dates the
- * `GeoDIN` reading at exactly its `received_at`. That is not merely convenient:
- * a depth the client measured would have to be matched back to a reading, and
- * a client and server that disagree by one sample produce no layer at all.
+ * from the browser — this reads the most recent depth reading and stores *that
+ * depth*. A depth the client measured would be a second opinion about where
+ * the hole is, and the rig's own reading is the one the rest of the profile is
+ * bounded by.
  *
  * Returns the depth it used so the screen can confirm what was recorded
  * ("Sand ab 3,40 m") rather than just that something was.
  *
- * **Refused once drilling has ended**, rather than dated at the newest reading
- * the way it is during drilling. Both the buttons and the voice commands are
- * gated on `operatingMode === 'bohren'`, but those gates are the browser's view
- * of the mode: a second tab, or one whose WebSocket reconnected a moment late,
- * still offers them. Without this the entry would land on a retraction reading
- * outside the drilling window, where `getGeologyContext` cannot see it — it
- * would be written, answered with a depth, shown as recorded, and then be
- * absent from every profile. Clamping it onto the last drilling reading instead
- * would be no better: it would silently assert the operator saw that ground at
- * the bottom of the hole.
+ * **Refused once drilling has ended.** Both the buttons and the voice commands
+ * are gated on `operatingMode === 'bohren'`, but those gates are the browser's
+ * view of the mode: a second tab, or one whose WebSocket reconnected a moment
+ * late, still offers them. The newest reading is then a retraction reading,
+ * outside the window the profile is built from, so the entry would be written,
+ * answered with a depth, shown as recorded — and absent from the profile.
+ * Clamping it onto the last drilling reading instead would be no better: it
+ * would silently assert the operator saw that ground at the bottom of the hole.
  */
 export function recordLiveLayer(
   session: Session,
@@ -589,39 +580,18 @@ export function recordLiveLayer(
   }
 
   /*
-   * A second entry before the next depth reading replaces the first.
+   * A second entry at the same depth replaces the first — the primary key on
+   * `(session_id, depth)` does it.
    *
    * `getSessionDepthSamples` is filtered to `phase = 'bohren'`, so the latest
    * reading stands still for the whole of a Rohrverlängerung — minutes in which
-   * every tap would otherwise land on one instant. Two readings there are one
-   * row to implenia-web, and the upload's per-timestamp deduplication keeps
-   * only the last, so the earlier tap would disappear with no trace: an
-   * obstruction entered and left could vanish entirely.
-   *
-   * Replacing is also what the operator means. Two ground types at one depth
-   * is not a profile; the second tap is a correction.
+   * every tap lands on one depth. Replacing is what the operator means: two
+   * ground types at one depth is not a profile, and the second tap is a
+   * correction.
    */
-  const ersetzt = deletePendingSensorReadingAt(session.id, sensors.nrId, latest.receivedAt)
-    + (sensors.textId
-      ? deletePendingSensorReadingAt(session.id, sensors.textId, latest.receivedAt)
-      : 0);
-
-  insertSessionReading(
-    session.id, sensors.nrName, sensors.nrId, sensors.nrType,
-    nr, null, { receivedAt: latest.receivedAt },
+  insertSessionGeology(
+    session.id, latest.depth, nr, name?.trim() || null, Date.now(),
   );
-  if (sensors.textId && sensors.textName && sensors.textType) {
-    insertSessionReading(
-      session.id, sensors.textName, sensors.textId, sensors.textType,
-      null, geologieText(nr, name), { receivedAt: latest.receivedAt },
-    );
-  }
-  if (ersetzt > 0) {
-    log.info(
-      'Session %d: geology %d replaced an earlier entry at %s m',
-      session.id, nr, latest.depth.toFixed(2),
-    );
-  }
 
   log.info(
     'Session %d: geology %d recorded at %s m',

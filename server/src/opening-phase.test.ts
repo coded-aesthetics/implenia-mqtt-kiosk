@@ -43,10 +43,12 @@ const PLATFORM_SENSORS = {
   ],
   sensors_int: [
     { id: 's-status', name: 'Status', meta: { source: 'user', role: 'mode' } },
-    { id: 's-geodin', name: 'GeoDIN', meta: { source: 'kiosk', role: 'geology_nr' } },
   ],
   sensors_string: [
-    { id: 's-geologie', name: 'Geologie', meta: { source: 'kiosk', role: 'geology_text' } },
+    {
+      id: 's-profil', name: 'Geologieprofil',
+      meta: { source: 'kiosk', role: 'geology_profile' },
+    },
   ],
 };
 
@@ -218,7 +220,7 @@ describe('a recording opened past Bohren', () => {
     feedDepths(id, [0, 6, 5.5, 5, 4, 3, 2, 1, 0]);
 
     expect(geology.commitDefaultGeology(db.getSessionById(id)!)).toBeNull();
-    expect(db.getSessionSensorSeries(id, 's-geodin')).toEqual([]);
+    expect(db.getSessionSensorTextSeries(id, 's-profil')).toEqual([]);
   });
 
   /* The same readings, from a session that did the drilling, still commit. */
@@ -228,6 +230,6 @@ describe('a recording opened past Bohren', () => {
     feedDepths(id, [0, 1, 2, 3, 4, 5, 6]);
 
     expect(geology.commitDefaultGeology(db.getSessionById(id)!)?.geschrieben).toBeGreaterThan(0);
-    expect(db.getSessionSensorSeries(id, 's-geodin').length).toBeGreaterThan(0);
+    expect(db.getSessionSensorTextSeries(id, 's-profil').length).toBeGreaterThan(0);
   });
 });

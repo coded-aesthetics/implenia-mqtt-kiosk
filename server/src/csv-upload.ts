@@ -23,20 +23,19 @@
  * exactly right: the grid is dense, and a genuinely dead channel should read as
  * dead. For three kinds of sensor it is not, and they keep the per-sensor path:
  *
- *   - **String sensors** (`Kommentar`, `Geologie`, `logs`, `Ausführungsdatum`).
- *     An empty cell writes an empty *string*, not a NULL, and for
- *     `Ausführungsdatum` an empty string is the documented way to *un-complete*
- *     an element (see CLAUDE.md). A comment belongs at the instant it was
- *     dictated, not at a grid row.
- *   - **`GeoDIN`** (role `geology_nr`). implenia-web turns it into layers by
- *     change detection, and `alignBoundaries` deliberately gives every boundary
- *     its own depth reading so the timestamps stay strictly increasing. Two
- *     boundaries 290 ms apart share a 1 s bucket, and one row is one layer — so
- *     gridding this series silently drops layers. The depth series it is dated
- *     against *is* gridded, with the readings those boundaries point at pinned
- *     back in; see `ALIGNMENT_ANCHOR_ROLES`.
+ *   - **String sensors** (`Kommentar`, `Geologieprofil`, `logs`,
+ *     `Ausführungsdatum`). An empty cell writes an empty *string*, not a NULL,
+ *     and for `Ausführungsdatum` an empty string is the documented way to
+ *     *un-complete* an element (see CLAUDE.md). A comment belongs at the
+ *     instant it was dictated, not at a grid row.
  *   - **`Ausführungsdatum`** (role `is_completed`), which is a single
  *     overwritable slot at a sentinel date and is not session data at all.
+ *
+ * The depth series used to need protecting too, because a `GeoDIN` boundary
+ * borrowed its instant from a depth reading and gridding that series moved the
+ * reading the boundary pointed at. A committed profile is one value in which
+ * every layer carries its own depth, so nothing points into the depth series
+ * and it grids like any other channel.
  *
  * Both halves of a session therefore upload, and `sensorsFailed` counts across
  * both: the element is only completed when nothing was left behind.
@@ -91,41 +90,7 @@ export interface UploadSensorMeta {
  * Not a style preference: a grid merges readings, and for these a merge is a
  * lost layer or a lost completion stamp. See the module comment.
  */
-export const EXACT_TIMESTAMP_ROLES = new Set(['geology_nr', 'geology_text', 'is_completed']);
-
-/**
- * Roles that other series are aligned against by timestamp.
- *
- * A `GeoDIN` entry carries no depth of its own: the kiosk writes it at the
- * exact `received_at` of a **depth** reading, and implenia-web recovers the
- * layer's depth by pairing the two on millisecond equality
- * (`ensureRow(v.date)`), dropping any row whose `bohrtiefe` is null. The
- * timestamp is the entire mechanism.
- *
- * So keeping `GeoDIN` off the grid guards one end of that link and cutting the
- * other end costs just as much: grid the depth series and the reading the
- * boundary points at stops existing on the platform — it looks for a depth at
- * 580 ms, the platform has one at 870 ms, and the profile uploads cleanly with
- * no layers to show for it. The first version of this change had exactly that
- * bug.
- *
- * The answer is not to leave the depth series ungridded — that costs the
- * largest single channel its reduction, 26 699 of the captured session's
- * 275 935 readings. Nor is it to interpolate a depth at the boundary's instant:
- * **the exact value already exists**, because the boundary was dated at a real
- * reading in the first place. The series is gridded like any other, and the
- * handful of readings a boundary is dated at are *additionally* sent at their
- * own instants by `pinAnchorReadings`. The platform upserts on
- * `(sensor_id, date)`, so they simply join the thinned series as extra points.
- *
- * By role, never by name: it is `Bohrtiefe` for Injektionsbohren and
- * Ankerbohren but `Tiefe` for DSV, and the role comes from the session rather
- * than the CSVs.
- */
-export const ALIGNMENT_ANCHOR_ROLES = new Set(['depth']);
-
-/** The role whose readings anchor onto `ALIGNMENT_ANCHOR_ROLES` by timestamp. */
-export const ANCHORED_ROLE = 'geology_nr';
+export const EXACT_TIMESTAMP_ROLES = new Set(['is_completed']);
 
 export interface CsvChunk {
   /** The request body, header included. */
@@ -182,7 +147,7 @@ export interface CsvUploadPlan {
  * A `user` sensor is therefore not merely *allowed* to keep its own instants,
  * it has to: four readings addressed by id is both the smaller upload and the
  * only one that says what happened. `server` stays out as well — nothing but
- * `GeoDIN` is recorded under it, and that one is excluded by role.
+ * `GeoDIN` was ever recorded under it, and nothing writes that any more.
  *
  * An unknown source is treated as not griddable. The per-sensor route always
  * works and costs bandwidth; this one silently rewrites history.
@@ -212,8 +177,7 @@ export const GRIDDABLE_SOURCES = new Set(['mqtt', 'kiosk']);
  *     string sensors (`user`) would fall out even without their own rules;
  *   - a role whose every reading has to keep its instant
  *     (`EXACT_TIMESTAMP_ROLES`), kept explicit because it is the *documented*
- *     reason and `RECORDABLE_ROLES` deliberately overrides the source for
- *     `GeoDIN` elsewhere;
+ *     reason rather than a side effect of the source check above it;
  *   - a sensor with no name in the session map. The CSV header is the only way
  *     to address a column, and the map is keyed by the *lowercased* name, from
  *     which the real spelling is not recoverable (see CLAUDE.md, "Sensor roles
@@ -352,58 +316,6 @@ export function planCsvUpload(
  * own place in the progress count, so a failure lands in `sensorsFailed` and
  * the element is not completed on a profile the platform cannot reassemble.
  */
-export interface PinnedBatch {
-  sensorId: string;
-  sensorType: string;
-  /** The platform's spelling, for the progress label and the error. */
-  name: string;
-  readings: { receivedAt: number; value: number | null }[];
-}
-
-/**
- * The depth readings a geology boundary was dated at.
- *
- * Takes the whole depth series rather than the pending upload group on purpose:
- * a boundary committed after an upload already sent that reading would
- * otherwise find nothing to pin, and the re-send is a free upsert either way.
- * Empty instants — a Verfahren with no geology, a pillar where none was
- * recorded — produce no batch at all.
- */
-export function pinAnchorReadings(
-  anchorInstants: Iterable<number>,
-  depth: {
-    sensorId: string;
-    sensorType: string;
-    name: string;
-    readings: readonly { receivedAt: number; value: number | null }[];
-  } | null,
-): PinnedBatch | null {
-  if (!depth) return null;
-  const wanted = new Set(anchorInstants);
-  if (wanted.size === 0) return null;
-
-  // Deduplicated by instant, last value winning — the same rule, for the same
-  // reason, as the per-sensor loop's own dedup: at a high ingest rate (replay
-  // 60x, fast MQTT) two readings share a millisecond, and the platform's
-  // multi-row upsert refuses a batch naming one `(sensor_id, date)` twice
-  // ("ON CONFLICT DO UPDATE command cannot affect row a second time"). Here
-  // that would fail the *whole* pinned batch, which is every boundary's anchor,
-  // and fail it identically on every retry.
-  const byInstant = new Map<number, number | null>();
-  for (const r of depth.readings) {
-    if (wanted.has(r.receivedAt)) byInstant.set(r.receivedAt, r.value);
-  }
-  if (byInstant.size === 0) return null;
-  const readings = Array.from(byInstant, ([receivedAt, value]) => ({ receivedAt, value }));
-
-  return {
-    sensorId: depth.sensorId,
-    sensorType: depth.sensorType,
-    name: depth.name,
-    readings,
-  };
-}
-
 /** What the platform answers a CSV batch with. */
 export interface CsvBatchResponse {
   success?: boolean;
