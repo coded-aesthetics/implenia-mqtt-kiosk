@@ -1,6 +1,7 @@
 import { config } from './config.js';
 import { getMeta } from './db.js';
 import { apiHealth } from './api-health.js';
+import { siteOverride } from './site-credentials.js';
 
 export interface ApiError extends Error {
   statusCode: number;
@@ -57,7 +58,21 @@ export async function fetchImplenia<T = unknown>(
     timeoutMs?: number;
   },
 ): Promise<T> {
-  const cfg = getApiConfig();
+  /*
+   * Which credentials, and whether this request says anything about the
+   * kiosk's own standing with the platform.
+   *
+   * An upload of a session recorded on a site the kiosk has left runs under
+   * *that* site's key (see site-credentials.ts). Such a request must not reach
+   * `apiHealth`: a 401 from a pier's revoked key would set the state to
+   * `rejected` and have the header tell the operator *this* kiosk's key is
+   * wrong, which is both false and the one message that sends them to the
+   * settings screen for nothing.
+   */
+  const override = siteOverride();
+  const cfg = override ?? getApiConfig();
+  const reportHealth = override === null;
+
   if (!cfg) {
     const err = new Error('Implenia API not configured');
     apiHealth.noteOutcome(err);
@@ -89,17 +104,18 @@ export async function fetchImplenia<T = unknown>(
   }
 
   /*
-   * Every outcome is reported to `apiHealth`, including the failures each
-   * caller handles itself. That is what the header's indicator is built on:
-   * the question "is the platform answering" is already being asked a hundred
-   * times a shift, and an answer nobody collected is what let the kiosk show
-   * „Verbunden" while every upload was failing.
+   * Every outcome of a request made with the kiosk's *own* credentials is
+   * reported to `apiHealth`, including the failures each caller handles
+   * itself. That is what the header's indicator is built on: the question "is
+   * the platform answering" is already being asked a hundred times a shift,
+   * and an answer nobody collected is what let the kiosk show „Verbunden"
+   * while every upload was failing.
    */
   let res: Response;
   try {
     res = await fetch(url, init);
   } catch (err) {
-    apiHealth.noteOutcome(err);
+    if (reportHealth) apiHealth.noteOutcome(err);
     throw err;
   }
 
@@ -108,10 +124,10 @@ export async function fetchImplenia<T = unknown>(
     const err = new Error(`Implenia API ${res.status}: ${text}`);
     (err as ApiError).statusCode = res.status;
     (err as ApiError).body = text;
-    apiHealth.noteOutcome(err);
+    if (reportHealth) apiHealth.noteOutcome(err);
     throw err;
   }
 
-  apiHealth.noteOutcome();
+  if (reportHealth) apiHealth.noteOutcome();
   return res.json() as Promise<T>;
 }

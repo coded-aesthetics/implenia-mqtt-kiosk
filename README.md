@@ -363,6 +363,119 @@ PUT  /api/verfahren/active      → { verfahren } — write-once, 409 if already
 
 **Write-once by design.** Recorded sessions, serial channel mappings and stream-export columns are all interpreted through the active Verfahren, so switching it under existing data would silently reinterpret that data. Changing it requires a full reset. Until it is set, sensor metadata enrichment is skipped — the live view still works, just without CSV-derived priorities, roles and units.
 
+### One API key per site — what moves with the kiosk
+
+The API key is not only a credential, it is the kiosk's answer to *which
+construction site am I on*. One key is issued per construction phase per site:
+a bridge is a row of piers, each pier is its own BIM widget with its own key,
+and the key is switched on the way to the next one.
+
+An element, meanwhile, is known to the kiosk only by its **name** — and every
+pier has a `P-01`. So everything remembered per element name is scoped to a
+**site id**, which is a truncated SHA-256 of the API key (`site.ts`). Nothing
+is fetched to establish it: the element list asks this question, so an answer
+that needed the network would be missing exactly when the kiosk is doing its
+offline job. The API URL is deliberately *not* part of the hash — it comes from
+`.env` on some machines, and folding it in would let a provisioning edit
+silently re-scope a machine's whole history.
+
+`POST /api/config` is therefore also the "the machine is somewhere else now"
+route. Saving a *different* key:
+
+```
+POST /api/config  → { ok, siteChanged, pendingReadings }
+                  → 409 while a recording is running
+```
+
+What is scoped to the site, and what the leak looked like before it was:
+
+| Store | Leaked as |
+| --- | --- |
+| `recording_sessions.site_id` | the previous pier's finished elements sat in „Abgeschlossene Elemente"; its recordings marked this pier's untouched pillars „begonnen", at the depth the other one reached; a resumed `P-01` reopened on the phase its namesake was left in |
+| `element_sensors` | **silent.** The previous pier's platform sensor ids were available to be pinned into a session started offline — which uploads one pier's measurements onto the pier beside it |
+| `element_vorgaben` | the previous pier's Soll values and geology profile on this pier's element screen |
+| `last_shift_assignment` | the previous pier's element list served whenever the backend was unreachable |
+| `imported_shift_assignment` | the previous pier's imported file kept overriding the element list — and an import overrides everything, so this one did not degrade, it was simply wrong until somebody noticed |
+| `deviceIds` (in memory, `element-device.ts`) | the next `Ausführungsdatum` written to the previous pier's device |
+
+Four rules hold it together:
+
+- **Nothing is deleted on a switch.** A pier keeps its rows under its own site
+  id, so putting its key back brings its completions, its depths, its Vorgaben
+  and its cached sensor ids back with it — which is also the only route its
+  still-pending measurements have to the platform. In particular an import is
+  *scoped*, not cleared: a worker on an offline site must never have to
+  re-import a file to undo a key change.
+- **`default` rows are adopted by the first key.** That id means "recorded
+  before this kiosk knew which site it was on", and the first key it is given is
+  the answer to that question. It covers the update that introduced sites and a
+  machine set up offline from an imported Schichtauftrag and keyed afterwards —
+  whose recordings would otherwise drop out of the element list the moment a
+  technician typed the key in. Nothing is ever re-stamped from one real site to
+  another.
+- **A missing key leaves the site alone.** Entering a wrong key runs
+  `POST /api/config` → validate → `DELETE /api/config/api-key`, so returning to
+  `default` there would orphan the real site's history until somebody happened
+  to retype its key. The site id means "the last key this kiosk was given".
+- **Measurements pending for a site the kiosk has left still upload, under that
+  site's own key.** They are addressed to the sensor ids of the site they were
+  recorded on, so only that key can accept them — see below. The switch is
+  never refused over them; the response carries `pendingReadings` and the
+  screen states it in a warning that does not clear itself, because this is the
+  one moment somebody is looking and a machine carrying unsent data is one that
+  should not be wiped or handed on yet.
+
+A full `POST /api/config/reset` remains the way to blank a machine; it keeps the
+credentials and the site id derived from them, and refuses while unuploaded
+readings exist. Switching keys is the lighter move and is what a pier change
+needs.
+
+### A session uploads under the key of the site that recorded it
+
+A session's readings go to `/api/v1/sensor-<type>/<sensor id>/batch`, and those
+ids belong to the site it was recorded on. Only that site's key is allowed to
+write them — so an upload is addressed by "this session's site", which for a
+live upload is the configured key and for a pier the crew left this morning is
+not.
+
+Retried under the *new* pier's key, a session left behind answered **401 on
+every connectivity transition and every boot, for the life of the machine**,
+with nothing on screen about it. The site id is a one-way hash and cannot
+produce a key, so the keys are kept: `site_credentials` (`site_id`, `api_url`,
+`api_key`), written by every `syncSite`.
+
+`uploadSession` wraps the whole attempt in `withSiteCredentials(session.site_id,
+…)` — `server/src/site-credentials.ts`, an `AsyncLocalStorage` that
+`fetchImplenia` consults ahead of `getApiConfig()`.
+
+- **Ambient, not a parameter.** One upload fans out to the CSV batch endpoint,
+  the per-sensor batch endpoint, the element→device resolve and the
+  `Ausführungsdatum` write, each with its own layers and caches. Threaded as an
+  argument, every one of them has to pass it on or it silently reverts to the
+  configured key — and "silently writes to the wrong site" is what this whole
+  area exists to prevent. Being per-async-context, the stop route's upload and
+  the connectivity sweep cannot read each other's.
+- **Such a request is kept out of `apiHealth`.** A 401 from a left-behind
+  pier's revoked key would set the state to `rejected`, and the header would
+  tell the operator *this* kiosk's key is wrong — false, and it sends them to
+  the settings screen for nothing.
+- **The element→device cache is keyed by site and name.** Both piers' answers
+  are now in flight in one process and both piers have a `P-01`; keyed by name
+  alone, the previous pier's resolve comes back for the current pier's element
+  and the next `Ausführungsdatum` lands on the wrong pillar, with a 200.
+- **No credentials, no override.** A `default` site, or a site whose key was
+  never stored (a session recorded before the table existed), runs on the
+  configured key — exactly what it did before.
+- **The URL is refreshed on every `syncSite`**, including `PUT
+  /api/config/api-url`, which does not move the site id. A stored URL left
+  pointing at the previous backend would aim a left-behind pier's data at the
+  wrong platform.
+- **Keys accumulate; they are not pruned when a site is finished.** Pruning
+  needs to prove no session of that site has a pending or failed reading left,
+  and getting that wrong restores the exact bug this removes — against a kiosk
+  that already holds the current key in the same table in the clear, on a
+  machine with remote access, which is the real exposure.
+
 ### Element list cache — an unreachable backend does not empty the screen
 
 The element list is the screen a worker starts from, and it was the one piece

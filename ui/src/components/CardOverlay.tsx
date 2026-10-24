@@ -10,7 +10,13 @@ import type { CSSProperties } from 'react';
  */
 
 export interface OverlayState {
-  type: 'success' | 'error';
+  /**
+   * `warning` is a save that worked and still needs reading — it carries no ✕,
+   * because nothing failed, and unlike `success` it does not clear itself.
+   * A consequence the operator has to decide about cannot be on a 2.5 second
+   * timer.
+   */
+  type: 'success' | 'error' | 'warning';
   title: string;
   detail?: string;
 }
@@ -27,19 +33,25 @@ export function CardOverlay({ overlay, onDismiss }: { overlay: OverlayState; onD
   }, [overlay.type]);
 
   const isError = overlay.type === 'error';
+  const isWarning = overlay.type === 'warning';
+
+  const background = isError ? 'var(--color-danger-overlay)'
+    : isWarning ? 'var(--color-warning-overlay)'
+    : 'var(--color-success-overlay)';
 
   return (
     <div
-      style={{
-        ...overlayStyles.backdrop,
-        backgroundColor: isError ? 'var(--color-danger-overlay)' : 'var(--color-success-overlay)',
-      }}
+      style={{ ...overlayStyles.backdrop, backgroundColor: background }}
       onClick={(e) => { e.stopPropagation(); onDismiss(); }}
     >
-      <div style={overlayStyles.icon}>{isError ? '✕' : '✓'}</div>
+      <div style={isWarning ? { ...overlayStyles.icon, ...overlayStyles.iconSmall } : overlayStyles.icon}>
+        {isError ? '✕' : isWarning ? '⚠' : '✓'}
+      </div>
       <div style={overlayStyles.title}>{overlay.title}</div>
       {overlay.detail && <div style={overlayStyles.detail}>{overlay.detail}</div>}
-      {isError && <div style={overlayStyles.dismissHint}>Antippen zum Schließen</div>}
+      {(isError || isWarning) && (
+        <div style={overlayStyles.dismissHint}>Antippen zum Schließen</div>
+      )}
     </div>
   );
 }
@@ -62,6 +74,24 @@ const overlayStyles: Record<string, CSSProperties> = {
     fontWeight: 700,
     color: '#fff',
     lineHeight: 1,
+  },
+  /**
+   * The warning glyph is title-sized, not 4rem, and that is a measurement
+   * rather than a taste.
+   *
+   * These overlays cover their own card, so the card's content height is the
+   * whole budget — 227px on the API-key card at 1024x768. A `success` or
+   * `error` is a few words and can spend 64px of that on a glyph; a `warning`
+   * is a consequence the operator has to act on, and at 4rem the first version
+   * of this clipped 44px off the bottom of a 241-character message that the
+   * arithmetic said fit. Title-sized, the detail budget is **160 characters**
+   * with a 58-character title (measured on the rendered page: it still fits at
+   * 160, overflows at 165). Keep new messages under 150 — German compounds wrap
+   * worse than their character count suggests, which is why this is measured
+   * and not counted.
+   */
+  iconSmall: {
+    fontSize: 'var(--font-md)',
   },
   title: {
     fontSize: 'var(--font-md)',

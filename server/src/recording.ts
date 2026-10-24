@@ -7,6 +7,7 @@ import {
   type UploadSensorMeta,
 } from './csv-upload.js';
 import { isElementNotResolvable, withElementDevice } from './element-device.js';
+import { withSiteCredentials } from './site-credentials.js';
 import { ingestion, isOperatingMode, type OperatingMode, type SensorMapEntry } from './ingestion.js';
 import type { DrillStatus } from './rohrwechsel.js';
 import { createLogger, onLogEntry, type LogEntry } from './logger.js';
@@ -468,9 +469,27 @@ export function uploadSession(
     return running;
   }
 
-  const attempt = runUpload(sessionId, onProgress).finally(() => {
-    uploadsInFlight.delete(sessionId);
-  });
+  /*
+   * Under the credentials of the session's *own* site, not the configured
+   * ones.
+   *
+   * The readings are addressed to sensor ids that belong to the site they were
+   * recorded on, so only that site's key can accept them — and on a bridge the
+   * crew has a key per pier and switches it when they move. Retried under the
+   * new pier's key, a session left behind answered 401 on every connectivity
+   * transition and every boot for the life of the machine.
+   *
+   * Here rather than inside `runUpload`, because this is the one choke point
+   * all three callers go through, and the context has to cover the whole fan-out
+   * — the CSV chunks, the per-sensor batches, the element→device resolve and the
+   * `Ausführungsdatum` write. A no-op for a live upload, whose session is on the
+   * current site.
+   */
+  const site = getSessionById(sessionId)?.site_id;
+  const attempt = withSiteCredentials(site, () => runUpload(sessionId, onProgress))
+    .finally(() => {
+      uploadsInFlight.delete(sessionId);
+    });
   uploadsInFlight.set(sessionId, attempt);
   return attempt;
 }

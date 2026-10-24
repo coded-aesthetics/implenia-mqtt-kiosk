@@ -6,7 +6,7 @@ import {
 } from '../herstellen-sensors.js';
 import {
   getMeta, setMeta, deleteMeta, setElementVorgaben, getElementVorgaben,
-  getCompletedElements, getLastSessionForElement,
+  getCompletedElements, getLastSessionForElement, currentSiteId, siteMetaKey,
 } from '../db.js';
 import { validateShiftImport, resolveShiftAssignment } from '../shift-import.js';
 import {
@@ -23,6 +23,15 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('implenia');
 
+/*
+ * Both the imported Schichtauftrag and the cache of the fetched one are one
+ * site's element list, so both are stored under a key carrying the site id
+ * (`siteMetaKey`). An import overrides every other source, so an unscoped one
+ * went on listing the pier the machine had left — not degraded, simply wrong,
+ * until somebody noticed. Scoped rather than cleared on the switch: moving back
+ * to a pier brings its file back with it, and a worker on an offline site
+ * should never have to re-import to undo a key change.
+ */
 const IMPORT_KEY = 'imported_shift_assignment';
 
 /**
@@ -40,17 +49,25 @@ const IMPORT_KEY = 'imported_shift_assignment';
  * since a kiosk only restarts on an update or a crash, the whole shift then
  * ran without the definitions the import exists to provide. Nothing retried,
  * nothing on screen said so.
+ *
+ * It holds the *site* it was latched for, not a boolean, because a key change
+ * does not restart the process: a plain flag would have the new pier's import
+ * skip the one write that makes an offline start possible, and the start would
+ * then be refused with a 503 naming an import button the operator had already
+ * used.
  */
-let importedSensorsCached = false;
+let importedSensorsCachedFor: string | null = null;
 
 export function registerImpleniaRoutes(app: FastifyInstance): void {
   // Shift assignment: return import if available, otherwise proxy to API
   app.get('/api/shift-assignment', async (request, reply) => {
-    const resolved = resolveShiftAssignment(getMeta(IMPORT_KEY));
+    const resolved = resolveShiftAssignment(getMeta(siteMetaKey(IMPORT_KEY)));
     if (resolved) {
       cacheVorgaben(resolved.data.measuring_devices);
-      if (!importedSensorsCached) {
-        importedSensorsCached = cacheImportedSensors(resolved.data.measuring_devices) > 0;
+      const site = currentSiteId();
+      if (importedSensorsCachedFor !== site) {
+        const cached = cacheImportedSensors(resolved.data.measuring_devices);
+        if (cached > 0) importedSensorsCachedFor = site;
       }
       return reply.send({ ...resolved.data, source: resolved.source });
     }
@@ -76,7 +93,7 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
        * button, so nobody mistakes it for today's.
        */
       if (cacheServesFailure(err)) {
-        const cached = parseShiftCache(getMeta(SHIFT_CACHE_KEY));
+        const cached = parseShiftCache(getMeta(siteMetaKey(SHIFT_CACHE_KEY)));
         if (cached) {
           const devices = pruneCompleted(cached, getCompletedElements());
           log.warn(
@@ -118,7 +135,7 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
     if (!result.valid) {
       return reply.status(400).send({ error: result.error });
     }
-    setMeta(IMPORT_KEY, JSON.stringify(result.data));
+    setMeta(siteMetaKey(IMPORT_KEY), JSON.stringify(result.data));
 
     /*
      * The sensor definitions are the half of this file that makes an offline
@@ -133,7 +150,7 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
      * whatever the kiosk has seen online.
      */
     const cached = cacheImportedSensors(result.data.measuring_devices);
-    importedSensorsCached = cached > 0;
+    importedSensorsCachedFor = cached > 0 ? currentSiteId() : null;
     if (cached > 0) {
       log.info('Cached sensor definitions for %d element(s) from the import', cached);
     } else {
@@ -148,11 +165,11 @@ export function registerImpleniaRoutes(app: FastifyInstance): void {
 
   // Clear an imported shift assignment
   app.delete('/api/shift-assignment/import', async (_request, reply) => {
-    deleteMeta(IMPORT_KEY);
+    deleteMeta(siteMetaKey(IMPORT_KEY));
     // The cached definitions stay: they are what lets an element already
     // recorded here be resumed offline, and clearing the import is about which
     // elements are on the list, not about forgetting their sensors.
-    importedSensorsCached = false;
+    importedSensorsCachedFor = null;
     return reply.send({ ok: true });
   });
 
@@ -369,7 +386,7 @@ function cacheShiftAssignment(devices: unknown): void {
   const serialised = serialiseShiftCache(devices, Date.now());
   if (!serialised) return;
   try {
-    setMeta(SHIFT_CACHE_KEY, serialised);
+    setMeta(siteMetaKey(SHIFT_CACHE_KEY), serialised);
   } catch (err) {
     log.warn('Could not cache the shift assignment: %s', (err as Error).message);
   }

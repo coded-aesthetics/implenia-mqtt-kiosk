@@ -16,6 +16,10 @@ import { healthFromOutcome } from './api-health.js';
  * Stored verbatim, devices and their `vorgaben` together, because that is what
  * the element screen reads: a cached list whose Soll values had been stripped
  * would open elements with no geology profile and no targets.
+ *
+ * The *base* name: the stored key carries the site id (`siteMetaKey`), because
+ * this is one site's element list and a bridge's piers each have their own key
+ * and their own `P-01`. See site.ts.
  */
 export const SHIFT_CACHE_KEY = 'last_shift_assignment';
 
