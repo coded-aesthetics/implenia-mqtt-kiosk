@@ -36,10 +36,14 @@ if (db.databasePath() !== dbPath) {
 // The Verfahren decides how every sensor is interpreted; nothing renders without it.
 db.setMeta('active_verfahren', 'injektionsbohren');
 
+// `geologieprofil` is what makes the geology buttons render: the context is
+// unavailable without it, and the recording bar hides them rather than
+// offering a tap the server would refuse. It replaced the `geodin` /
+// `geologie` pair — a committed profile is one JSON value in which every layer
+// carries its own depth, so nothing writes those two any more.
 const sensorMap = JSON.stringify({
   bohrtiefe: { sensorId: 'sid-bohrtiefe', sensorType: 'float', unit: 'm' },
-  geodin: { sensorId: 'sid-geodin', sensorType: 'int', unit: '' },
-  geologie: { sensorId: 'sid-geologie', sensorType: 'string', unit: '' },
+  geologieprofil: { sensorId: 'sid-geologieprofil', sensorType: 'string', unit: '' },
 });
 
 // createSession leaves the row in `recording`, which is what the server's
