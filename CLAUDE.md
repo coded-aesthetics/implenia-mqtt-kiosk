@@ -409,7 +409,23 @@ The column was the only part of this that existed.
 - **The two element cache tables were rebuilt, not dropped.** `element_sensors`
   is what lets an offline site record at all, so dropping it on an update would
   leave a kiosk mid-shift unable to start an element until it saw the platform
-  again.
+  again. Each rebuild is one transaction: `db.exec` has no implicit one, and a
+  power cut between the `DROP` and the `RENAME` would come back with the real
+  table gone, `…_new` orphaned, and the next boot's `CREATE IF NOT EXISTS`
+  quietly making an empty one.
+- **It is the first migration in this repo that is not additive, and it is
+  one-way.** Every other one adds a column, which older code simply does not
+  select. This one moves a PRIMARY KEY from `element_name` to `(site_id,
+  element_name)`, so the previous release's
+  `ON CONFLICT(element_name) DO UPDATE` no longer matches any constraint — and
+  because `db.ts` prepares every statement at *import* time, that release would
+  not merely fail to write, it would throw on boot and PM2 would loop it.
+  Nothing in the app can reach that state: the updater refuses any tarball not
+  `semver.gt` the running version, on the GitHub, USB and upload paths alike,
+  and it extracts over the app directory rather than keeping the previous one.
+  A hand-extracted old tarball, or a `git checkout` of an older commit against
+  a real `kiosk.db`, is the way in — so if a release ever has to be rolled back,
+  the database needs rolling back with it.
 
 `site-switch.test.ts` pins the scoping, the adoption and the fingerprint;
 `api-key-switch.test.ts` pins the route — the 409, the move, and what it

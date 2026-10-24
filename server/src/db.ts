@@ -362,6 +362,14 @@ db.exec(`
 /*
  * Scope the per-element caches to a site.
  *
+ * **The one non-additive migration in this file, and it is one-way.** The rest
+ * add a column, which older code does not select; this moves a PRIMARY KEY, so
+ * the previous release's `ON CONFLICT(element_name)` matches no constraint
+ * afterwards — and since every statement here is prepared at import time, that
+ * release throws on boot rather than on write. Nothing in the app can get
+ * there (the updater refuses anything not newer and keeps no previous copy),
+ * but a release rolled back by hand needs the database rolled back with it.
+ *
  * Both tables were keyed by element name alone, which is not an identity: a
  * bridge's piers each have their own API key and each have a `P-01`. The rows
  * are rebuilt rather than dropped, because `element_sensors` is what lets an
