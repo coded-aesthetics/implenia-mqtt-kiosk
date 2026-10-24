@@ -387,13 +387,28 @@ The column was the only part of this that existed.
   read it. It is said at all because this is the one moment somebody is looking,
   and a machine carrying unsent data is one that should not be wiped or handed
   on yet.
-  **Its glyph is title-sized, and that is a measurement**: a `CardOverlay`
-  covers its own card, so the API-key card's 227px is the whole budget, and at
-  4rem the first version clipped 44px off the message while the arithmetic said
-  it fit. Title-sized, the detail budget is 160 characters against a 58-character
-  title — measured on the rendered page at 1024x768, as the WLAN section's
-  message box is, and for the same reason: German compounds wrap worse than
-  their character count suggests. Keep new ones under 150.
+  **The card is sized for the overlay, and that took three measurements to get
+  right**: a `CardOverlay` covers its own card, so the card's height *is* the
+  message's budget — and the API-key card was the shortest on the screen while
+  carrying the longest message. Two traps, both of which produced a
+  comfortable-looking number and a clipped message on the machine:
+
+  - **`scrollHeight` does not answer this.** With `justify-content: center` the
+    content overflows both ends and `scrollHeight` reports the box, so a
+    message 17px too tall measures as fitting exactly. Measure a clone at
+    `height: auto` against the card instead.
+  - **The UI declares no `font-family`.** It renders in whatever the machine
+    has, and the kiosk installs `fonts-dejavu-core` and nothing else —
+    materially wider than any default macOS sans. A budget measured in Chrome
+    on a developer Mac is not a budget. Forcing a deliberately wide font
+    (Verdana) in the measurement errs in the safe direction.
+
+  The card therefore carries a measured `minHeight: 300` (the overlay needs 276
+  at wide-font metrics), which costs one pixel: the cards sit in a grid whose
+  row was already 299px tall from the Server-Adresse card beside it, with 248px
+  of the column below them empty. Deliberately **not** `alignItems: stretch` on
+  the shared container — that is `start` on purpose and would change every
+  config screen, the Netzwerk one included.
 - **`getMostRecentSession` stays unscoped**, and so does the auto-upload loop.
   "What is still waiting on this machine" is a question about the machine, not
   about the site — it is what pins the recording bar, and the loop is what
@@ -426,6 +441,16 @@ The column was the only part of this that existed.
   A hand-extracted old tarball, or a `git checkout` of an older commit against
   a real `kiosk.db`, is the way in — so if a release ever has to be rolled back,
   the database needs rolling back with it.
+
+One thing came out of that which has nothing to do with sites: the wizard's
+**Verbindung step was already overflowing** `main` by 49px at 1024x768, with
+its own „Zurück" and „Weiter" buttons off the bottom of the display — a dead
+end on the first-install screen. The step embeds a whole config screen, whose
+cards need 904px of grid track plus 64px of their own padding, and the wizard's
+column gives 900: the grid silently drops to one track and the cards stack.
+`mainWide` exists for exactly that and its comment said „the WLAN step only"
+while describing this step's problem. `EMBEDS_CONFIG_SCREEN` now names both,
+and a step that embeds a config screen must be added to it.
 
 `site-switch.test.ts` pins the scoping, the adoption and the fingerprint;
 `api-key-switch.test.ts` pins the route — the 409, the move, and what it

@@ -7,6 +7,30 @@ interface Props {
   config: ConfigState;
 }
 
+/**
+ * The API-key card is tall enough for its own `CardOverlay`, which is a
+ * measured number.
+ *
+ * An overlay covers its card, so the card's height *is* the message's budget —
+ * and this card is the shortest on the screen while carrying the longest
+ * message, the one naming measurements left over from the previous
+ * construction site. At its content height (229px) that message overflowed by
+ * 47px on the kiosk and by nothing at all on a developer Mac: the UI declares
+ * no `font-family`, so it renders in whatever the machine has, and the kiosk
+ * installs `fonts-dejavu-core` and nothing else — materially wider than any
+ * default macOS sans. Measured against a deliberately wide font the overlay
+ * needs 276px, and 300 leaves room for a longer one.
+ *
+ * It costs no space on the screen. The cards sit in a grid whose row is 299px
+ * tall already, set by the Server-Adresse card beside it, and 248px of the
+ * column below them is empty — so this fills height that was allocated and
+ * unused, and two equal-height cards read better than one short one. Deliberately not
+ * `alignItems: stretch` on the shared container: that is `start` on purpose
+ * (see `column` in configStyles) and would change every config screen,
+ * including the Netzwerk one whose two bounded columns are load-bearing.
+ */
+const keyCardStyle = { minHeight: 300, boxSizing: 'border-box' as const };
+
 const API_URLS: Record<string, string> = {
   production: 'https://api.imp-ice-messtechnik.de',
   development: 'https://implenia-machines-backend-dev.fly.dev',
@@ -176,7 +200,7 @@ export function VerbindungConfig({ config }: Props) {
     <div style={styles.container} onClick={() => setPendingDeleteKey(false)}>
       {/* API Key card */}
       <div style={styles.cardWrapper}>
-        <div style={styles.card}>
+        <div style={{ ...styles.card, ...keyCardStyle }}>
           <div style={styles.statusRow}>
             <span style={styles.label}>API-Schlüssel</span>
             <span style={{
