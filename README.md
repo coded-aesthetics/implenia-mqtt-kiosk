@@ -558,7 +558,7 @@ All three callers bound their wait on the platform at 8s (`SENSOR_RESOLVE_TIMEOU
 
 ### Sensor roles are pinned to the session
 
-A sensor's role (`depth`, `is_completed`, `geology_nr`, …) belongs to the **element**, not to the kiosk: implenia-web's wizard stamps it into `sensor.meta` at element creation and the backend serves it with `include_meta=true`. The kiosk's copies of the same CSVs are whatever its last release shipped. Two independent snapshots of one source — so resolving a role from the CSVs *at the moment of use* reads the wrong one for an element created before a role moved or a sensor was renamed, and for any session that outlives an auto-update (a recording can run for a day).
+A sensor's role (`depth`, `is_completed`, `geology_profile`, …) belongs to the **element**, not to the kiosk: implenia-web's wizard stamps it into `sensor.meta` at element creation and the backend serves it with `include_meta=true`. The kiosk's copies of the same CSVs are whatever its last release shipped. Two independent snapshots of one source — so resolving a role from the CSVs *at the moment of use* reads the wrong one for an element created before a role moved or a sensor was renamed, and for any session that outlives an auto-update (a recording can run for a day).
 
 `beginRecording` therefore records each sensor's `role` and its real `name` in the session's `sensor_map` next to the id, and `sensorNameByRole` resolves from there — same reasoning as the ids, which have always been pinned rather than re-fetched. `findSensorNameByRole` stays the fallback for sessions recorded before this. Geology (`resolveSensors`) and post-upload completion (`autoMarkComplete`) both use it.
 
@@ -1149,7 +1149,9 @@ The **MASCHINE AUSRICHTEN** panel has a slider per angle, a noise slider (a perf
 
 ## Geology Capture
 
-The conductor records the geology they actually drilled through, and signs the profile off before it goes up. Uploaded as a `GeoDIN` integer series plus a `Geologie` text series — both already defined in the herstellen CSVs, both already read by implenia-web, so this needed no new sensor, no schema change and no backend work.
+The conductor records the geology they actually drilled through, and signs the profile off before it goes up. Uploaded as **one JSON value** in a `Geologieprofil` string sensor at the sentinel date `2000-01-01T00:00:00Z` — `{"end":12.4,"layers":[{"t":0.0,"nr":12,"name":"Steine"},…]}`, where `t` is a layer's start depth, `nr` its DIN 4023 number, `name` the label the operator was shown, and `q:"vorgabe"` marks a boundary back-filled from the Schichtauftrag. Inserts upsert on `(sensor_id, date)`, so the profile is one overwritable slot and a re-commit replaces it.
+
+It used to be a `GeoDIN` integer series plus a `Geologie` text series, which implenia-web turned back into layers by change detection — each layer taking the depth of *the same reading*, matched on exact millisecond. A `GeoDIN` reading carried no depth of its own, so the timestamp was the whole depth mechanism and an instant one sample out produced no layer at all, silently. A layer now carries its depth, so there is nothing to align.
 
 ```
 POST /api/recording/geology                 → { nr, name? } — record a layer at the current depth
@@ -1213,11 +1215,12 @@ Both the buttons and the voice commands are gated on `operatingMode === 'bohren'
 
 That is a deliberate move away from Beenden, and the reason is the operator's memory. A recording runs on through Austausch, Einbauen and Auffüllen — the stop may be an hour later, or the next day, by which time the hole is no longer fresh in anyone's mind. Nothing is lost by asking earlier, because **the profile is already final at that step**: nothing after it adds a drilling depth.
 
-The data agrees, not just the UX. The operating mode never reaches a reading — `session_readings.phase` is only `bohren` or `rohrwechsel` — so a depth recorded while the rig retracts is stored as drilling data. The step out of `bohren` stamps `drilling_ended_at`, and every geology read is bounded by it, which fixes three quiet problems at once:
+The data agrees, not just the UX. The operating mode never reaches a reading — `session_readings.phase` is only `bohren` or `rohrwechsel` — so a depth recorded while the rig retracts is stored as drilling data. The step out of `bohren` stamps `drilling_ended_at`, and every geology read is bounded by it, which fixes two quiet problems:
 
-- `alignBoundaries` takes its tolerance from the largest step between consecutive readings, and retraction can only widen it. That tolerance is the **only** guard against `zuFlach` — the fabricated 10 cm layers a resumed element would otherwise produce
-- a boundary whose descent reading was already taken by a shallower one could find the same depth again on the way up, hours later, and be dated there. web reads the series in date order, so that layer would land out of sequence
 - `gebohrteTiefe` is `max − min`, and once the pipes are back out `min` falls toward zero, making the "did this session drill?" gate more permissive than it means to be
+- `maxTiefe` bounds which layers a profile may hold, so a session credited with a hole it never drilled would be offered a sign-off for ground nobody reached
+
+A third used to matter and no longer can: a boundary could be *dated* on the way back up, landing out of sequence in a series web read in date order. Layers carry depths now, and nothing is dated at all.
 
 **The mode is switched before the screen opens.** The rig may start retracting the moment the operator taps, and a server that still thinks `bohren` reads the Klemmbacke as a pipe change and records the retraction as drilling data. The review may wait; the clipping behaviour may not.
 
@@ -1231,11 +1234,13 @@ The data agrees, not just the UX. The operating mode never reaches a reading —
 
 `geology_confirmed_at` on the session is what keeps it to **once**: a profile already signed off is not rebuilt at the stop. Rebuilding would re-derive the back-fill from the Schichtauftrag, so a planned boundary the operator deleted on the sign-off screen would quietly come back.
 
+**A resumed element's sign-off carries the earlier one's.** The profile is one sentinel-dated slot per element, so a second session's commit replaces the first's on the platform instead of adding to it — where the old `GeoDIN` series simply kept both sessions' rows. `committedObserved` therefore reads back every session of the element and folds them oldest assertion first: a previous shift's commit, then this session's taps, then this session's own. Without it, deepening a hole from 8 m to 12 m on a second shift committed a profile whose top 8 m was back-filled from the Schichtauftrag, over real observations and marked `q: "vorgabe"` with nothing on screen saying so. Back-filled layers never come back across sessions, so the plan is never laundered into observation one shift later.
+
 That protection does not reach across a **re-ask**, though, and nothing yet does: a deletion is not recorded anywhere, so when a step back into `Bohren` clears the sign-off, the next step out rebuilds the profile and a planned boundary the operator deleted the first time comes back dashed. They have to delete it again. Within one sign-off the deletion holds, which is the common case; carrying it across one means persisting rejected boundaries.
 
 It is a **review step, not a gate.** The server back-fills the profile on *every* stop that did not already sign one off, so a recording stopped by voice, from a second browser tab, or straight from the recording bar commits exactly what a reviewed one would. The screen exists to let the operator correct it, not to make it exist. That is also why the voice `aufzeichnung beenden` stops directly rather than opening the screen — a hands-free operator would have no spoken way off it.
 
-**A re-commit keeps its provenance.** The commit is repeatable and now routinely repeated, which made a latent bug reachable: reading the committed `GeoDIN` series back marks every boundary as observed, including the ones the kiosk back-filled itself, so the profile keeps its shape and loses the ` (Vorgabe)` suffix that says which parts nobody saw. The suffix in the `Geologie` text is the only place that provenance survives a commit, so `observedOnly` joins the two series on `received_at` and drops the back-filled rows — **after** web's change detection, never before. Before it, an observation repeated either side of a back-filled boundary of another type becomes two consecutive identical codes, the second reads as "no change", and a real layer disappears.
+**A re-commit keeps its provenance, by construction.** The commit is repeatable and routinely repeated — the sign-off is at the step out of `Bohren`, and a step back to drill deeper brings the operator through it again. The operator's own taps live in `session_geology`, as depths, and the Vorgabe back-fill is only ever written into the committed value. The rebuild reads both: the taps, plus the committed value's layers that carry no `q`, because retyping a planned boundary on this screen commits an `ist` layer that never reaches the scratchpad and would otherwise be reverted to the plan at the next sign-off. Dropping the `q` ones is a single comparison. In the series shape the same recovery was a real bug and needed `observedOnly` to undo: reading the committed `GeoDIN` series back marked every boundary as observed, the kiosk's own back-fill included, and the profile kept its shape while losing the ` (Vorgabe)` suffix that said which parts nobody saw. Provenance is a field now.
 
 The screen shows the profile the server is about to commit: the layers confirmed during production, with the stretches nobody confirmed filled in from the Schichtauftrag and drawn **dashed**, marked `Vorgabe`. Anything touched stops being marked `Vorgabe`.
 
@@ -1300,12 +1305,10 @@ Four things about the implementation are easy to get wrong:
 
 - **A pause commits its geology like any other stop.** It skips the things
   that *finish* an element — the `Ausführungsdatum`, and the sign-off screen
-  the bar routes through — but `recordLiveLayer` writes every tap straight into
-  `session_readings` as `pending`, so a session paused after one tap used to
-  upload exactly one `GeoDIN` row and nothing else. implenia-web derives layers
-  by change detection, so that single row reads as "this ground from 2,0 m to
-  the bottom of the hole": a partial profile, reported as complete, in a signed
-  document, from an upload that succeeded. Committing costs the pause nothing
+  the bar routes through — but a session paused after one tap holds exactly one
+  layer, and a profile is flat and gapless, so that single layer reads as "this
+  ground from 2,0 m to the bottom of the hole": a partial profile, reported as
+  complete, in a signed document, from an upload that succeeded. Committing costs the pause nothing
   it was protecting — the review is spent by `geology_confirmed_at`, which only
   the sign-off sets, so a paused element is asked again when it is resumed and
   drilled further.
@@ -1502,20 +1505,19 @@ the page padding is 1 rem, the search row's margin 0.75 rem and the bottom bar
 
 ### Why the profile is always complete
 
-A profile is flat and gapless — each layer runs to the next — so a single ground-type code asserts the ground continues to the bottom of the hole. There is no way to record "sand from 2 m, and no claim below that": **partial geology is not representable.** Back-filling the unconfirmed stretches from the Vorgabe is therefore the only option that neither discards what the operator saw nor invents a boundary they rejected, and the `(Vorgabe)` suffix in the `Geologie` text is how a reader tells the two apart.
+A profile is flat and gapless — each layer runs to the next, the last to `end` — so a single layer asserts the ground continues to the bottom of the hole. There is no way to record "sand from 2 m, and no claim below that": **partial geology is not representable.** Back-filling the unconfirmed stretches from the Vorgabe is therefore the only option that neither discards what the operator saw nor invents a boundary they rejected, and `q:"vorgabe"` on those layers is how a reader tells the two apart. It matters beyond the protocol: anything counting "ground types actually encountered" — implenia-web's `baustellenanalyse` does, per site — has to exclude them, because a back-filled layer is a copy of the Schichtauftrag and the Schichtauftrag comes from the same survey the reference drillings do.
 
 One exception is worth knowing: **an obstruction is never extended upward.** Guessing that soil seen at 2 m also fills the metre above it is mild and usually right; guessing the same about `Hindernis Beton` would claim the drill met concrete at the surface. Such a profile legitimately starts below zero, and the chart draws empty space above it — which is both true and visible.
 
-### The alignment trap
+### Depths, not timestamps
 
-implenia-web derives layers by change detection over `GeoDIN`, taking each layer's depth from **the same reading** — matched by exact millisecond. A `GeoDIN` reading dated at "now", or at an interpolated instant, therefore produces **no layer at all**: it uploads cleanly, shows up as a raw series, and the protocol reports zero observed layers.
+A layer carries its own start depth, and the profile carries its own `end`. Three things follow, and the first two are what the old shape got wrong:
 
-So every reading is dated at the exact `received_at` of a depth reading already in the database. Two consequences worth knowing:
+- **Live entry sends no depth.** The route carries only a ground-type number; the server reads its own latest depth reading, stores *that depth* in `session_geology`, and returns it so the screen can confirm `Schluff ab 3,40 m`. A browser-measured depth would be a second opinion about where the hole is.
+- **A layer below anything drilled or planned is dropped, not clamped.** Clamping would claim the drill saw ground it never reached. This is validation now rather than data loss — there is no reading it failed to find — but keeping it would push `end` past the hole. The stop response reports what was dropped.
+- **`end` is written, not derived.** It is the deepest of the plan's bottom, the deepest reading, and the last layer plus a minimum thickness, so on a hole that stopped short of the plan it is deeper than any reading. A reader recomputing it would get a different number.
 
-- **Live entry sends no depth.** The route carries only a ground-type number and the server dates the reading at its own latest depth reading, then returns the depth it used so the screen can confirm `Schluff ab 3,40 m`. A browser-measured depth would have to be matched back to a reading, and being one sample out of step yields nothing.
-- **A boundary below the bottom of the hole is dropped, not clamped.** Clamping would claim the drill saw ground it never reached, and several such boundaries would collapse onto one instant — costing real layers to report fictional ones. The stop response reports what was dropped.
-
-`server/src/depth-timestamp.ts` owns the inversion as a pure, unit-tested module, and the confirmation screen reads the recorded series back through the same change detection implenia-web uses — so a misalignment shows up as a missing layer on the kiosk, in front of the operator, rather than weeks later in a protocol. The full contract is in `CLAUDE.md`.
+The shape this replaced made the *timestamp* the depth mechanism: implenia-web derived layers by change detection over `GeoDIN`, taking each layer's depth from the same reading matched by exact millisecond, so a reading dated at "now" or one sample out of step produced **no layer at all** — uploaded cleanly, visible as a raw series, zero observed layers in the protocol. Five mechanisms existed only to protect that borrowed instant; `alignBoundaries`, `observedLayers`, `pinAnchorReadings` and the `(Vorgabe)` text suffix are all gone with it, `observedOnly` is a `q !== undefined` filter in `committedObserved`, and `depth-timestamp.ts` is down to `drilledDepth`. The full contract is in `CLAUDE.md`.
 
 ## Session Data Export
 
@@ -1590,21 +1592,16 @@ POST /api/config/datenuebertragung  → same three fields; validated, German err
 
 **Not every sensor can go this way.** A CSV is one table, so a column gets a cell on every row of its chunk — and an empty cell *inserts a NULL*, which is this kiosk's own marker for a sensor outage. Three kinds of sensor therefore keep the per-sensor path, in the same upload:
 
-- **String sensors** (`Kommentar`, `Geologie`, `logs`, `Ausführungsdatum`) — an empty cell there writes an empty *string*, and for `Ausführungsdatum` an empty string is the documented way to *un-complete* an element.
-- **`GeoDIN`** (role `geology_nr`) — implenia-web turns it into layers by change detection, and `alignBoundaries` deliberately gives every boundary its own depth reading. Two boundaries 290 ms apart share a 1 s interval, and one row is one layer, so gridding this series would silently drop layers.
-- **`Ausführungsdatum`** (role `is_completed`) — a single overwritable slot at a sentinel date, not session data at all.
+- **String sensors** (`Kommentar`, `Geologieprofil`, `logs`, `Ausführungsdatum`) — an empty cell there writes an empty *string*, and for `Ausführungsdatum` an empty string is the documented way to *un-complete* an element.
+- **`Ausführungsdatum`** (role `is_completed`) — a single overwritable slot at a sentinel date, not session data at all. So is `Geologieprofil`.
 
-### Pinning the geology anchors
+### The depth series grids like anything else
 
-A `GeoDIN` entry carries **no depth of its own**. `geology.ts` writes it at the exact `received_at` of a depth reading, and implenia-web recovers the layer's depth by pairing the two series on millisecond equality, dropping any row whose `Bohrtiefe` is null. The timestamp is the entire mechanism.
+It used not to. A `GeoDIN` entry carried **no depth of its own**: `geology.ts` wrote it at the exact `received_at` of a depth reading, and implenia-web recovered the layer's depth by pairing the two series on millisecond equality. Keeping `GeoDIN` off the grid guarded one end of that link; gridding the depth series cut the other, and the boundary looked for a depth at 580 ms while the platform had one at 870 ms — uploaded cleanly, invisible. (The first version of that change had exactly this bug, and `pinAnchorReadings` existed to send the handful of anchor readings back at their own instants.)
 
-Keeping `GeoDIN` off the grid guards one end of that link. Gridding the depth series cuts the other: the boundary looks for a depth at 580 ms, the platform has one at 870 ms, and the layer is gone — uploaded cleanly, invisible. (The first version of this change had exactly that bug.)
+A committed profile is one value in which every layer states its own depth, so nothing points into the depth series and it reduces like any other channel — 14× rather than 6.2× on the captured session. `pinAnchorReadings`, `ALIGNMENT_ANCHOR_ROLES` and `ANCHORED_ROLE` are gone; `EXACT_TIMESTAMP_ROLES` is `is_completed` and `geology_profile`, the latter because the profile is the one of the two that actually reaches `session_readings` — one value at a sentinel instant, which a grid would re-date and a chunk would pad with empty cells. It is already refused for being a string sensor, and that is the accident: the type belongs to a Verfahren's CSV, the sentinel to the contract. **Nothing may reintroduce a reader that recovers a depth by joining two series on a timestamp** — the grid is exactly what breaks it.
 
-The depth series is gridded anyway — leaving it out costs the largest single channel its reduction, 14× down to 6.2× — and the readings the boundaries point at are **pinned back in**: `pinAnchorReadings` selects exactly those readings and `runUpload` sends them as one extra per-sensor batch beside the chunks. Nothing is interpolated; the value at that instant is a reading that already exists. On G08 with 18 boundaries that is 18 readings, ~1 KB, and all 18 stay joinable.
-
-That batch claims no reading ids (the chunk that gridded them owns those), still counts in `sensorsFailed` (a profile the platform cannot reassemble is the same loss as one that never uploaded), and is built from the session rather than the pending groups so a retry still finds the anchors after the chunks have been marked uploaded.
-
-`sensorsFailed` counts across all three parts, so an element is only completed when nothing was left behind.
+`sensorsFailed` counts across both parts, so an element is only completed when nothing was left behind.
 
 **Only the machine's own channels are gridded.** `GRIDDABLE_SOURCES` is `{mqtt, kiosk}`, read from the `source` the session pinned when recording began (falling back to the local sensor CSVs by name for older sessions). The reason is that a CSV cannot say "no value here": a column gets a cell on every row of its chunk and an empty cell *inserts a NULL*, the kiosk's own outage marker. For an `mqtt` channel publishing every ~290 ms that is honest — the channel really did go quiet. For a `user` sensor it is not, because those values are events: Injektionsbohren's `Status` is written four times in a shift, and gridding it uploaded 186 fabricated outages, which cost the Herstellprotokoll its drilling duration, its phase averages and every observed geology layer. `CLAUDE.md` has the full chain. `kiosk` is gridded because those are the volume integrations, derived from every pump reading — DSV declares thirteen.
 
@@ -1782,9 +1779,9 @@ server/src/
   websocket.ts        — WS broadcast
   implenia-api.ts     — Implenia API auth + fetch wrapper
   recording.ts        — Session recording + batch upload
-  geology.ts          — GeoDIN/Geologie writes, provenance, idempotent re-commit
+  geology.ts          — Geologieprofil write, provenance, idempotent re-commit
   geology-profile.ts  — Observations + Vorgabe → the profile the sign-off commits
-  depth-timestamp.ts  — Boundary depth → exact depth-reading timestamp (pure)
+  depth-timestamp.ts  — How far the hole moved, from the depth series (pure)
   vorgabe-geology.ts  — Planned profile from "Geologie n" / "Tiefe Geologie n"
   element-completion.ts — Ausführungsdatum writes (sentinel date + data-version stamp)
   element-device.ts     — Element name → platform device id (resolve + cache)

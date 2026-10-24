@@ -134,19 +134,39 @@ export function mergeProfile(
   layers = mergeAdjacent(layers);
   if (layers.length === 0) return null;
 
-  // The hole can end up deeper than planned, and a profile stopping above the
-  // deepest reading would say nothing about ground the drill went through.
-  // The last layer must also start above the bottom, or it has no thickness —
-  // which is reachable when the deepest thing observed is the deepest reading.
-  const deepest = layers[layers.length - 1].tiefe;
-  const endTiefe = Math.max(
-    vorgabe?.endTiefe ?? 0,
+  return {
+    schichten: layers,
+    endTiefe: profileEndTiefe(
+      layers[layers.length - 1].tiefe, vorgabe?.endTiefe ?? null, maxTiefe,
+    ),
+  };
+}
+
+/**
+ * Where the profile bottoms out.
+ *
+ * Exported because the commit needs the same answer: a `Geologieprofil` value
+ * carries its own `end`, and it is not recoverable downstream — the plan's own
+ * bottom wins when the hole stopped short of it, so anything recomputing this
+ * from the readings alone would get a different number. One implementation, so
+ * a reviewed profile and one committed straight from a stop cannot disagree.
+ *
+ * The hole can end up deeper than planned, and a profile stopping above the
+ * deepest reading would say nothing about ground the drill went through. The
+ * last layer must also start above the bottom, or it has no thickness — which
+ * is reachable when the deepest thing observed is the deepest reading.
+ */
+export function profileEndTiefe(
+  deepestLayer: number,
+  vorgabeEndTiefe: number | null,
+  maxTiefe: number,
+): number {
+  return Math.max(
+    vorgabeEndTiefe ?? 0,
     Number.isFinite(maxTiefe) ? maxTiefe : 0,
-    deepest + MIN_DICKE,
+    deepestLayer + MIN_DICKE,
     MIN_DICKE,
   );
-
-  return { schichten: layers, endTiefe };
 }
 
 /** Is this ground type an obstruction rather than soil or rock? */

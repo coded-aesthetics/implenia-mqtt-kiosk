@@ -43,10 +43,12 @@ const PLATFORM_SENSORS = {
   ],
   sensors_int: [
     { id: 's-status', name: 'Status', meta: { source: 'user', role: 'mode' } },
-    { id: 's-geodin', name: 'GeoDIN', meta: { source: 'kiosk', role: 'geology_nr' } },
   ],
   sensors_string: [
-    { id: 's-geologie', name: 'Geologie', meta: { source: 'kiosk', role: 'geology_text' } },
+    {
+      id: 's-profil', name: 'Geologieprofil',
+      meta: { source: 'kiosk', role: 'geology_profile' },
+    },
   ],
 };
 
@@ -206,11 +208,10 @@ describe('a recording opened past Bohren', () => {
 
   /*
    * The series is one reading at rest and then the pipes coming out of a 6 m
-   * hole, which is what makes the fabrication reachable rather than merely
-   * possible: `alignBoundaries` drops a boundary shallower than the session's
-   * first reading, so a *pure* retraction loses every planned boundary to
-   * `aboveHole` — one reading before the rig moves is enough for both to
-   * align, the 3 m boundary onto the reading at 6 m.
+   * hole. `drilling_ended_at` is the only thing standing between that and an
+   * entirely back-filled Schichtauftrag profile written over the one the
+   * drilling session signed off: a layer states its own depth now, so nothing
+   * about the retraction makes the planned boundaries look unreachable.
    */
   it('commits no profile at the stop, however far the rig retracts', async () => {
     db.setElementVorgaben('P-01', VORGABEN);
@@ -218,7 +219,7 @@ describe('a recording opened past Bohren', () => {
     feedDepths(id, [0, 6, 5.5, 5, 4, 3, 2, 1, 0]);
 
     expect(geology.commitDefaultGeology(db.getSessionById(id)!)).toBeNull();
-    expect(db.getSessionSensorSeries(id, 's-geodin')).toEqual([]);
+    expect(db.getSessionSensorTextSeries(id, 's-profil')).toEqual([]);
   });
 
   /* The same readings, from a session that did the drilling, still commit. */
@@ -228,6 +229,6 @@ describe('a recording opened past Bohren', () => {
     feedDepths(id, [0, 1, 2, 3, 4, 5, 6]);
 
     expect(geology.commitDefaultGeology(db.getSessionById(id)!)?.geschrieben).toBeGreaterThan(0);
-    expect(db.getSessionSensorSeries(id, 's-geodin').length).toBeGreaterThan(0);
+    expect(db.getSessionSensorTextSeries(id, 's-profil').length).toBeGreaterThan(0);
   });
 });

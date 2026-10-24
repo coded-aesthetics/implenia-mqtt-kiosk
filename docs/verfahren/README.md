@@ -84,14 +84,49 @@ Until the kiosk sets it, implenia-web falls back to per-Verfahren proxies — In
 | Data source | Serial (Elvis ESP32) + MQTT | **MQTT only** | MQTT |
 | Channel mapping needed | Yes (serial value index → sensor) | **No** (topic name *is* the sensor name) | No |
 | Procedures per element | Vorschneiden / Bohren / Düsen | **One** (Bohren → Verpressen) | Bohren → Injizieren |
-| Phase signal | `Bohren/Düsen` (Integer, `mqtt`) | `Status` (Integer, **`user`**) | `Reserve 5` (Text, `mqtt`) |
+| Phase signal | `Bohren/Düsen` (Integer, `kiosk` — **nothing writes it**, see below) | `Status` (Integer, **`user`**) | `Reserve 5` (Text, `mqtt`) |
 | Hero sensors | `Tiefe` | `Bohrtiefe`, `Suspensionsdruck`, `Status` | `Bohrtiefe`, `Reserve 5` |
-| Geology on the kiosk | Vorgabe layers (DIN 4023) | Vorgabe layers **+ worker-recorded `GeoDIN`** | — |
+| Geology on the kiosk | Vorgabe layers (DIN 4023) **+ worker-recorded `Geologieprofil`** | same | same (declared, never run on a rig) |
 | Completion sensor (`is_completed`) | `Ausführungsdatum` | `Ausführungsdatum` | none yet |
 | `Stream` column | `hdi` / `ivl` / `result` | **none** | none |
 | Offline XLSX export | Works (per stream) | **Not wired up** — no streams defined | Not wired up |
 | Protocols in web | Herstellprotokoll + Bohrlochverlaufsprotokoll | Herstellprotokoll | Herstellprotokoll + Injektionsprotokoll |
-| Sensor count (herstellen) | 59 | 27 | 16 |
+| Sensor count (herstellen) | 60 | 28 | 17 |
+
+**`Reserve 5` is not a phase signal, it is a reserve channel with a phase
+signal in it.** The rig publishes free text there and implenia-web reads it as
+the process stages — `getHerstellungsdatenProtocolData` counts the distinct
+values as *Anzahl Vorgänge* and groups the suspension consumption by its state
+transitions — so the `Rolle=mode` on it is inert on the kiosk by design:
+`recordStatusReading` resolves the phase sensor by the name `Status`, which
+only Injektionsbohren has. Whatever geology once flowed through `Reserve 5`
+went the same way as Injektionsbohren's `GeoDIN`: it is not read as geology by
+anything, and it is not worth recovering. Nothing may point the kiosk at that
+channel; see CLAUDE.md, "`Status` numbering".
+
+**Open, for whoever sets up the first DSV site: `Bohren/Düsen` has no route
+onto the machine.** It is DSV's phase signal and real rig telemetry, but the
+synced CSV now gives it `Quelle=kiosk`, and three screens offer only `mqtt`
+channels for binding — `ChannelPicker.tsx` for the serial value index,
+`routes/config-topics.ts` for topic assignment, `routes/config-datenstrom.ts`
+for calibration. So it cannot be bound to a serial index or an MQTT topic, and
+nothing on the kiosk computes it either: `recordStatusReading` resolves the
+phase sensor by the name `Status`, deliberately and permanently (see CLAUDE.md,
+"`Status` numbering"). A DSV recording therefore captures no phase at all.
+
+The fix is in implenia-web, which owns these CSVs — `Quelle=mqtt`, then
+`./scripts/sync-sensors.sh`. Deliberately not patched here: this repo's copies
+are synced, never edited, and `--check` runs in CI.
+
+`W/Z-Wert` was flipped the same way and is **not** the same case. It looks like
+a Vorgabe value that herstellen echoes: the vorgaben CSV specifies three of
+them (`W/Z-Verhältnis Bohren` / `Schneiden` / `Vorschneiden`, all editable),
+while herstellen has one undifferentiated channel that cannot say which
+sub-procedure it belongs to, carries `[m]` in its export alias for a
+dimensionless ratio, and is constant for a whole procedure. Nothing writing it
+may well be correct — but `kiosk` is the wrong way to say so, since it claims
+the kiosk derives it. `GeoDIN`'s encoding is the honest one for a name that is
+declared and written by nobody. Being confirmed with a process expert.
 
 The recurring theme: **DSV is the complicated one.** It carries legacy baggage
 (three data streams, serial channel mapping, aliases, three sub-procedures).

@@ -26,3 +26,9 @@ blob-report/
 
 # Locally built release bundles (scripts/make-bundle.sh)
 /dist-bundle/
+
+# A release bundle unpacked one directory too deep: the tarball carries
+# server/dist/ + package.json, so extracting it from inside server/ lands
+# here and shadows nothing while looking like source. Delete it when it
+# turns up; scripts/make-bundle.sh writes to /dist-bundle/ instead.
+/server/server/

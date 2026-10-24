@@ -220,6 +220,40 @@ db.exec(`
     defs         TEXT    NOT NULL,
     updated_at   INTEGER NOT NULL
   );
+
+  /*
+   * Geology the operator entered live, during drilling.
+   *
+   * The scratchpad between a tap and the commit, and nothing else. The
+   * committed profile is one JSON value in a Geologieprofil session reading;
+   * these rows are what it gets built from, together with the Schichtauftrag's
+   * back-fill.
+   *
+   * It exists because a layer now carries its own depth. The old shape stored
+   * a live entry as a GeoDIN session reading dated at the exact received_at of
+   * a depth reading, and recovered the depth by joining the two back together
+   * -- so the timestamp *was* the depth, and an instant off by one sample
+   * silently cost a layer. Here the depth is read off the latest depth reading
+   * once, at the moment of the tap, and stored as a number.
+   *
+   * The (session_id, depth) primary key is the replace rule: a second entry at
+   * the same depth corrects the first rather than stacking on it. Two ground
+   * types at one depth is not a profile, and the depth stands still for the
+   * whole of a Rohrverlaengerung, which is minutes of taps landing on one
+   * value.
+   *
+   * Nothing back-filled ever goes in here. That is what makes a re-commit keep
+   * its provenance for free: the old shape had to read its own committed
+   * series back and strip the back-filled rows out again.
+   */
+  CREATE TABLE IF NOT EXISTS session_geology (
+    session_id  INTEGER NOT NULL,
+    depth       REAL    NOT NULL,
+    nr          INTEGER NOT NULL,
+    text        TEXT,
+    observed_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, depth)
+  );
 `);
 
 // --- Additive migrations ---
@@ -405,21 +439,14 @@ const getDepthSamplesStmt = db.prepare(`
     AND value_numeric IS NOT NULL
   ORDER BY received_at ASC
 `);
-const getSensorSeriesStmt = db.prepare(`
-  SELECT received_at, value_numeric
-  FROM session_readings
-  WHERE session_id = ? AND sensor_id = ? AND upload_status != 'clipped'
-    AND value_numeric IS NOT NULL
-  ORDER BY received_at ASC
-`);
-// The same two reads, bounded to the end of drilling.
+// The same read, bounded to the end of drilling.
 //
-// Separate statements rather than a `received_at <= COALESCE(?, …)` because
+// A separate statement rather than a `received_at <= COALESCE(?, …)` because
 // better-sqlite3 prepares once and the planner is better off with the bound as
 // a plain comparison. See `drillingWindowEnd` in geology.ts for what the bound
 // is worth: readings taken while the rig retracts are stored with
-// `phase = 'bohren'` too, so without it the depth series the geology aligns
-// against contains the whole way back up.
+// `phase = 'bohren'` too, so without it the depth series the geology is bounded
+// by contains the whole way back up.
 const getDepthSamplesUntilStmt = db.prepare(`
   SELECT received_at, value_numeric
   FROM session_readings
@@ -429,24 +456,44 @@ const getDepthSamplesUntilStmt = db.prepare(`
     AND received_at <= ?
   ORDER BY received_at ASC
 `);
-const getSensorSeriesUntilStmt = db.prepare(`
-  SELECT received_at, value_numeric
-  FROM session_readings
-  WHERE session_id = ? AND sensor_id = ? AND upload_status != 'clipped'
-    AND value_numeric IS NOT NULL
-    AND received_at <= ?
-  ORDER BY received_at ASC
-`);
-// The text counterpart of getSensorSeriesStmt. Geology needs it to tell its
-// own back-filled boundaries apart from the operator's observations when it
-// reads a committed profile back — the ` (Vorgabe)` suffix in `Geologie` is
-// the only place that provenance survives.
+// The text counterpart of getDepthSamplesStmt, without the drilling filters.
+// Geology reads the committed `Geologieprofil` value back through it — one
+// value at a sentinel instant, not session data — to recover the layers a
+// previous sign-off recorded as observed.
 const getSensorTextSeriesStmt = db.prepare(`
   SELECT received_at, value_text
   FROM session_readings
   WHERE session_id = ? AND sensor_id = ? AND upload_status != 'clipped'
     AND value_text IS NOT NULL
   ORDER BY received_at ASC
+`);
+// The same read across every session of one element, for the one value that
+// is not session data: the committed `Geologieprofil`.
+//
+// An element worked over two shifts is two sessions, and both write their
+// profile to the same sensor at the same sentinel instant -- so on the
+// platform, which upserts on `(sensor_id, date)`, the second *replaces* the
+// first. Geology reads the whole element back for exactly that reason: the
+// later commit has to carry the earlier one's observations, or resuming an
+// element to drill it deeper reports the top of the hole as planned ground
+// nobody saw.
+//
+// Matching on `sensor_id` rather than the name is what makes that precise.
+// It is the identity the platform upserts on, so these rows are exactly the
+// set that shares one slot there. Two sessions that pinned different ids
+// wrote to different slots, neither overwrites the other, and this correctly
+// finds nothing to recover.
+//
+// Ordered by `(session_id, id)`, never by `received_at`: every one of these
+// rows carries the same sentinel instant, so that column cannot order them
+// and "the latest" would be whatever SQLite happened to return last.
+const getElementSensorTextSeriesStmt = db.prepare(`
+  SELECT sr.session_id, sr.value_text
+  FROM session_readings sr
+  JOIN recording_sessions rs ON rs.id = sr.session_id
+  WHERE rs.element_name = ? AND sr.sensor_id = ?
+    AND sr.upload_status != 'clipped' AND sr.value_text IS NOT NULL
+  ORDER BY sr.session_id ASC, sr.id ASC
 `);
 // The oldest recorded value of one sensor, used to rebuild the volume tracker's
 // baseline after a restart. Deliberately unfiltered beyond "has a value": the
@@ -487,10 +534,6 @@ const getLatestPerTopicStmt = db.prepare(`
 const deletePendingForSensorStmt = db.prepare(`
   DELETE FROM session_readings
   WHERE session_id = ? AND sensor_id = ? AND upload_status = 'pending'
-`);
-const deletePendingAtStmt = db.prepare(`
-  DELETE FROM session_readings
-  WHERE session_id = ? AND sensor_id = ? AND received_at = ? AND upload_status = 'pending'
 `);
 
 // Upload groups: get distinct sensor groups with pending readings
@@ -730,15 +773,30 @@ export function getStartedElements(): StartedElement[] {
  * `upload_status != 'clipped'` the readings held back with them. Without them
  * the answer is the frozen depth of a pipe change, which is not a depth the
  * hole ever had.
+ *
+ * `bis` adds the drilling window, the same bound `getDepthSamplesUntilStmt`
+ * carries and for the same reason — see `drillingWindowEnd` in geology.ts. A
+ * null answer means the session recorded no value for that sensor at all,
+ * which is a different statement from a depth of 0.
  */
 const maxSensorValueStmt = db.prepare(`
   SELECT MAX(value_numeric) AS max FROM session_readings
   WHERE session_id = ? AND sensor_id = ?
     AND phase = 'bohren' AND upload_status != 'clipped'
 `);
+const maxSensorValueUntilStmt = db.prepare(`
+  SELECT MAX(value_numeric) AS max FROM session_readings
+  WHERE session_id = ? AND sensor_id = ?
+    AND phase = 'bohren' AND upload_status != 'clipped'
+    AND received_at <= ?
+`);
 
-export function maxDrilledValue(sessionId: number, sensorId: string): number | null {
-  const row = maxSensorValueStmt.get(sessionId, sensorId) as { max: number | null } | undefined;
+export function maxDrilledValue(
+  sessionId: number, sensorId: string, bis?: number | null,
+): number | null {
+  const row = (bis == null
+    ? maxSensorValueStmt.get(sessionId, sensorId)
+    : maxSensorValueUntilStmt.get(sessionId, sensorId, bis)) as { max: number | null } | undefined;
   return row?.max ?? null;
 }
 
@@ -770,6 +828,7 @@ export function getSessionsWithoutMaxDepth(limit: number): Session[] {
 export function deleteSessionWithReadings(id: number): void {
   db.transaction(() => {
     db.prepare('DELETE FROM session_readings WHERE session_id = ?').run(id);
+    db.prepare('DELETE FROM session_geology WHERE session_id = ?').run(id);
     db.prepare('DELETE FROM recording_sessions WHERE id = ?').run(id);
   })();
 }
@@ -1061,9 +1120,66 @@ export interface SeriesPoint {
   value: number;
 }
 
+const insertSessionGeologyStmt = db.prepare(
+  `INSERT OR REPLACE INTO session_geology (session_id, depth, nr, text, observed_at)
+   VALUES (?, ?, ?, ?, ?)`,
+);
+const getSessionGeologyStmt = db.prepare(
+  'SELECT depth, nr, text, observed_at FROM session_geology WHERE session_id = ? ORDER BY depth ASC',
+);
+const clearSessionGeologyStmt = db.prepare(
+  'DELETE FROM session_geology WHERE session_id = ?',
+);
+
+/** One layer change the operator entered while drilling. */
+export interface SessionGeologyEntry {
+  /** Depth of the depth reading that was current when they tapped, in metres. */
+  depth: number;
+  /** DIN 4023 number. */
+  nr: number;
+  /** The operator's own description, where they gave one. */
+  text: string | null;
+  /** When the entry was made — diagnostics only; the depth is the datum. */
+  observedAt: number;
+}
+
 /**
- * The session's depth series as the geology inversion needs it: real drilling
- * only, nothing clipped, nothing without a value.
+ * Record one live geology entry, replacing any entry at the same depth.
+ *
+ * The replace is the point: see the `session_geology` DDL. It is also what the
+ * operator means — a second tap before the hole has moved is a correction.
+ */
+export function insertSessionGeology(
+  sessionId: number, depth: number, nr: number, text: string | null, observedAt: number,
+): void {
+  insertSessionGeologyStmt.run(sessionId, depth, nr, text, observedAt);
+}
+
+/**
+ * Drop every live geology entry of a session.
+ *
+ * For a replay seek, which rebuilds the session from position 0: these used to
+ * be `session_readings` and went with `clearSessionReadings`, so without this
+ * the layers of the run that was just discarded survive it and are committed
+ * against a hole that no longer has them.
+ */
+export function clearSessionGeology(sessionId: number): void {
+  clearSessionGeologyStmt.run(sessionId);
+}
+
+/** Every live geology entry of a session, shallowest first. */
+export function getSessionGeology(sessionId: number): SessionGeologyEntry[] {
+  const rows = getSessionGeologyStmt.all(sessionId) as {
+    depth: number; nr: number; text: string | null; observed_at: number;
+  }[];
+  return rows.map((r) => ({
+    depth: r.depth, nr: r.nr, text: r.text, observedAt: r.observed_at,
+  }));
+}
+
+/**
+ * The session's depth series: real drilling only, nothing clipped, nothing
+ * without a value.
  *
  * See getDepthSamplesStmt for why each filter is there.
  */
@@ -1078,21 +1194,6 @@ export function getSessionDepthSamples(
   return rows.map((r) => ({ receivedAt: r.received_at, value: r.value_numeric }));
 }
 
-/**
- * Every recorded value of one sensor in a session, oldest first — up to `bis`
- * where one is given.
- */
-export function getSessionSensorSeries(
-  sessionId: number, sensorId: string, bis?: number | null,
-): SeriesPoint[] {
-  const rows = (bis == null
-    ? getSensorSeriesStmt.all(sessionId, sensorId)
-    : getSensorSeriesUntilStmt.all(sessionId, sensorId, bis)) as {
-    received_at: number; value_numeric: number;
-  }[];
-  return rows.map((r) => ({ receivedAt: r.received_at, value: r.value_numeric }));
-}
-
 /** Every recorded *text* value of one sensor in a session, oldest first. */
 export function getSessionSensorTextSeries(
   sessionId: number, sensorId: string,
@@ -1101,6 +1202,26 @@ export function getSessionSensorTextSeries(
     received_at: number; value_text: string;
   }[];
   return rows.map((r) => ({ receivedAt: r.received_at, text: r.value_text }));
+}
+
+/**
+ * Every recorded text value of one sensor across an element's sessions.
+ *
+ * Oldest session first, and within a session oldest write first, so a reader
+ * folding them in order ends on the newest assertion. Each row says which
+ * session it came from, because that is what tells the caller which of them
+ * are its own.
+ *
+ * See getElementSensorTextSeriesStmt for why this is keyed on the sensor id
+ * and ordered the way it is.
+ */
+export function getElementSensorTextSeries(
+  elementName: string, sensorId: string,
+): { sessionId: number; text: string }[] {
+  const rows = getElementSensorTextSeriesStmt.all(elementName, sensorId) as {
+    session_id: number; value_text: string;
+  }[];
+  return rows.map((r) => ({ sessionId: r.session_id, text: r.value_text }));
 }
 
 export interface LatestReading {
@@ -1161,20 +1282,6 @@ export function getLastSessionValue(sessionId: number, sensorId: string): number
  */
 export function deletePendingSensorReadings(sessionId: number, sensorId: string): number {
   return deletePendingForSensorStmt.run(sessionId, sensorId).changes;
-}
-
-/**
- * Drop a not-yet-uploaded reading of one sensor at one exact instant.
- *
- * What makes a second geology entry at the same depth a correction rather than
- * a loss. Two readings on one millisecond are one row to implenia-web, and the
- * upload's own per-timestamp deduplication keeps only the last — so without
- * this the earlier of two quick taps vanishes with nothing to say so.
- */
-export function deletePendingSensorReadingAt(
-  sessionId: number, sensorId: string, receivedAt: number,
-): number {
-  return deletePendingAtStmt.run(sessionId, sensorId, receivedAt).changes;
 }
 
 export function getSessionUploadGroups(sessionId: number): SessionUploadGroup[] {
@@ -1479,6 +1586,7 @@ const RESET_PRESERVED_META = ['implenia_api_key', 'implenia_api_url'];
 export function resetKiosk(): void {
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM session_readings').run();
+    db.prepare('DELETE FROM session_geology').run();
     db.prepare('DELETE FROM session_exports').run();
     db.prepare('DELETE FROM recording_sessions').run();
     db.prepare('DELETE FROM mqtt_buffer').run();

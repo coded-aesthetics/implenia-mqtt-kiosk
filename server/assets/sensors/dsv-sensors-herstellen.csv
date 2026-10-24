@@ -27,13 +27,13 @@ Wasserdruck,Double,bar,mqtt,pressure_water,primary,p_Wasser [bar],hdi
 Wassermenge,Double,l/min,mqtt,flow_water,primary,q_Wasser [l/min],hdi
 Suspensiondruck,Double,bar,mqtt,pressure_suspension,primary,p_Sus [bar],hdi
 Suspensionsmenge,Double,l/min,mqtt,flow_suspension,primary,q_Sus [l/min],hdi
-Bohren/Düsen,Integer,,mqtt,mode,secondary,Bohren/Düsen? [1],hdi
+Bohren/Düsen,Integer,,kiosk,mode,secondary,Bohren/Düsen? [1],hdi
 Düsstrecke (Ist),Double,m,kiosk,,primary,Düsstrecke_ist [m],hdi
 Luftdruck,Double,bar,mqtt,pressure_air,primary,Luftdruck [bar],hdi
 Q-Suspension Bohren,Double,l,kiosk,volume_suspension,primary,Q_Suspension_B [l],hdi
 Q-Suspension Verpressen,Double,l,kiosk,volume_suspension,primary,Q_Suspension_V [1],hdi
 Q-Suspension Düsen,Double,l,kiosk,volume_suspension,primary,Q_Suspension_D [m],hdi
-W/Z-Wert,Double,,mqtt,,secondary,W/Z-Wert [m],hdi
+W/Z-Wert,Double,,kiosk,,secondary,W/Z-Wert [m],hdi
 Luftmenge,Double,Nm³/h,kiosk,flow_air,primary,Luftmenge [Nm³/h],hdi
 Kommentar,Text,,user,,,,
 Düsstrecke (Soll),Double,m,server,,,,
@@ -58,3 +58,4 @@ Düsstrecke,Double,m,server,,,,result
 Precut-Strecke,Double,m,server,,,,result
 Geologie,Text,,user,geology_text,,,
 GeoDIN,Integer,,server,geology_nr,,,
+Geologieprofil,Text,,kiosk,geology_profile,,,

@@ -238,14 +238,15 @@ describe('uploadSession on the CSV route', () => {
     expect(batch[0][1].body.readings.map((r: { value: number }) => r.value)).toEqual([0, 1]);
   });
 
-  it('sends GeoDIN and the comment per sensor, at their own instants', async () => {
+  it('sends a platform-computed channel and the comment per sensor, at their own instants', async () => {
     apiFn.mockImplementation(fakePlatform());
 
     const { sessionId } = seedSession();
     await recording.uploadSession(sessionId);
 
-    // A grid merges geology boundaries, and one row is one layer to
-    // implenia-web — so this series may never go through it.
+    // Only the machine's own channels may be gridded: an absent cell in the
+    // CSV is a written NULL, and that only means "the channel went quiet" for
+    // something that publishes periodically.
     const geo = callsTo('/api/v1/sensor-int/s-geo/batch');
     expect(geo).toHaveLength(1);
     expect(geo[0][1].body.readings).toEqual([
@@ -267,119 +268,6 @@ describe('uploadSession on the CSV route', () => {
 
     expect(callsTo('/api/v1/sensor-float/s-rpm/batch')).toHaveLength(0);
     expect(callsTo('/api/v1/sensor-float/s-druck/batch')).toHaveLength(0);
-  });
-
-  it('keeps the depth reading a geology boundary is dated at', async () => {
-    // End to end, the join implenia-web makes: a boundary at an exact instant,
-    // and a Bohrtiefe value at that same instant for it to pair with. The depth
-    // series is gridded like everything else — which re-dates it — so the
-    // readings the boundaries point at are pinned back in at their own
-    // instants. Without that the profile uploads cleanly and shows no layers.
-    apiFn.mockImplementation(fakePlatform());
-
-    const { sessionId } = seedSession();
-    await recording.uploadSession(sessionId);
-
-    const geoDates = callsTo('/api/v1/sensor-int/s-geo/batch')[0][1]
-      .body.readings.map((r: { date: string }) => r.date);
-    const pinnedDates = callsTo('/api/v1/sensor-float/s-tiefe/batch')[0][1]
-      .body.readings.map((r: { date: string }) => r.date);
-
-    expect(geoDates).toHaveLength(1);
-    expect(pinnedDates).toContain(geoDates[0]);
-
-    // Only the anchors go that way — the rest of the depth series is in the CSV.
-    expect(pinnedDates).toHaveLength(1);
-    const [, opts] = callsTo('/readings/batch/csv')[0];
-    expect(opts.rawBody).toContain('Bohrtiefe');
-  });
-
-  it('pins the recorded value, not an interpolated one', async () => {
-    apiFn.mockImplementation(fakePlatform());
-
-    const { sessionId } = seedSession();
-    await recording.uploadSession(sessionId);
-
-    // seedSession records Bohrtiefe = i * 0.1 every 250 ms; the boundary sits
-    // on the reading at +750 ms, which is the fourth, so 0.3.
-    const pinnedReadings = callsTo('/api/v1/sensor-float/s-tiefe/batch')[0][1].body.readings;
-    expect(pinnedReadings[0].date).toBe('2026-05-18T12:00:00.750Z');
-    expect(pinnedReadings[0].value).toBeCloseTo(0.3, 10);
-  });
-
-  it('pins nothing when the depth series was never gridded', async () => {
-    // A depth sensor the grid refused goes out per sensor at full resolution,
-    // so its geology instants are already there. Sending them again would be
-    // redundant work that still counts in the progress total — and a transient
-    // failure of that one batch would hold the element open and offer a retry
-    // for an upload in which every reading had landed.
-    const elementName = `U-${++element}`;
-    const map = {
-      ...SENSOR_MAP,
-      bohrtiefe: { ...SENSOR_MAP.bohrtiefe, source: 'user' },
-    };
-    const sessionId = db.createSession(elementName, JSON.stringify(map));
-    db.endSession(sessionId);
-    const t0 = Date.parse('2026-05-18T12:00:00.000Z');
-    for (let i = 0; i < 4; i++) {
-      db.insertSessionReading(
-        sessionId, 'rig/Bohrtiefe', 's-tiefe', 'float', i * 0.5, null,
-        { receivedAt: t0 + i * 250 },
-      );
-      db.insertSessionReading(
-        sessionId, 'rig/Drehzahl', 's-rpm', 'float', 60 + i, null,
-        { receivedAt: t0 + i * 250 + 12 },
-      );
-    }
-    db.insertSessionReading(
-      sessionId, 'rig/GeoDIN', 's-geo', 'int', 23, null, { receivedAt: t0 + 750 },
-    );
-
-    apiFn.mockImplementation(fakePlatform());
-    await recording.uploadSession(sessionId);
-
-    // One per-sensor batch for the depth, and no second one pinning the same
-    // readings alongside it.
-    expect(callsTo('/api/v1/sensor-float/s-tiefe/batch')).toHaveLength(1);
-  });
-
-  it('pins nothing for a session that recorded no geology', async () => {
-    apiFn.mockImplementation(fakePlatform());
-
-    const { sessionId } = seedLongSession();   // telemetry only
-    await recording.uploadSession(sessionId);
-
-    expect(callsTo('/api/v1/sensor-float/s-tiefe/batch')).toHaveLength(0);
-  });
-
-  it('does not complete the element when the pinned readings fail', async () => {
-    // A geology profile the platform cannot reassemble is the same loss as one
-    // that never uploaded, so this failure has to hold the element open.
-    apiFn.mockImplementation((path: string, opts?: { rawBody?: string }) => {
-      if (path.includes('/resolve')) return Promise.resolve(DEVICE);
-      if (path.includes('/readings/batch/csv')) {
-        return Promise.resolve({
-          success: true,
-          rows_processed: (opts?.rawBody ?? '').trimEnd().split('\n').length - 1,
-          failed_count: 0,
-        });
-      }
-      if (path.includes('/sensor-float/s-tiefe/batch')) {
-        const err = new Error('Implenia API 502: bad gateway') as Error & { statusCode: number };
-        err.statusCode = 502;
-        return Promise.reject(err);
-      }
-      return Promise.resolve({});
-    });
-
-    const { sessionId } = seedSession();
-    const result = await recording.uploadSession(sessionId);
-
-    expect(result.status).toBe('partial');
-    const completion = callsTo('/readings/batch')
-      .filter(([path]: [string]) => !String(path).endsWith('/csv'))
-      .filter(([path]: [string]) => !String(path).includes('/sensor-'));
-    expect(completion).toHaveLength(0);
   });
 
   it('marks every reading it reduced away as uploaded', async () => {

@@ -15,3 +15,4 @@ Reserve 3,Double,,mqtt,,secondary
 Reserve 4,Double,,mqtt,,secondary
 Reserve 5,Text,,mqtt,mode,hero
 Kommentar,Text,,user,,
+Geologieprofil,Text,,kiosk,geology_profile,

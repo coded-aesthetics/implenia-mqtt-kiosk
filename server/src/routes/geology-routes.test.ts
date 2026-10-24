@@ -31,14 +31,12 @@ let meta: typeof import('../sensor-meta.js');
 let recording: typeof import('../recording.js');
 
 const DEPTH_ID = 'sensor-tiefe';
-const NR_ID = 'sensor-geodin';
-const TEXT_ID = 'sensor-geologie';
+const PROFIL_ID = 'sensor-geologieprofil';
 
 /** DSV's roles: depth is `Tiefe` here, which is why nothing resolves by name. */
 const SENSOR_MAP = JSON.stringify({
   tiefe: { sensorId: DEPTH_ID, sensorType: 'float' },
-  geodin: { sensorId: NR_ID, sensorType: 'int' },
-  geologie: { sensorId: TEXT_ID, sensorType: 'string' },
+  geologieprofil: { sensorId: PROFIL_ID, sensorType: 'string' },
 });
 
 const T0 = 1_700_000_000_000;
@@ -90,8 +88,22 @@ function activeDrilledSession(to = 6): number {
   return id;
 }
 
+/**
+ * The ground types on record for a session, shallowest first.
+ *
+ * Reads the committed profile where there is one, and the live entries where
+ * there is not — which is what "on record" means to the operator, and keeps
+ * these assertions about the route's behaviour rather than its storage.
+ */
 function geoDin(id: number): number[] {
-  return db.getSessionSensorSeries(id, NR_ID).map((p) => Math.round(p.value));
+  const committed = db.getSessionSensorTextSeries(id, PROFIL_ID);
+  if (committed.length > 0) {
+    const profil = JSON.parse(committed[committed.length - 1].text) as {
+      layers: { nr: number }[];
+    };
+    return profil.layers.map((l) => l.nr);
+  }
+  return db.getSessionGeology(id).map((e) => e.nr);
 }
 
 describe('POST /api/recording/stop with a geology profile', () => {
@@ -127,7 +139,7 @@ describe('POST /api/recording/stop with a geology profile', () => {
     });
 
     const groups = db.getSessionUploadGroups(id);
-    expect(groups.some((g) => g.sensorId === NR_ID)).toBe(true);
+    expect(groups.some((g) => g.sensorId === PROFIL_ID)).toBe(true);
   });
 
   it('back-fills the plan when no geology is sent at all', async () => {
@@ -252,11 +264,10 @@ describe('Pausieren commits its geology like any other stop', () => {
   /*
    * A pause skips what *finishes* an element — the Ausführungsdatum, and the
    * sign-off the recording bar routes through. It must not skip the
-   * back-fill: `recordLiveLayer` writes each tap into `session_readings` as
-   * `pending`, so a session paused after one tap used to upload exactly one
-   * `GeoDIN` row. implenia-web derives layers by change detection, so that
-   * single row reads as "this ground from here to the bottom of the hole" —
-   * a partial profile reported as a complete one, in a signed document.
+   * back-fill: a session paused after one tap holds exactly one layer, and a
+   * profile is flat and gapless, so that single layer reads as "this ground
+   * from here to the bottom of the hole" — a partial profile reported as a
+   * complete one, in a signed document.
    */
   it('back-fills the plan around what the operator entered', async () => {
     const id = activeDrilledSession();
@@ -560,6 +571,43 @@ describe('POST /api/recording/geology/commit', () => {
     expect(res.statusCode).toBe(200);
     expect(geoDin(id)).toEqual([SAND, TON]);
     expect(db.getSessionById(id)?.status).toBe('ended');
+  });
+
+  it('still back-fills at the stop when the sign-off failed after a live tap', async () => {
+    // `session_geology` is a scratchpad nothing uploads, so a tap is not a
+    // profile. Counting one as "geology on record" had the stop trust the mark,
+    // skip its own back-fill, and upload the element with no geology at all —
+    // and an operator who signs off has usually tapped something, so that was
+    // the common case rather than the rare one.
+    const id = activeDrilledSession();
+    db.setElementVorgaben('P-01', {
+      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': TON },
+      float_sensors: { 'Tiefe Geologie 1': 2, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
+    });
+    await app.inject({
+      method: 'POST', url: '/api/recording/geology', payload: { nr: SAND },
+    });
+
+    const geology = await import('../geology.js');
+    const spy = vi.spyOn(geology, 'commitGeology').mockImplementation(() => {
+      throw new Error('SQLITE_FULL: database or disk is full');
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/recording/geology/commit',
+      payload: { geology: [{ tiefe: 0, nr: SAND, quelle: 'ist' }] },
+    });
+    expect(db.getSessionById(id)!.geology_confirmed_at).toBeGreaterThan(0);
+    expect(db.getSessionSensorTextSeries(id, PROFIL_ID)).toEqual([]);
+    spy.mockRestore();
+
+    const res = await app.inject({ method: 'POST', url: '/api/recording/stop' });
+    expect(res.statusCode).toBe(200);
+    // A profile reached `session_readings`, which is the only thing that
+    // uploads. Asserted on the committed value rather than through `geoDin`,
+    // which falls back to the live entries and would pass on the tap alone.
+    expect(db.getSessionSensorTextSeries(id, PROFIL_ID)).toHaveLength(1);
+    expect(geoDin(id)).toContain(TON);
   });
 
   it('still back-fills at the stop when the sign-off never happened', async () => {

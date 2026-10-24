@@ -2,9 +2,9 @@ import { fetchImplenia, type ApiError } from './implenia-api.js';
 import { resolveHerstellenSensors, type SensorDefs } from './herstellen-sensors.js';
 import { getReductionConfig, holdMsFor } from './reduction-config.js';
 import {
-  ALIGNMENT_ANCHOR_ROLES, ANCHORED_ROLE, csvChunkProblem, pinAnchorReadings, planCsvUpload,
+  csvChunkProblem, planCsvUpload,
   type CsvBatchResponse, type CsvChunk, type CsvChunkProblem, type CsvUploadPlan,
-  type PinnedBatch, type UploadSensorMeta,
+  type UploadSensorMeta,
 } from './csv-upload.js';
 import { isElementNotResolvable, withElementDevice } from './element-device.js';
 import { ingestion, isOperatingMode, type OperatingMode, type SensorMapEntry } from './ingestion.js';
@@ -25,7 +25,6 @@ import {
   getSessionById,
   getSessionUploadGroups,
   getSessionReadingCount,
-  getSessionSensorSeries,
   getSessionStats,
   getSessions,
   insertSessionReading,
@@ -226,13 +225,13 @@ export async function beginRecording(
      * counts as drilling data — `session_readings.phase` is only ever `bohren`
      * or `rohrwechsel`, never the operating mode — so `drilledDepth` is the
      * whole hole, `commitDefaultGeology` at the stop finds `gebohrt`, and the
-     * element gets a second, entirely back-filled Schichtauftrag profile dated
-     * against the retraction, over the one the drilling session signed off.
-     * `alignBoundaries` catches a *pure* retraction, every boundary being
-     * shallower than the first reading and going to `aboveHole`, which is why
-     * this looks harmless; one reading before the rig starts pulling is enough
-     * to defeat that and write the fabricated layers. It uploads cleanly, into
-     * a Herstellprotokoll that is signed and archived.
+     * element gets a second, entirely back-filled Schichtauftrag profile over
+     * the one the drilling session signed off — and because the profile is one
+     * value at a sentinel instant, that is a replacement rather than an extra
+     * series nobody reads. It uploads cleanly, into a Herstellprotokoll that is
+     * signed and archived. Nothing else guards it: the depth → timestamp
+     * alignment that used to drop such boundaries for being shallower than the
+     * session's first reading is gone with the series shape.
      *
      * Stamped at the session's own start, which leaves the window empty: this
      * session drilled nothing, `gebohrt` is false, and nothing is committed. A
@@ -602,52 +601,6 @@ async function uploadCsvChunks(
   return { fallback: false };
 }
 
-/**
- * The depth readings this session's geology boundaries are dated at.
- *
- * Both sensors are resolved by **role from the session's own map**, never by
- * name: the depth sensor is `Bohrtiefe` for Injektionsbohren and Ankerbohren
- * but `Tiefe` for DSV, and a session keeps the roles it started with. A
- * Verfahren with no geology sensor, or a pillar where none was recorded, yields
- * nothing and the depth series is simply gridded like any other.
- */
-function anchorBatch(
-  sessionId: number,
-  sensorMeta: Map<string, UploadSensorMeta>,
-): PinnedBatch | null {
-  let anchorId: string | null = null;
-  let depthId: string | null = null;
-  let depth: UploadSensorMeta | undefined;
-  // First match wins for each role, which is what `sensorNameByRole` does. A
-  // map carrying one role twice is legal — the shipped CSVs do it for `gear`
-  // and `torque` — and the two have to agree: `geology.ts` dates its boundaries
-  // against the sensor `sensorNameByRole` picked, so pinning the *other* one
-  // would thin the series those boundaries point at and lose every layer.
-  for (const [sensorId, meta] of sensorMeta) {
-    if (meta.role === ANCHORED_ROLE) {
-      anchorId ??= sensorId;
-    } else if (meta.role && ALIGNMENT_ANCHOR_ROLES.has(meta.role) && !depthId) {
-      depthId = sensorId;
-      depth = meta;
-    }
-  }
-  if (!anchorId || !depthId || !depth?.name) return null;
-
-  const instants = getSessionSensorSeries(sessionId, anchorId).map((p) => p.receivedAt);
-  // Nothing to anchor, so don't read the depth series at all: DSV declares
-  // `GeoDIN` with no consumer today, and on a session that recorded none this
-  // would otherwise load and discard the largest channel in the recording —
-  // 26 699 rows on the captured session, on a 4 GB machine, at upload time.
-  if (instants.length === 0) return null;
-
-  return pinAnchorReadings(instants, {
-    sensorId: depthId,
-    sensorType: depth.type ?? 'float',
-    name: depth.name,
-    readings: getSessionSensorSeries(sessionId, depthId),
-  });
-}
-
 async function runUpload(
   sessionId: number,
   onProgress?: (progress: UploadProgress) => void,
@@ -736,20 +689,10 @@ async function runUpload(
   // same readings would be redundant work that still counts in `sensorsTotal`,
   // so a transient failure of it alone would hold the element open and offer
   // the operator a retry for an upload in which every reading had landed.
-  const griddedNames = new Set(plan?.gridded ?? []);
-  let pinned: PinnedBatch | null = plan ? anchorBatch(sessionId, sensorMeta) : null;
-  if (pinned && !griddedNames.has(pinned.name)) pinned = null;
-  if (pinned) {
-    log.info(
-      'Session %d: pinning %d %s reading(s) at geology instants alongside the grid',
-      sessionId, pinned.readings.length, pinned.name,
-    );
-  }
-
   let chunks = plan?.chunks ?? [];
   let perSensorGroups = plan ? plan.leftovers : groups;
 
-  let sensorsTotal = chunks.length + perSensorGroups.length + (pinned ? 1 : 0);
+  let sensorsTotal = chunks.length + perSensorGroups.length;
   let sensorsCompleted = 0;
   let sensorsFailed = 0;
   let unit: UploadProgress['unit'] = chunks.length > 0 ? 'paket' : 'sensor';
@@ -778,41 +721,10 @@ async function runUpload(
       );
       chunks = [];
       perSensorGroups = groups;
-      // Nothing was gridded, so nothing needs pinning back in.
-      pinned = null;
       sensorsTotal = groups.length;
       sensorsCompleted = 0;
       sensorsFailed = 0;
       unit = 'sensor';
-    }
-  }
-
-  if (pinned) {
-    report(pinned.name);
-    try {
-      await fetchImplenia(
-        `/api/v1/sensor-${pinned.sensorType}/${pinned.sensorId}/batch`,
-        {
-          method: 'POST',
-          body: {
-            readings: pinned.readings.map((r) => ({
-              date: new Date(r.receivedAt).toISOString(),
-              value: r.value,
-            })),
-          },
-        },
-      );
-      sensorsCompleted++;
-    } catch (err) {
-      // No reading ids to mark — the chunk that gridded them owns those. What
-      // this failure must do is keep the session off `uploaded`, so the element
-      // is not completed on a geology profile nothing can reassemble, and the
-      // recording bar offers the retry that runs this again.
-      sensorsFailed++;
-      log.error(
-        'Pinning %d %s reading(s) at geology instants failed for session %d: %s',
-        pinned.readings.length, pinned.name, sessionId, (err as Error).message,
-      );
     }
   }
 

@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { DataSource, SensorReading } from './data-source.js';
 import {
   insertBuffer, pruneBuffer, insertSessionReading, getDrillState, setDrillState,
-  getOperatingMode, setOperatingModeRow, clearSessionReadings,
+  getOperatingMode, setOperatingModeRow, clearSessionReadings, clearSessionGeology,
   createSession, endSession, getActiveSession, getLatestSessionReadings,
 } from './db.js';
 import { parsePayload } from './parse-payload.js';
@@ -554,6 +554,28 @@ export class DataIngestion extends EventEmitter {
    * is the only reader.
    */
   private recordStatusReading(session: ActiveSession): void {
+    /*
+     * Resolved by *name*, not by the `mode` role — the one deliberate
+     * exception to "resolve by role" (CLAUDE.md, "Sensor roles are pinned to
+     * the session"), because on two of the three Verfahren that role names a
+     * channel somebody else already writes.
+     *
+     * Only Injektionsbohren has a sensor called `Status`, and there the kiosk
+     * is its only writer (`Quelle=user`). DSV's `mode` sits on
+     * `Bohren/Düsen`, which arrives as machine telemetry through the topic
+     * resolver. Ankerbohren's sits on `Reserve 5` — a `Text` reserve channel
+     * the rig publishes, and the one implenia-web reads as the process
+     * stages: `getHerstellungsdatenProtocolData` counts its distinct values
+     * as *Anzahl Vorgänge* and groups the suspension consumption by its state
+     * transitions. A role lookup here would write a phase number into that
+     * channel four times a session, inventing Vorgänge and splitting the
+     * stufen on a protocol nothing here is meant to touch.
+     *
+     * So Ankerbohren reports no phase to the platform, and that costs
+     * nothing: its protocol reads the rig's own value, and the kiosk's phases
+     * are internal state — `operating_mode`, `drilling_ended_at` and the
+     * geology sign-off behave identically for every Verfahren.
+     */
     const mapping = session.sensorMap.get('status');
     if (!mapping) return;
     const STATUS_MAP: Record<OperatingMode, number> = {
@@ -712,6 +734,11 @@ export class DataIngestion extends EventEmitter {
   resetForSeek(): void {
     if (this.activeSession) {
       clearSessionReadings(this.activeSession.id);
+      // The live geology goes with them. It used to *be* session readings, so
+      // it was cleared here for free; left behind it is a set of layers at
+      // depths the rebuilt run has not reached, committed at the stop against
+      // a hole that no longer has them.
+      clearSessionGeology(this.activeSession.id);
       this.activeSession.drill = initialDrillState();
       this.activeSession.volumeTracker.reset();
       this.lastReadings.clear();

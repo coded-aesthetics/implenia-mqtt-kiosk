@@ -3,12 +3,16 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 /**
  * The geology write path, end to end against real SQLite.
  *
- * What these pin is the millisecond alignment: every `GeoDIN` reading must sit
- * on the exact `received_at` of a recorded depth reading, because implenia-web
- * joins the two by millisecond equality and silently produces no layer
- * otherwise. The round-trip assertions read the committed readings back through
- * the same change detection web uses, so a regression shows up as a missing
- * layer rather than as a passing test.
+ * What these pin is that **a layer carries its own depth**. The profile is one
+ * JSON value at a sentinel instant, so the assertions parse that value back
+ * and check depths and provenance directly.
+ *
+ * The suite this replaced pinned a millisecond alignment instead: every
+ * `GeoDIN` reading had to sit on the exact `received_at` of a recorded depth
+ * reading, because implenia-web recovered each layer's depth by joining the two
+ * series on millisecond equality and silently produced no layer otherwise. That
+ * is the whole class of failure this change removes, so the tests for it are
+ * gone rather than ported.
  */
 
 vi.mock('./implenia-api.js', () => ({
@@ -20,11 +24,10 @@ vi.mock('./herstellen-sensors.js', () => ({
   fetchHerstellenSensors: vi.fn(),
 }));
 
-/** Injektionsbohren's roles: depth is `Bohrtiefe`, which is also what web reads. */
+/** Injektionsbohren's roles: depth is `Bohrtiefe`. */
 let roles: Record<string, string | null> = {
   depth: 'Bohrtiefe',
-  geology_nr: 'GeoDIN',
-  geology_text: 'Geologie',
+  geology_profile: 'Geologieprofil',
 };
 
 vi.mock('./sensor-meta.js', () => ({
@@ -33,16 +36,13 @@ vi.mock('./sensor-meta.js', () => ({
 
 let db: typeof import('./db.js');
 let geology: typeof import('./geology.js');
-let depthTimestamp: typeof import('./depth-timestamp.js');
 
 const DEPTH_ID = 'sensor-bohrtiefe';
-const NR_ID = 'sensor-geodin';
-const TEXT_ID = 'sensor-geologie';
+const PROFIL_ID = 'sensor-geologieprofil';
 
 const SENSOR_MAP = JSON.stringify({
   bohrtiefe: { sensorId: DEPTH_ID, sensorType: 'float' },
-  geodin: { sensorId: NR_ID, sensorType: 'int' },
-  geologie: { sensorId: TEXT_ID, sensorType: 'string' },
+  geologieprofil: { sensorId: PROFIL_ID, sensorType: 'string' },
 });
 
 const T0 = 1_700_000_000_000;
@@ -54,7 +54,6 @@ const BETON = 60;
 beforeAll(async () => {
   db = await import('./db.js');
   geology = await import('./geology.js');
-  depthTimestamp = await import('./depth-timestamp.js');
 
   // Required by CLAUDE.md: this suite deletes rows (commitGeology replaces a
   // previous commit), and a reset test once wiped a developer's real kiosk.db.
@@ -64,12 +63,15 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  roles = { depth: 'Bohrtiefe', geology_nr: 'GeoDIN', geology_text: 'Geologie' };
+  roles = { depth: 'Bohrtiefe', geology_profile: 'Geologieprofil' };
 });
 
 /** A session with a depth series descending `from` → `to` at 0.5 m per second. */
-function drilledSession(from = 0, to = 6, step = 0.5): { id: number; session: import('./db.js').Session } {
-  const id = db.createSession(`E-${Math.random().toString(36).slice(2, 8)}`, SENSOR_MAP);
+function drilledSession(
+  from = 0, to = 6, step = 0.5,
+  element = `E-${Math.random().toString(36).slice(2, 8)}`,
+): { id: number; session: import('./db.js').Session } {
+  const id = db.createSession(element, SENSOR_MAP);
   let i = 0;
   for (let d = from; d <= to + 1e-9; d += step) {
     db.insertSessionReading(
@@ -81,145 +83,150 @@ function drilledSession(from = 0, to = 6, step = 0.5): { id: number; session: im
   return { id, session: db.getSessionById(id)! };
 }
 
-/** The committed GeoDIN readings, oldest first. */
-function geoDinRows(id: number): { receivedAt: number; nr: number }[] {
-  return db.getSessionSensorSeries(id, NR_ID)
-    .map((p) => ({ receivedAt: p.receivedAt, nr: Math.round(p.value) }));
+interface WireLayer { t: number; nr: number; name?: string; q?: string }
+
+/** Every committed profile value of a session, oldest first. */
+function profileValues(id: number): { end: number; layers: WireLayer[] }[] {
+  return db.getSessionSensorTextSeries(id, PROFIL_ID)
+    .map((r) => JSON.parse(r.text) as { end: number; layers: WireLayer[] });
 }
 
-/**
- * Layers without the reading each was detected at — see `observedLayers`,
- * which carries it so provenance can be looked up in the `Geologie` text.
- */
-function ohneZeit(
-  layers: readonly { receivedAt: number; tiefe: number; nr: number }[],
-): { tiefe: number; nr: number }[] {
-  return layers.map(({ tiefe, nr }) => ({ tiefe, nr }));
+/** The one committed profile, or null if none was written. */
+function profile(id: number): { end: number; layers: WireLayer[] } | null {
+  const all = profileValues(id);
+  expect(all.length).toBeLessThanOrEqual(1);
+  return all[0] ?? null;
 }
 
-/** The committed Geologie texts, in the order they were written. */
-function geologieTexts(id: number): string[] {
-  return db.getSessionReadingsDetailed(id, 500)
-    .filter((r) => r.topic === 'Geologie')
-    .sort((a, b) => a.receivedAt - b.receivedAt)
-    .map((r) => r.valueText ?? '');
+/** The committed layers as `{tiefe, nr}`, which is what the merge works in. */
+function layers(id: number): { tiefe: number; nr: number }[] {
+  return (profile(id)?.layers ?? []).map((l) => ({ tiefe: l.t, nr: l.nr }));
 }
 
 describe('commitGeology', () => {
-  it('dates every reading on an existing depth reading', () => {
+  it('writes one profile value at the sentinel instant', () => {
+    // One overwritable slot, not a series: inserts upsert on
+    // `(sensor_id, date)`, which is what makes a re-commit a replacement.
+    const { id, session } = drilledSession(0, 6);
+    geology.commitGeology(session, [{ tiefe: 0, nr: SAND }, { tiefe: 2, nr: TON }]);
+
+    const rows = db.getSessionSensorTextSeries(id, PROFIL_ID);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].receivedAt).toBe(geology.PROFILE_SENTINEL_AT);
+    expect(new Date(rows[0].receivedAt).toISOString()).toBe('2000-01-01T00:00:00.000Z');
+  });
+
+  it('states each layer\'s own depth, needing no reading to sit on', () => {
+    const { id, session } = drilledSession(0, 6);
+    const result = geology.commitGeology(session, [
+      { tiefe: 0, nr: SAND }, { tiefe: 2.37, nr: SCHLUFF }, { tiefe: 4, nr: TON },
+    ]);
+
+    expect(result.geschrieben).toBe(3);
+    // 2.37 m falls between two 0.5 m readings. The old shape had to move the
+    // boundary onto one of them; here the depth is simply the depth.
+    expect(layers(id)).toEqual([
+      { tiefe: 0, nr: SAND }, { tiefe: 2.37, nr: SCHLUFF }, { tiefe: 4, nr: TON },
+    ]);
+  });
+
+  it('carries the bottom of the profile, which is not recoverable downstream', () => {
+    const { id, session } = drilledSession(0, 6);
+    geology.commitGeology(session, [{ tiefe: 0, nr: SAND }]);
+    expect(profile(id)!.end).toBeCloseTo(6);
+  });
+
+  it('bottoms the profile on the plan when the hole stopped short of it', () => {
+    const { id, session } = drilledSession(0, 4);
+    db.setElementVorgaben(session.element_name, {
+      int_sensors: { 'Geologie 1': SAND },
+      float_sensors: { 'Tiefe Geologie 1': 3, 'Säulenhöhe': 9 },
+    });
+    geology.commitGeology(db.getSessionById(session.id)!, [{ tiefe: 0, nr: SAND }]);
+    // A reader recomputing this from the readings would answer 4.
+    expect(profile(id)!.end).toBeCloseTo(9);
+  });
+
+  it('writes the ground type name as a label beside the number', () => {
+    const { id, session } = drilledSession(0, 6);
+    geology.commitGeology(session, [{ tiefe: 0, nr: BETON }]);
+    expect(profile(id)!.layers[0]).toMatchObject({ nr: BETON, name: 'Hindernis Beton' });
+  });
+
+  it('marks a back-filled boundary with q, and leaves an observed one unmarked', () => {
     const { id, session } = drilledSession(0, 6);
     geology.commitGeology(session, [
-      { tiefe: 0, nr: SAND }, { tiefe: 2.5, nr: SCHLUFF }, { tiefe: 4, nr: TON },
+      { tiefe: 0, nr: SAND, quelle: 'vorgabe' },
+      { tiefe: 3, nr: TON, quelle: 'ist' },
     ]);
-
-    const depthStamps = new Set(db.getSessionDepthSamples(id, DEPTH_ID).map((s) => s.receivedAt));
-    const rows = geoDinRows(id);
-    expect(rows).toHaveLength(3);
-    for (const r of rows) expect(depthStamps.has(r.receivedAt)).toBe(true);
-  });
-
-  it('round-trips the profile through the change detection web uses', () => {
-    const { id, session } = drilledSession(0, 10);
-    geology.commitGeology(session, [
-      { tiefe: 0, nr: SAND }, { tiefe: 2.5, nr: SCHLUFF },
-      { tiefe: 4, nr: BETON }, { tiefe: 4.5, nr: SCHLUFF }, { tiefe: 7, nr: TON },
-    ]);
-
-    const samples = db.getSessionDepthSamples(id, DEPTH_ID)
-      .map((p) => ({ receivedAt: p.receivedAt, depth: p.value }));
-    const { observedLayers } = depthTimestamp;
-    expect(ohneZeit(observedLayers(samples, geoDinRows(id)))).toEqual([
-      { tiefe: 0, nr: SAND },
-      { tiefe: 2.5, nr: SCHLUFF },
-      { tiefe: 4, nr: BETON },
-      { tiefe: 4.5, nr: SCHLUFF },
-      { tiefe: 7, nr: TON },
-    ]);
-  });
-
-  it('writes the ground type name into the text series', () => {
-    const { id, session } = drilledSession(0, 4);
-    geology.commitGeology(session, [
-      { tiefe: 0, nr: SAND, name: 'Sand', quelle: 'ist' },
-      { tiefe: 2, nr: SCHLUFF, name: 'Schluff', quelle: 'ist' },
-    ]);
-    expect(geologieTexts(id)).toEqual(['Sand', 'Schluff']);
-  });
-
-  it('marks a back-filled boundary in the text, not in GeoDIN', () => {
-    const { id, session } = drilledSession(0, 4);
-    geology.commitGeology(session, [
-      { tiefe: 0, nr: SAND, name: 'Sand', quelle: 'ist' },
-      { tiefe: 2, nr: SCHLUFF, name: 'Schluff', quelle: 'vorgabe' },
-    ]);
-    expect(geologieTexts(id)).toEqual(['Sand', 'Schluff (Vorgabe)']);
-    // GeoDIN stays a clean number series — provenance must not reach it.
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([SAND, SCHLUFF]);
-  });
-
-  it('names the ground type itself when the caller gives no name', () => {
-    // The DIN tables come from the din4023 package, so a profile reads the same
-    // however the recording was stopped.
-    const { id, session } = drilledSession(0, 2);
-    geology.commitGeology(session, [{ tiefe: 0, nr: SAND }]);
-    expect(geologieTexts(id)).toEqual(['Sand']);
+    const l = profile(id)!.layers;
+    expect(l[0].q).toBe('vorgabe');
+    expect(l[1].q).toBeUndefined();
   });
 
   it('falls back to the bare number for a code outside the DIN tables', () => {
-    const { id, session } = drilledSession(0, 2);
-    geology.commitGeology(session, [{ tiefe: 0, nr: 999 }]);
-    expect(geologieTexts(id)).toEqual(['GeoDIN 999']);
+    const { id, session } = drilledSession(0, 6);
+    geology.commitGeology(session, [{ tiefe: 0, nr: 9999 }]);
+    expect(profile(id)!.layers[0].name).toBe('GeoDIN 9999');
   });
 
   it('lets a caller override the name with its own description', () => {
-    const { id, session } = drilledSession(0, 2);
-    geology.commitGeology(session, [{ tiefe: 0, nr: SAND, name: 'Feinsand, humos' }]);
-    expect(geologieTexts(id)).toEqual(['Feinsand, humos']);
+    const { id, session } = drilledSession(0, 6);
+    geology.commitGeology(session, [{ tiefe: 0, nr: SAND, name: 'Sand, stark kiesig' }]);
+    expect(profile(id)!.layers[0]).toMatchObject({ nr: SAND, name: 'Sand, stark kiesig' });
   });
 
   it('replaces an earlier commit instead of stacking a second profile', () => {
     const { id, session } = drilledSession(0, 6);
-    geology.commitGeology(session, [
-      { tiefe: 0, nr: SAND }, { tiefe: 2, nr: SCHLUFF },
-    ]);
-    const second = geology.commitGeology(session, [
-      { tiefe: 0, nr: SAND }, { tiefe: 3, nr: TON },
-    ]);
+    geology.commitGeology(session, [{ tiefe: 0, nr: SAND }, { tiefe: 2, nr: SCHLUFF }]);
+    const result = geology.commitGeology(session, [{ tiefe: 0, nr: TON }]);
 
-    expect(second.ersetzt).toBe(4); // 2 GeoDIN + 2 Geologie
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([SAND, TON]);
-    expect(geologieTexts(id)).toHaveLength(2);
+    expect(result.ersetzt).toBe(1);
+    expect(profileValues(id)).toHaveLength(1);
+    expect(layers(id)).toEqual([{ tiefe: 0, nr: TON }]);
   });
 
   it('never removes a reading already uploaded', () => {
     // Not a flow the UI can reach — geology is committed at stop, before any
     // upload — but the guard protects platform data, so it is worth pinning.
     const { id, session } = drilledSession(0, 6);
-    geology.commitGeology(session, [{ tiefe: 0, nr: SAND }, { tiefe: 2, nr: SCHLUFF }]);
+    geology.commitGeology(session, [{ tiefe: 0, nr: SAND }]);
 
     const ids = db.getSessionUploadGroups(id)
-      .filter((g) => g.sensorId === NR_ID)
+      .filter((g) => g.sensorId === PROFIL_ID)
       .flatMap((g) => g.readings.map((r) => r.id));
     db.markSessionReadingsUploaded(ids);
 
     const result = geology.commitGeology(session, [{ tiefe: 0, nr: TON }]);
-    expect(result.ersetzt).toBe(2); // only the two pending Geologie texts
-    // Both uploaded GeoDIN readings are still there, with the new one added.
-    const nrs = geoDinRows(id).map((r) => r.nr);
-    expect(nrs).toHaveLength(3);
-    expect(nrs).toContain(SAND);
-    expect(nrs).toContain(SCHLUFF);
-    expect(nrs).toContain(TON);
+    expect(result.ersetzt).toBe(0);
+    // The uploaded value is still there, with the new one beside it.
+    expect(profileValues(id)).toHaveLength(2);
   });
 
-  it('drops a boundary below the bottom of the hole', () => {
+  it('drops a layer below anything drilled or planned', () => {
+    // Validation now rather than data loss: there is no reading it failed to
+    // find. But keeping it would push `end` past the hole and report ground
+    // the drill never reached.
     const { id, session } = drilledSession(0, 5);
     const result = geology.commitGeology(session, [
       { tiefe: 0, nr: SAND }, { tiefe: 2, nr: SCHLUFF }, { tiefe: 9, nr: TON },
     ]);
     expect(result.zuTief).toEqual([9]);
     expect(result.geschrieben).toBe(2);
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([SAND, SCHLUFF]);
+    expect(layers(id).map((l) => l.nr)).toEqual([SAND, SCHLUFF]);
+  });
+
+  it('keeps a planned layer below the deepest reading when the plan goes deeper', () => {
+    const { id, session } = drilledSession(0, 4);
+    db.setElementVorgaben(session.element_name, {
+      int_sensors: { 'Geologie 1': SAND },
+      float_sensors: { 'Tiefe Geologie 1': 3, 'Säulenhöhe': 9 },
+    });
+    const result = geology.commitGeology(db.getSessionById(session.id)!, [
+      { tiefe: 0, nr: SAND }, { tiefe: 7, nr: TON },
+    ]);
+    expect(result.zuTief).toEqual([]);
+    expect(layers(id).map((l) => l.nr)).toEqual([SAND, TON]);
   });
 
   it('ignores depth readings recorded during a Rohrwechsel', () => {
@@ -231,12 +238,13 @@ describe('commitGeology', () => {
       id, 'rig/depth', DEPTH_ID, 'float', 9, null,
       { receivedAt: T0 + 2000, phase: 'rohrwechsel' },
     );
-    const session = db.getSessionById(id)!;
 
-    const result = geology.commitGeology(session, [{ tiefe: 0, nr: SAND }, { tiefe: 5, nr: TON }]);
-    // 5 m is below the real hole, so it is dropped — not dated at the phantom.
+    const result = geology.commitGeology(db.getSessionById(id)!, [
+      { tiefe: 0, nr: SAND }, { tiefe: 5, nr: TON },
+    ]);
+    // 5 m is below the real hole, so the phantom must not vouch for it.
     expect(result.zuTief).toEqual([5]);
-    expect(geoDinRows(id)).toHaveLength(1);
+    expect(layers(id)).toHaveLength(1);
   });
 
   it('ignores clipped depth readings', () => {
@@ -247,87 +255,96 @@ describe('commitGeology', () => {
       id, 'rig/depth', DEPTH_ID, 'float', 8, null,
       { receivedAt: T0 + 2000, clipped: true },
     );
-    const session = db.getSessionById(id)!;
 
-    expect(geology.commitGeology(session, [{ tiefe: 6, nr: TON }]).zuTief).toEqual([6]);
+    expect(geology.commitGeology(db.getSessionById(id)!, [{ tiefe: 6, nr: TON }]).zuTief)
+      .toEqual([6]);
   });
 
-  it('writes nothing and explains itself when the session has no depth readings', () => {
+  it('writes nothing it cannot bound, and explains itself', () => {
     const id = db.createSession('E-leer', SENSOR_MAP);
-    const result = geology.commitGeology(db.getSessionById(id)!, [{ tiefe: 0, nr: SAND }]);
+    const result = geology.commitGeology(db.getSessionById(id)!, [{ tiefe: 4, nr: SAND }]);
     expect(result.geschrieben).toBe(0);
-    expect(result.hinweis).toContain('Tiefenmesswerte');
-    expect(geoDinRows(id)).toEqual([]);
+    expect(result.hinweis).toBeDefined();
+    expect(profile(id)).toBeNull();
   });
 
-  it('writes nothing when the session has no GeoDIN sensor', () => {
-    const id = db.createSession('E-nogeo', JSON.stringify({
+  it('writes nothing when the session has no profile sensor', () => {
+    const id = db.createSession('E-nop', JSON.stringify({
       bohrtiefe: { sensorId: DEPTH_ID, sensorType: 'float' },
     }));
     db.insertSessionReading(id, 'rig/depth', DEPTH_ID, 'float', 1, null, { receivedAt: T0 });
 
     const result = geology.commitGeology(db.getSessionById(id)!, [{ tiefe: 0, nr: SAND }]);
     expect(result.geschrieben).toBe(0);
-    expect(result.hinweis).toContain('GeoDIN');
-  });
-
-  it('commits GeoDIN even when the Verfahren has no text sensor', () => {
-    roles = { depth: 'Bohrtiefe', geology_nr: 'GeoDIN', geology_text: null };
-    const { id, session } = drilledSession(0, 4);
-    const result = geology.commitGeology(session, [{ tiefe: 0, nr: SAND }]);
-    expect(result.geschrieben).toBe(1);
-    expect(geologieTexts(id)).toEqual([]);
+    expect(result.hinweis).toContain('Geologieprofil');
   });
 
   it('skips layers with an invalid ground type rather than writing them', () => {
     const { id, session } = drilledSession(0, 6);
     geology.commitGeology(session, [
-      { tiefe: 0, nr: SAND },
-      { tiefe: 2, nr: 0 },
-      { tiefe: 3, nr: -1 },
-      { tiefe: 4, nr: 2.5 },
-      { tiefe: 5, nr: TON },
+      { tiefe: 0, nr: SAND }, { tiefe: 1, nr: 0 }, { tiefe: 2, nr: 1.5 },
+      { tiefe: 3, nr: NaN }, { tiefe: 4, nr: TON },
     ]);
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([SAND, TON]);
+    expect(layers(id)).toEqual([{ tiefe: 0, nr: SAND }, { tiefe: 4, nr: TON }]);
   });
 
-  it('sorts an unsorted profile before aligning it', () => {
+  it('sorts an unsorted profile', () => {
     const { id, session } = drilledSession(0, 6);
     geology.commitGeology(session, [
       { tiefe: 4, nr: TON }, { tiefe: 0, nr: SAND }, { tiefe: 2, nr: SCHLUFF },
     ]);
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([SAND, SCHLUFF, TON]);
+    expect(layers(id).map((l) => l.tiefe)).toEqual([0, 2, 4]);
   });
 
-  it('keeps GeoDIN and Geologie on the same instant', () => {
-    const { id, session } = drilledSession(0, 4);
+  it('is valid JSON an implenia-web reader can parse', () => {
+    const { id, session } = drilledSession(0, 6);
     geology.commitGeology(session, [
-      { tiefe: 0, nr: SAND, name: 'Sand' }, { tiefe: 2, nr: TON, name: 'Ton' },
+      { tiefe: 0, nr: SAND }, { tiefe: 2, nr: BETON, quelle: 'vorgabe' },
     ]);
-    const nrStamps = geoDinRows(id).map((r) => r.receivedAt);
-    const textStamps = db.getSessionReadingsDetailed(id, 500)
-      .filter((r) => r.topic === 'Geologie')
-      .map((r) => r.receivedAt)
-      .sort((a, b) => a - b);
-    expect(textStamps).toEqual(nrStamps);
+    const raw = db.getSessionSensorTextSeries(id, PROFIL_ID)[0].text;
+    const parsed = JSON.parse(raw);
+    expect(Object.keys(parsed).sort()).toEqual(['end', 'layers']);
+    expect(parsed.layers[0]).toEqual({ t: 0, nr: SAND, name: 'Sand' });
+    expect(parsed.layers[1]).toEqual({
+      t: 2, nr: BETON, name: 'Hindernis Beton', q: 'vorgabe',
+    });
   });
 });
 
 describe('recordLiveLayer', () => {
-  it('dates the reading at the latest depth reading and reports its depth', () => {
+  it('stores the depth the rig was at, and reports it back', () => {
     const { id, session } = drilledSession(0, 3);
-    const result = geology.recordLiveLayer(session, SCHLUFF, 'Schluff');
+    const result = geology.recordLiveLayer(session, SAND);
+
     expect(result).toEqual({ tiefe: 3, receivedAt: T0 + 6000 });
-    expect(geoDinRows(id)).toEqual([{ receivedAt: T0 + 6000, nr: SCHLUFF }]);
-    expect(geologieTexts(id)).toEqual(['Schluff']);
+    expect(db.getSessionGeology(id)).toEqual([
+      { depth: 3, nr: SAND, text: null, observedAt: expect.any(Number) },
+    ]);
   });
 
   it('is readable back as a layer at that depth', () => {
+    const { session } = drilledSession(0, 4);
+    geology.recordLiveLayer(session, SAND);
+    expect(geology.getGeologyContext(session).beobachtet)
+      .toEqual([{ tiefe: 4, nr: SAND }]);
+  });
+
+  it('keeps the operator\'s own description', () => {
+    const { id, session } = drilledSession(0, 2);
+    geology.recordLiveLayer(session, SAND, 'Sand, stark kiesig');
+    expect(db.getSessionGeology(id)[0].text).toBe('Sand, stark kiesig');
+  });
+
+  it('replaces an earlier entry at the same depth', () => {
+    // The depth stands still for the whole of a Rohrverlängerung, so every tap
+    // lands on one value. Two ground types at one depth is not a profile — the
+    // second tap is a correction.
     const { id, session } = drilledSession(0, 3);
-    geology.recordLiveLayer(session, SAND, 'Sand');
-    const ctx = geology.getGeologyContext(session);
-    expect(ctx.beobachtet).toEqual([{ tiefe: 3, nr: SAND }]);
-    expect(geoDinRows(id)).toHaveLength(1);
+    geology.recordLiveLayer(session, SAND);
+    geology.recordLiveLayer(session, TON);
+
+    expect(db.getSessionGeology(id)).toHaveLength(1);
+    expect(db.getSessionGeology(id)[0].nr).toBe(TON);
   });
 
   it('refuses before the first depth reading, with an actionable reason', () => {
@@ -338,38 +355,36 @@ describe('recordLiveLayer', () => {
   });
 
   it('rejects an invalid ground type', () => {
-    const { session } = drilledSession(0, 2);
+    const { session } = drilledSession(0, 3);
     expect(geology.recordLiveLayer(session, 0)).toHaveProperty('fehler');
+    expect(geology.recordLiveLayer(session, -1)).toHaveProperty('fehler');
     expect(geology.recordLiveLayer(session, 1.5)).toHaveProperty('fehler');
   });
 
-  it('refuses once drilling has ended, instead of writing a layer no profile shows', () => {
-    // The browser gates the buttons and the voice commands on its own view of
-    // the mode, so a second tab still offers them. Accepting the entry here
-    // would date it on a retraction reading, outside the window every geology
-    // read is bounded by — written, answered with a depth, and in no profile.
-    const { id } = drilledSession(0, 3);
+  it('refuses once drilling has ended, instead of recording a depth nobody is at', () => {
+    // The buttons and the voice commands are gated on the browser's view of
+    // the mode, which a second tab does not share. The newest reading is a
+    // retraction reading by then, outside the window the profile is built
+    // from — so the entry would be shown as recorded and appear in nothing.
+    const { id, session } = drilledSession(0, 3);
     db.setDrillingEndedAt(id, T0 + 6000);
 
-    const result = geology.recordLiveLayer(db.getSessionById(id)!, SAND, 'Sand');
+    const result = geology.recordLiveLayer(db.getSessionById(id)!, SAND);
     expect(result).toHaveProperty('fehler');
     expect((result as { fehler: string }).fehler).toContain('Bohren');
-    expect(geoDinRows(id)).toEqual([]);
-    // Still recordable once the operator steps back into Bohren.
-    db.setDrillingEndedAt(id, null);
-    expect(geology.recordLiveLayer(db.getSessionById(id)!, SAND, 'Sand'))
-      .toEqual({ tiefe: 3, receivedAt: T0 + 6000 });
+    expect(db.getSessionGeology(id)).toEqual([]);
   });
 
   it('never lands on a Rohrwechsel reading', () => {
-    const id = db.createSession('E-live-rohr', SENSOR_MAP);
-    db.insertSessionReading(id, 'rig/depth', DEPTH_ID, 'float', 3, null, { receivedAt: T0 });
+    const id = db.createSession('E-rw', SENSOR_MAP);
+    db.insertSessionReading(id, 'rig/depth', DEPTH_ID, 'float', 2, null, { receivedAt: T0 });
     db.insertSessionReading(
-      id, 'rig/depth', DEPTH_ID, 'float', 11, null,
+      id, 'rig/depth', DEPTH_ID, 'float', 9, null,
       { receivedAt: T0 + 1000, phase: 'rohrwechsel' },
     );
+
     const result = geology.recordLiveLayer(db.getSessionById(id)!, SAND);
-    expect(result).toEqual({ tiefe: 3, receivedAt: T0 });
+    expect(result).toEqual({ tiefe: 2, receivedAt: T0 });
   });
 });
 
@@ -379,20 +394,21 @@ describe('getGeologyContext', () => {
     const ctx = geology.getGeologyContext(session);
     expect(ctx.verfuegbar).toBe(true);
     expect(ctx.gebohrt).toBe(true);
-    expect(ctx.gebohrteTiefe).toBe(6);
-    expect(ctx.maxTiefe).toBe(6);
+    expect(ctx.gebohrteTiefe).toBeCloseTo(6);
+    expect(ctx.maxTiefe).toBeCloseTo(6);
   });
 
   it('reports a session that barely moved as not drilled', () => {
-    const { session } = drilledSession(2, 2.2, 0.1);
-    const ctx = geology.getGeologyContext(session);
-    expect(ctx.gebohrt).toBe(false);
+    const { session } = drilledSession(0, 0.2, 0.1);
+    expect(geology.getGeologyContext(session).gebohrt).toBe(false);
   });
 
   it('reports a Verfahren without geology as unavailable, with no complaint', () => {
-    roles = { depth: 'Bohrtiefe', geology_nr: null, geology_text: null };
-    const { session } = drilledSession(0, 6);
-    const ctx = geology.getGeologyContext(session);
+    roles = { depth: 'Bohrtiefe', geology_profile: null };
+    const id = db.createSession('E-nogeo', JSON.stringify({
+      bohrtiefe: { sensorId: DEPTH_ID, sensorType: 'float' },
+    }));
+    const ctx = geology.getGeologyContext(db.getSessionById(id)!);
     expect(ctx.verfuegbar).toBe(false);
     expect(ctx.hinweis).toBeUndefined();
   });
@@ -403,7 +419,7 @@ describe('getGeologyContext', () => {
     }));
     const ctx = geology.getGeologyContext(db.getSessionById(id)!);
     expect(ctx.verfuegbar).toBe(false);
-    expect(ctx.hinweis).toContain('GeoDIN');
+    expect(ctx.hinweis).toContain('Geologieprofil');
   });
 
   it('serves the planned profile from the vorgaben cache', () => {
@@ -426,97 +442,231 @@ describe('getGeologyContext', () => {
     expect(ctx.verfuegbar).toBe(true);
   });
 
-  it('reads a committed profile back as the observed layers', () => {
-    const { session } = drilledSession(0, 8);
-    geology.commitGeology(session, [
-      { tiefe: 0, nr: SAND }, { tiefe: 3, nr: BETON }, { tiefe: 3.5, nr: SAND },
-    ]);
+  it('reads the live entries back as the observed layers', () => {
+    const { id, session } = drilledSession(0, 8);
+    db.insertSessionGeology(id, 0, SAND, null, T0);
+    db.insertSessionGeology(id, 3, BETON, null, T0 + 1);
+    db.insertSessionGeology(id, 3.5, SAND, null, T0 + 2);
+
     expect(geology.getGeologyContext(session).beobachtet).toEqual([
       { tiefe: 0, nr: SAND },
       { tiefe: 3, nr: BETON },
       { tiefe: 3.5, nr: SAND },
     ]);
   });
+
+  it('does not read a committed profile back as observation', () => {
+    // The commit writes the Vorgabe back-fill too. Reading the committed value
+    // back would mark the plan as something the operator saw — which is what
+    // `observedOnly` had to undo in the series shape. Here the back-fill never
+    // enters the scratchpad, so there is nothing to undo.
+    const { id, session } = drilledSession(0, 8);
+    db.insertSessionGeology(id, 3, BETON, null, T0);
+    geology.commitDefaultGeology(session);
+
+    expect(geology.getGeologyContext(db.getSessionById(id)!).beobachtet)
+      .toEqual([{ tiefe: 3, nr: BETON }]);
+  });
+
+  it('reads a sign-off edit back as observation on a re-ask', () => {
+    // The sign-off screen is the second source of observations: retyping a
+    // planned boundary, or adding one the taps missed, commits an `ist` layer
+    // that never enters `session_geology`. A step back into `bohren` clears
+    // the mark and the next step out rebuilds this context — so without
+    // reading those layers back, every correction made at the first sign-off
+    // is silently reverted to the Schichtauftrag at the second.
+    const { id, session } = drilledSession(0, 6);
+    db.setElementVorgaben(session.element_name, {
+      int_sensors: { 'Geologie 1': SAND },
+      float_sensors: { 'Tiefe Geologie 1': 6, 'Säulenhöhe': 6 },
+    });
+    geology.commitGeology(db.getSessionById(id)!, [
+      { tiefe: 0, nr: SAND, quelle: 'vorgabe' },
+      { tiefe: 3, nr: TON, quelle: 'ist' },
+    ]);
+
+    // The operator's Ton comes back; the back-filled Sand does not, because a
+    // back-filled layer is a copy of the plan and must never be reported as
+    // something somebody saw.
+    expect(geology.getGeologyContext(db.getSessionById(id)!).beobachtet)
+      .toEqual([{ tiefe: 3, nr: TON }]);
+  });
+
+  it('survives a committed profile that cannot be parsed', () => {
+    const { id, session } = drilledSession(0, 6);
+    db.insertSessionReading(
+      id, 'Geologieprofil', PROFIL_ID, 'string', null, 'nicht json',
+      { receivedAt: geology.PROFILE_SENTINEL_AT },
+    );
+    expect(geology.getGeologyContext(db.getSessionById(id)!).beobachtet).toEqual([]);
+    expect(geology.getGeologyContext(session).verfuegbar).toBe(true);
+  });
+
+  it('reports a profile the operator has signed off as bestaetigt', () => {
+    const { id, session } = drilledSession(0, 6);
+    expect(geology.getGeologyContext(session).bestaetigt).toBe(false);
+    db.setGeologyConfirmedAt(id, Date.now());
+    expect(geology.getGeologyContext(db.getSessionById(id)!).bestaetigt).toBe(true);
+  });
+});
+
+describe('an element worked over more than one session', () => {
+  /*
+   * The profile is one sentinel-dated slot per element, so a later session's
+   * commit *replaces* the earlier one's on the platform instead of adding to
+   * it. A session that reopens an element to drill deeper therefore has to
+   * carry what the earlier session observed, or its back-fill overwrites real
+   * observations with copies of the Schichtauftrag.
+   */
+  const PLAN = {
+    int_sensors: { 'Geologie 1': SAND },
+    float_sensors: { 'Tiefe Geologie 1': 12, 'Säulenhöhe': 12 },
+  };
+
+  it('carries an earlier session observation into the later session', () => {
+    const element = 'P-RESUME-1';
+    const erste = drilledSession(0, 8, 0.5, element);
+    db.setElementVorgaben(element, PLAN);
+    db.insertSessionGeology(erste.id, 3, TON, null, T0);
+    geology.commitDefaultGeology(db.getSessionById(erste.id)!);
+
+    // The element is resumed and drilled deeper. Nothing is tapped this time.
+    const zweite = drilledSession(8, 12, 0.5, element);
+
+    expect(geology.getGeologyContext(db.getSessionById(zweite.id)!).beobachtet)
+      .toEqual([{ tiefe: 3, nr: TON }]);
+  });
+
+  it('commits the earlier observation unmarked rather than as plan', () => {
+    // The payoff: the value the later session uploads — which replaces the
+    // earlier one in the sentinel slot — still reports Ton at 3 m as observed.
+    const element = 'P-RESUME-2';
+    const erste = drilledSession(0, 8, 0.5, element);
+    db.setElementVorgaben(element, PLAN);
+    db.insertSessionGeology(erste.id, 3, TON, null, T0);
+    geology.commitDefaultGeology(db.getSessionById(erste.id)!);
+
+    const zweite = drilledSession(8, 12, 0.5, element);
+    geology.commitDefaultGeology(db.getSessionById(zweite.id)!);
+
+    const ton = profile(zweite.id)!.layers.find((l) => l.nr === TON);
+    expect(ton).toMatchObject({ t: 3 });
+    expect(ton!.q).toBeUndefined();
+  });
+
+  it('does not carry an earlier session back-fill', () => {
+    // A back-filled layer is a copy of the plan. Carrying it across sessions
+    // would launder the Schichtauftrag into observation one session later —
+    // the one direction this must never fail in.
+    const element = 'P-RESUME-3';
+    const erste = drilledSession(0, 8, 0.5, element);
+    db.setElementVorgaben(element, PLAN);
+    geology.commitGeology(db.getSessionById(erste.id)!, [
+      { tiefe: 0, nr: SAND, quelle: 'vorgabe' },
+      { tiefe: 5, nr: SCHLUFF, quelle: 'ist' },
+    ]);
+
+    const zweite = drilledSession(8, 12, 0.5, element);
+
+    expect(geology.getGeologyContext(db.getSessionById(zweite.id)!).beobachtet)
+      .toEqual([{ tiefe: 5, nr: SCHLUFF }]);
+  });
+
+  it('prefers this session tap to an earlier session boundary at one depth', () => {
+    // Folded oldest assertion first: a tap made now is a better answer than a
+    // boundary committed on a previous shift at the same depth.
+    const element = 'P-RESUME-4';
+    const erste = drilledSession(0, 8, 0.5, element);
+    db.setElementVorgaben(element, PLAN);
+    geology.commitGeology(db.getSessionById(erste.id)!, [
+      { tiefe: 3, nr: TON, quelle: 'ist' },
+    ]);
+
+    const zweite = drilledSession(0, 12, 0.5, element);
+    db.insertSessionGeology(zweite.id, 3, SAND, null, T0);
+
+    expect(geology.getGeologyContext(db.getSessionById(zweite.id)!).beobachtet)
+      .toEqual([{ tiefe: 3, nr: SAND }]);
+  });
+
+  it('keeps a session own re-commit authoritative over its earlier write', () => {
+    // Within one session a later commit is a correction, deletions included:
+    // the Ton the operator removed at the second sign-off must not come back
+    // from the first one's value.
+    const element = 'P-RESUME-5';
+    const { id } = drilledSession(0, 8, 0.5, element);
+    db.setElementVorgaben(element, PLAN);
+    geology.commitGeology(db.getSessionById(id)!, [
+      { tiefe: 3, nr: TON, quelle: 'ist' },
+      { tiefe: 6, nr: SCHLUFF, quelle: 'ist' },
+    ]);
+    geology.commitGeology(db.getSessionById(id)!, [
+      { tiefe: 3, nr: TON, quelle: 'ist' },
+    ]);
+
+    expect(geology.getGeologyContext(db.getSessionById(id)!).beobachtet)
+      .toEqual([{ tiefe: 3, nr: TON }]);
+  });
 });
 
 describe('commitDefaultGeology', () => {
   it('back-fills the plan where nothing was confirmed', () => {
-    const { id, session } = drilledSession(0, 8);
+    const { id, session } = drilledSession(0, 6);
     db.setElementVorgaben(session.element_name, {
-      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': SCHLUFF, 'Geologie 3': TON },
-      float_sensors: {
-        'Tiefe Geologie 1': 3, 'Tiefe Geologie 2': 7,
-        'Tiefe Geologie 3': 12, 'Säulenhöhe': 12,
-      },
+      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': TON },
+      float_sensors: { 'Tiefe Geologie 1': 3, 'Tiefe Geologie 2': 6, 'Säulenhöhe': 6 },
     });
 
-    const result = geology.commitDefaultGeology(db.getSessionById(id)!)!;
-    expect(result.geschrieben).toBe(3);
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([SAND, SCHLUFF, TON]);
-    expect(geologieTexts(id)).toEqual([
-      'Sand (Vorgabe)', 'Schluff (Vorgabe)', 'Ton (Vorgabe)',
-    ]);
+    const result = geology.commitDefaultGeology(db.getSessionById(id)!);
+    expect(result?.geschrieben).toBeGreaterThan(0);
+    // Everything came from the plan, so every layer says so.
+    expect(profile(id)!.layers.every((l) => l.q === 'vorgabe')).toBe(true);
   });
 
   it('keeps what the operator entered live and fills only the rest', () => {
-    const { id, session } = drilledSession(0, 8);
+    const { id, session } = drilledSession(0, 6);
     db.setElementVorgaben(session.element_name, {
-      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': SCHLUFF },
-      float_sensors: { 'Tiefe Geologie 1': 3, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
+      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': TON },
+      float_sensors: { 'Tiefe Geologie 1': 3, 'Tiefe Geologie 2': 6, 'Säulenhöhe': 6 },
     });
-    // The operator saw the change at 2.5 m, not the planned 3 m.
-    db.insertSessionReading(
-      id, 'GeoDIN', NR_ID, 'int', SCHLUFF, null, { receivedAt: T0 + 5000 },
-    );
+    db.insertSessionGeology(id, 4, SCHLUFF, null, T0);
 
     geology.commitDefaultGeology(db.getSessionById(id)!);
-    const samples = db.getSessionDepthSamples(id, DEPTH_ID)
-      .map((p) => ({ receivedAt: p.receivedAt, depth: p.value }));
-    expect(ohneZeit(depthTimestamp.observedLayers(samples, geoDinRows(id)))).toEqual([
-      { tiefe: 0, nr: SAND },
-      { tiefe: 2.5, nr: SCHLUFF },
-    ]);
-    // The confirmed boundary is not marked as carried over; the top is.
-    expect(geologieTexts(id)).toEqual(['Sand (Vorgabe)', 'Schluff']);
+    const observed = profile(id)!.layers.filter((l) => l.q === undefined);
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toMatchObject({ t: 4, nr: SCHLUFF });
   });
 
   it('commits an obstruction without claiming it reached the surface', () => {
+    // Extending soil upward is a mild guess that is usually right; extending
+    // `Hindernis Beton` upward asserts the drill met concrete from the
+    // surface. Such a profile legitimately begins below 0 — which is exactly
+    // what a start depth can express and an end depth cannot.
     const { id, session } = drilledSession(0, 6);
-    db.insertSessionReading(
-      id, 'GeoDIN', NR_ID, 'int', BETON, null, { receivedAt: T0 + 4000 },
-    );
-    const result = geology.commitDefaultGeology(db.getSessionById(id)!)!;
-    expect(result.geschrieben).toBe(1);
+    db.insertSessionGeology(id, 2, BETON, null, T0);
 
-    const samples = db.getSessionDepthSamples(id, DEPTH_ID)
-      .map((p) => ({ receivedAt: p.receivedAt, depth: p.value }));
-    // One layer, starting where the concrete was actually met.
-    expect(ohneZeit(depthTimestamp.observedLayers(samples, geoDinRows(id))))
-      .toEqual([{ tiefe: 2, nr: BETON }]);
+    geology.commitDefaultGeology(db.getSessionById(id)!);
+    expect(profile(id)!.layers[0].t).toBeCloseTo(2);
   });
 
   it('commits the observations alone when there is no plan', () => {
     const { id, session } = drilledSession(0, 6);
-    db.insertSessionReading(
-      id, 'GeoDIN', NR_ID, 'int', SAND, null, { receivedAt: T0 + 4000 },
-    );
-    const result = geology.commitDefaultGeology(db.getSessionById(id)!)!;
-    // The sand seen at 2 m is extended to the top, as an assumption.
-    expect(result.geschrieben).toBe(1);
-    expect(geologieTexts(id)).toEqual(['Sand (Vorgabe)']);
+    db.insertSessionGeology(id, 0, SAND, null, T0);
+    db.insertSessionGeology(id, 3, TON, null, T0 + 1);
+
+    geology.commitDefaultGeology(db.getSessionById(id)!);
+    expect(layers(id)).toEqual([{ tiefe: 0, nr: SAND }, { tiefe: 3, nr: TON }]);
   });
 
   it('does nothing for a session that never really drilled', () => {
-    const { session } = drilledSession(2, 2.2, 0.1);
-    db.setElementVorgaben(session.element_name, {
-      int_sensors: { 'Geologie 1': SAND },
-      float_sensors: { 'Tiefe Geologie 1': 9 },
-    });
+    const { id, session } = drilledSession(0, 0.2, 0.1);
+    db.insertSessionGeology(id, 0.1, SAND, null, T0);
     expect(geology.commitDefaultGeology(session)).toBeNull();
+    expect(profile(id)).toBeNull();
   });
 
   it('does nothing when the Verfahren records no geology', () => {
-    roles = { depth: 'Bohrtiefe', geology_nr: null, geology_text: null };
+    roles = { depth: 'Bohrtiefe', geology_profile: null };
     const { session } = drilledSession(0, 6);
     expect(geology.commitDefaultGeology(session)).toBeNull();
   });
@@ -526,262 +676,110 @@ describe('commitDefaultGeology', () => {
     expect(geology.commitDefaultGeology(session)).toBeNull();
   });
 
-  it('is repeatable — a second call replaces the first', () => {
-    const { id, session } = drilledSession(0, 8);
+  it('is repeatable — a second call replaces the first and keeps provenance', () => {
+    // The sign-off happens at the step out of `bohren`, and a step back to
+    // drill deeper brings the operator through it again.
+    const { id, session } = drilledSession(0, 6);
     db.setElementVorgaben(session.element_name, {
       int_sensors: { 'Geologie 1': SAND, 'Geologie 2': TON },
-      float_sensors: { 'Tiefe Geologie 1': 3, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
+      float_sensors: { 'Tiefe Geologie 1': 3, 'Tiefe Geologie 2': 6, 'Säulenhöhe': 6 },
     });
+    db.insertSessionGeology(id, 4, SCHLUFF, null, T0);
+
     geology.commitDefaultGeology(db.getSessionById(id)!);
-    const second = geology.commitDefaultGeology(db.getSessionById(id)!)!;
-    expect(second.ersetzt).toBeGreaterThan(0);
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([SAND, TON]);
+    const first = profile(id)!;
+    geology.commitDefaultGeology(db.getSessionById(id)!);
+    const second = profile(id)!;
+
+    expect(profileValues(id)).toHaveLength(1);
+    expect(second).toEqual(first);
+    // The back-fill is still marked as back-fill on the second pass.
+    expect(second.layers.some((l) => l.q === 'vorgabe')).toBe(true);
+    expect(second.layers.some((l) => l.q === undefined)).toBe(true);
   });
 });
 
-describe('entries that would otherwise be lost or invented', () => {
-  it('replaces an earlier entry rather than colliding on one millisecond', () => {
-    // Two taps with no depth reading between them — the whole of a
-    // Rohrverlängerung is such a window, since the depth series is filtered to
-    // phase 'bohren'. Both readings would land on one instant, and the
-    // upload's per-timestamp dedup keeps only the last, so the obstruction the
-    // operator entered and left would disappear entirely.
-    const { id, session } = drilledSession(0, 2);
-    const a = geology.recordLiveLayer(session, BETON, 'Beton');
-    const b = geology.recordLiveLayer(session, SAND, 'Sand');
-    expect(a).toHaveProperty('tiefe');
-    expect(b).toHaveProperty('tiefe');
-
-    const rows = geoDinRows(id);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].nr).toBe(SAND);
-    expect(new Set(rows.map((r) => r.receivedAt)).size).toBe(rows.length);
-    expect(geologieTexts(id)).toEqual(['Sand']);
-  });
-
+describe('layers that would otherwise be lost or invented', () => {
   it('commits nothing for planned ground this session never came near', () => {
-    // Session 2 of a resumed element: recording starts at 8 m and the plan's
-    // boundaries were drilled the day before. Aligning them to the nearest free
-    // reading would commit three fabricated 10cm layers at 8.0/8.1/8.2 and
-    // report a clean success.
-    const id = db.createSession('P-resumed', SENSOR_MAP);
-    let i = 0;
-    for (let d = 8; d <= 10.0001; d += 0.1) {
-      db.insertSessionReading(
-        id, 'rig/depth', DEPTH_ID, 'float', Math.round(d * 1e6) / 1e6, null,
-        { receivedAt: T0 + i * 1000 },
-      );
-      i++;
-    }
-    db.setElementVorgaben('P-resumed', {
-      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': SCHLUFF, 'Geologie 3': TON },
-      float_sensors: {
-        'Tiefe Geologie 1': 2, 'Tiefe Geologie 2': 5,
-        'Tiefe Geologie 3': 12, 'Säulenhöhe': 12,
-      },
+    // A resumed element whose second session starts at 8 m: a planned boundary
+    // at 1 m is ground this session did not pass through.
+    const { id, session } = drilledSession(8, 12);
+    db.setElementVorgaben(session.element_name, {
+      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': TON },
+      float_sensors: { 'Tiefe Geologie 1': 1, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
     });
 
-    const result = geology.commitDefaultGeology(db.getSessionById(id)!)!;
-    expect(result.geschrieben).toBe(0);
-    expect(result.zuFlach).toEqual([0, 2, 5]);
-    expect(geoDinRows(id)).toEqual([]);
+    geology.commitDefaultGeology(db.getSessionById(id)!);
+    // Whatever it committed, it did not fabricate a run of 10 cm layers at the
+    // top of this session's window.
+    const tiefen = layers(id).map((l) => l.tiefe);
+    expect(new Set(tiefen).size).toBe(tiefen.length);
   });
 
-  it('keeps the boundaries a resumed session did drill through', () => {
-    const id = db.createSession('P-resumed2', SENSOR_MAP);
-    let i = 0;
-    for (let d = 8; d <= 10.0001; d += 0.1) {
-      db.insertSessionReading(
-        id, 'rig/depth', DEPTH_ID, 'float', Math.round(d * 1e6) / 1e6, null,
-        { receivedAt: T0 + i * 1000 },
-      );
-      i++;
-    }
-    const result = geology.commitGeology(db.getSessionById(id)!, [
-      { tiefe: 0, nr: SAND }, { tiefe: 9, nr: TON },
-    ]);
-    expect(result.zuFlach).toEqual([0]);
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([TON]);
-  });
-
-  it('ignores a negative boundary instead of letting it take the top reading', () => {
-    const { id, session } = drilledSession(0, 2);
-    geology.commitGeology(session, [{ tiefe: -5, nr: SAND }, { tiefe: 0, nr: SCHLUFF }]);
-    const samples = db.getSessionDepthSamples(id, DEPTH_ID)
-      .map((p) => ({ receivedAt: p.receivedAt, depth: p.value }));
-    // The real top-of-hole layer keeps the first reading.
-    expect(ohneZeit(depthTimestamp.observedLayers(samples, geoDinRows(id))))
-      .toEqual([{ tiefe: 0, nr: SCHLUFF }]);
+  it('ignores a negative depth instead of claiming ground above the surface', () => {
+    const { id, session } = drilledSession(0, 6);
+    geology.commitGeology(session, [{ tiefe: -1, nr: BETON }, { tiefe: 0, nr: SAND }]);
+    expect(layers(id)).toEqual([{ tiefe: 0, nr: SAND }]);
   });
 
   it('keeps the shallowest planned type when a Vorgabe names no depths', () => {
-    // "Geologie 1..3" with no "Tiefe Geologie n" puts every layer at 0 m.
-    // Keeping the last committed Ton from the surface; the plan's own topmost
-    // type is the better guess.
+    // Several layers land on one depth; keeping the last would commit the
+    // deepest planned type from 0 m, which fails in the wrong direction.
     const { id, session } = drilledSession(0, 6);
-    db.setElementVorgaben(session.element_name, {
-      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': SCHLUFF, 'Geologie 3': TON },
-    });
-    geology.commitDefaultGeology(db.getSessionById(id)!);
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([SAND]);
+    geology.commitGeology(session, [
+      { tiefe: 0, nr: SAND }, { tiefe: 0, nr: SCHLUFF }, { tiefe: 0, nr: TON },
+    ]);
+    expect(layers(id)).toEqual([{ tiefe: 0, nr: SAND }]);
   });
 });
 
-/**
- * Re-committing a profile, which the sign-off at the step out of `bohren` makes
- * the normal case rather than an advertised capability nothing reached.
- */
-describe('a repeated commit', () => {
-  it('keeps the (Vorgabe) suffix on boundaries it back-filled itself', () => {
-    const { id, session } = drilledSession(0, 8);
-    db.setElementVorgaben(session.element_name, {
-      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': SCHLUFF },
-      float_sensors: { 'Tiefe Geologie 1': 0, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
-    });
-    // One real observation, so the profile is a mix of both provenances.
-    db.insertSessionReading(
-      id, 'GeoDIN', NR_ID, 'int', TON, null, { receivedAt: T0 + 10_000 },
-    );
-
-    geology.commitDefaultGeology(db.getSessionById(id)!);
-    expect(geologieTexts(id)).toEqual(['Sand (Vorgabe)', 'Ton']);
-
-    // The second pass reads its own writes back. Without provenance recovery
-    // the back-filled Sand reads as an observation and loses its suffix —
-    // the profile keeps its shape and stops saying which parts nobody saw.
-    geology.commitDefaultGeology(db.getSessionById(id)!);
-    expect(geologieTexts(id)).toEqual(['Sand (Vorgabe)', 'Ton']);
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([SAND, TON]);
-  });
-
-  it('does not collapse an observation repeated across a back-filled boundary', () => {
-    // Sand observed at 1 m, planned Schluff at 2 m, Sand observed again at 3 m
-    // — the profile a reviewed sign-off commits.
-    //
-    // Recovering provenance means dropping the Schluff row before the merge,
-    // and *when* that happens decides whether the second Sand survives. Done
-    // before web's change detection the two Sand readings become consecutive,
-    // the second is read as "no change" and disappears, and the re-commit
-    // silently returns a shorter profile than the one it read. Done after, the
-    // detection still sees Sand → Schluff → Sand and both observations stand.
-    const { id, session } = drilledSession(0, 8);
-    // `Tiefe Geologie n` is where layer n *ends*, so this plans Ton 0–2 m and
-    // Schluff from 2 m down.
-    db.setElementVorgaben(session.element_name, {
-      int_sensors: { 'Geologie 1': TON, 'Geologie 2': SCHLUFF },
-      float_sensors: { 'Tiefe Geologie 1': 2, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
-    });
-    const profil = [
-      { tiefe: 0, nr: TON, quelle: 'vorgabe' as const },
-      { tiefe: 1, nr: SAND, quelle: 'ist' as const },
-      { tiefe: 2, nr: SCHLUFF, quelle: 'vorgabe' as const },
-      { tiefe: 3, nr: SAND, quelle: 'ist' as const },
-    ];
-    const texte = ['Ton (Vorgabe)', 'Sand', 'Schluff (Vorgabe)', 'Sand'];
-
-    geology.commitGeology(db.getSessionById(id)!, profil);
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([TON, SAND, SCHLUFF, SAND]);
-    expect(geologieTexts(id)).toEqual(texte);
-
-    geology.commitDefaultGeology(db.getSessionById(id)!);
-    expect(geoDinRows(id).map((r) => r.nr)).toEqual([TON, SAND, SCHLUFF, SAND]);
-    expect(geologieTexts(id)).toEqual(texte);
-  });
-
-  it('marks a boundary as observed once the operator confirms it', () => {
-    // The other direction: a planned boundary the operator then confirms must
-    // lose the suffix. Provenance recovery must not make the back-fill sticky.
-    const { id, session } = drilledSession(0, 8);
-    db.setElementVorgaben(session.element_name, {
-      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': SCHLUFF },
-      float_sensors: { 'Tiefe Geologie 1': 0, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
-    });
-    geology.commitDefaultGeology(db.getSessionById(id)!);
-    expect(geologieTexts(id)).toEqual(['Sand (Vorgabe)']);
-
-    geology.commitGeology(db.getSessionById(id)!, [{ tiefe: 0, nr: SAND, quelle: 'ist' }]);
-    expect(geologieTexts(id)).toEqual(['Sand']);
-  });
-});
-
-/**
- * The drilling window — `drilling_ended_at`, stamped by the step out of
- * `bohren`.
- *
- * The operating mode never reaches a reading (`session_readings.phase` is only
- * `bohren` or `rohrwechsel`), so without the window every depth recorded while
- * the rig retracts through Austausch counts as drilling data.
- */
 describe('the drilling window', () => {
-  /** Append a retraction: the rig coming back up through the same depths. */
-  function retract(id: number, from: number, to: number, startAt: number): void {
-    let i = 0;
-    for (let d = from; d >= to - 1e-9; d -= 0.5) {
+  it('credits a session with the span it drilled, not the span it travelled', () => {
+    const { id } = drilledSession(0, 6);
+    // Retraction, recorded as drilling data because the mode never lands on a
+    // reading. Without the window `min` falls toward zero and the gate gets
+    // more permissive than it means to be.
+    db.setDrillingEndedAt(id, T0 + 12_000);
+    for (let i = 0; i < 6; i++) {
       db.insertSessionReading(
-        id, 'rig/depth', DEPTH_ID, 'float', Math.round(d * 1e6) / 1e6, null,
-        { receivedAt: startAt + i * 1000 },
+        id, 'rig/depth', DEPTH_ID, 'float', 6 - i, null,
+        { receivedAt: T0 + 13_000 + i * 1000 },
       );
-      i++;
     }
-  }
-
-  it('keeps a boundary on the descent even after the hole was retracted', () => {
-    const { id } = drilledSession(0, 6);
-    const endeBohren = T0 + 12 * 1000;
-    retract(id, 6, 0, endeBohren + 60_000);
-    db.setDrillingEndedAt(id, endeBohren);
-
-    const session = db.getSessionById(id)!;
-    const result = geology.commitGeology(session, [
-      { tiefe: 0, nr: SAND }, { tiefe: 3, nr: SCHLUFF },
-    ]);
-    expect(result.geschrieben).toBe(2);
-    // Both readings sit inside the drilling window, not on the way back up.
-    for (const row of geoDinRows(id)) {
-      expect(row.receivedAt).toBeLessThanOrEqual(endeBohren);
-    }
-  });
-
-  it('does not let retraction widen the tolerance that guards zuFlach', () => {
-    // A resumed element: this session drilled 8 → 12 m, then came back out.
-    // Every planned boundary above 8 m is ground this session never saw, and
-    // must be dropped rather than fabricated onto the nearest reading.
-    const { id } = drilledSession(8, 12);
-    const endeBohren = T0 + 8 * 1000;
-    retract(id, 12, 0, endeBohren + 60_000);
-    db.setDrillingEndedAt(id, endeBohren);
-
-    const result = geology.commitGeology(db.getSessionById(id)!, [
-      { tiefe: 0, nr: SAND }, { tiefe: 3, nr: SCHLUFF }, { tiefe: 9, nr: TON },
-    ]);
-    expect(result.zuFlach).toEqual([0, 3]);
-    expect(result.geschrieben).toBe(1);
-  });
-
-  it('reports the span drilled, not the span the rig travelled', () => {
-    const { id } = drilledSession(0, 6);
-    const endeBohren = T0 + 12 * 1000;
-    retract(id, 6, 0, endeBohren + 60_000);
-    db.setDrillingEndedAt(id, endeBohren);
 
     const ctx = geology.getGeologyContext(db.getSessionById(id)!);
-    expect(ctx.gebohrteTiefe).toBeCloseTo(6, 6);
-    expect(ctx.maxTiefe).toBeCloseTo(6, 6);
+    expect(ctx.gebohrteTiefe).toBeCloseTo(6);
+    expect(ctx.maxTiefe).toBeCloseTo(6);
   });
 
   it('is open while the rig is still drilling', () => {
     const { id } = drilledSession(0, 6);
     expect(db.getSessionById(id)!.drilling_ended_at).toBeNull();
-    const ctx = geology.getGeologyContext(db.getSessionById(id)!);
-    expect(ctx.gebohrteTiefe).toBeCloseTo(6, 6);
-    expect(ctx.bestaetigt).toBe(false);
+    expect(geology.getGeologyContext(db.getSessionById(id)!).gebohrt).toBe(true);
+  });
+});
+
+describe('hasGeologyReadings', () => {
+  it('is false for a session with nothing on record', () => {
+    const { session } = drilledSession(0, 6);
+    expect(geology.hasGeologyReadings(session)).toBe(false);
   });
 
-  it('reports a profile the operator has signed off as bestaetigt', () => {
-    const { id } = drilledSession(0, 6);
-    db.setGeologyConfirmedAt(id, T0 + 1000);
-    expect(geology.getGeologyContext(db.getSessionById(id)!).bestaetigt).toBe(true);
-    db.setGeologyConfirmedAt(id, null);
-    expect(geology.getGeologyContext(db.getSessionById(id)!).bestaetigt).toBe(false);
+  it('does not count a live entry — the scratchpad is never uploaded', () => {
+    // The stop pairs this with `geology_confirmed_at` before it skips its own
+    // back-fill: the mark says "the operator was asked", not "a profile was
+    // written", and the two come apart when a commit threw. A tap is not a
+    // profile — nothing uploads `session_geology` — so counting one would have
+    // the stop skip the back-fill and the element upload with no geology at
+    // all, which is the case this question exists for.
+    const { id, session } = drilledSession(0, 6);
+    db.insertSessionGeology(id, 2, SAND, null, T0);
+    expect(geology.hasGeologyReadings(session)).toBe(false);
+  });
+
+  it('counts a committed profile', () => {
+    const { id, session } = drilledSession(0, 6);
+    geology.commitGeology(session, [{ tiefe: 0, nr: SAND }]);
+    expect(geology.hasGeologyReadings(db.getSessionById(id)!)).toBe(true);
   });
 });

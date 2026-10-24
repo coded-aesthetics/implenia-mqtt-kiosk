@@ -51,28 +51,6 @@ export type AnySensorDefs = Partial<Record<(typeof ALL_SENSOR_KEYS)[number], Sen
 const RECORDABLE_SOURCES = new Set(['mqtt', 'kiosk', 'user']);
 
 /**
- * Roles the kiosk writes regardless of the source the CSV names.
- *
- * `GeoDIN` (role `geology_nr`) is declared `server` in both herstellen CSVs,
- * and `sensor-meta.ts` in implenia-web documents it as "derived from
- * geology_text by server" — but nothing derives it. No implementation exists in
- * the backend or in web; the comment is aspirational. Meanwhile web's protocol
- * and export read `GeoDIN` directly as the worker-observed geology
- * (`herstellungLayersFromRows`), so the kiosk is in fact its only writer.
- *
- * Without this exception the sensor is absent from the session's sensor map,
- * every geology reading is stored with a null `sensor_id`, and none of them is
- * ever uploaded — silent, total loss of the whole feature, with the readings
- * sitting in SQLite looking fine.
- *
- * The honest fix is to change `Quelle` to `kiosk` in implenia-web's CSVs and
- * re-sync (the source of truth is always implenia-web — never edit the copies
- * in this repo). Until that lands this keeps the two versions interoperable,
- * and it stays harmless afterwards.
- */
-const RECORDABLE_ROLES = new Set(['geology_nr']);
-
-/**
  * Should this sensor be part of the recording session's sensor map?
  *
  * `user` belongs here even though nothing arrives over the wire for it: the
@@ -81,17 +59,19 @@ const RECORDABLE_ROLES = new Set(['geology_nr']);
  * the "produced" check in implenia-web. Leaving `user` out meant a Status
  * reading was stored with a null sensor_id and silently never uploaded.
  *
- * `server` stays out: those values are computed by the platform after upload —
- * except where the CSV says `server` but nothing on the platform actually
- * computes it, see RECORDABLE_ROLES.
+ * `server` stays out: those values are computed by the platform after upload.
+ * `GeoDIN` used to be the exception — the CSVs declare it `server` and nothing
+ * anywhere derives it, so the kiosk had to force it in or lose every geology
+ * reading silently. A committed profile now goes to `Geologieprofil`
+ * (`Quelle=kiosk`), so `GeoDIN` is genuinely not written and genuinely belongs
+ * out. It stays declared in the CSVs, because that list is also the set of
+ * names a Verfahren *owns* on a pillar, which is what implenia-web's
+ * `deleteHerstellenData` filters on.
  */
 export function isRecordableSensor(
   sensor: { id: string; meta?: SensorMeta | null },
   vorgabenIds: ReadonlySet<string>,
 ): boolean {
-  if (sensor.meta?.role != null && RECORDABLE_ROLES.has(sensor.meta.role)) {
-    return true;
-  }
   if (sensor.meta != null && sensor.meta.source != null) {
     return RECORDABLE_SOURCES.has(sensor.meta.source);
   }
@@ -221,8 +201,8 @@ function hasVorgabenInfo(elementName: string): boolean {
  * Only the legacy fallback in `isRecordableSensor` subtracts the Vorgabe ids.
  * A sensor whose `source` is known — from the platform's `meta` or from the
  * local CSVs that `filterHerstellenSensors` enriches from — is decided without
- * them, and so is one carrying a RECORDABLE_ROLES role. So on a migrated
- * element an unknown Vorgabe set costs nothing, while on a legacy pillar it
+ * them. So on a migrated element an unknown Vorgabe set costs nothing, while
+ * on a legacy pillar it
  * decides whether a Soll sensor is recorded as a measurement: there the kiosk
  * has to refuse rather than guess, because guessing is silent and wrong in the
  * one direction that corrupts data.
@@ -232,8 +212,6 @@ export function needsVorgabenIds(allDefs: SensorDefs): boolean {
   for (const key of SENSOR_KEYS) {
     for (const s of allDefs[key] ?? []) {
       const csv = csvMeta.get(s.name);
-      const role = s.meta?.role ?? csv?.role;
-      if (role != null && RECORDABLE_ROLES.has(role)) continue;
       if ((s.meta?.source ?? csv?.source) == null) return true;
     }
   }
