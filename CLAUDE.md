@@ -381,12 +381,22 @@ The column was the only part of this that existed.
   would then be refused by the key that was just entered.
 - **Pending measurements are reported, not blocked, and they need nothing from
   the operator** — they keep uploading under their own site's key, see below.
-  `POST /api/config` answers `pendingReadings` when the site changed and unsent
-  readings exist, and the screen shows it as a `warning` overlay — which, unlike
-  `success`, does not clear itself, because 2.5 seconds is not long enough to
-  read it. It is said at all because this is the one moment somebody is looking,
-  and a machine carrying unsent data is one that should not be wiped or handed
-  on yet.
+  `POST /api/config` answers `pendingReadings` and the screen shows it as a
+  `warning` overlay — which, unlike `success`, does not clear itself, because
+  2.5 seconds is not long enough to read it. It is said at all because this is
+  the one moment somebody is looking, and a machine carrying unsent data is one
+  that should not be wiped or handed on yet.
+- **That count is `getOtherSitesUnsafeSummary`, asked *after* the switch, and
+  it is Baustellen plural.** `getUnsafeDataSummary` is machine-wide, which is
+  right for the reset guard — a reset wipes the machine — and wrong here: paired
+  with a sentence naming „die vorherige Baustelle" it reported every reading on
+  the box as that site's, identically whichever key was entered, and said it
+  when switching *to* the site that owns the data, which is the one case with
+  nothing to report. Asked after `syncSite`, the new site's own backlog and the
+  `default` rows it has just adopted both fall outside the count. Plural because
+  a crew that has worked three piers can still be carrying the first pier's data
+  when it reaches the third, so "the previous site" is not what the number
+  means.
   **The card is sized for the overlay, and that took three measurements to get
   right**: a `CardOverlay` covers its own card, so the card's height *is* the
   message's budget — and the API-key card was the shortest on the screen while

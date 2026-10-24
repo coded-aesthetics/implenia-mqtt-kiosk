@@ -1805,6 +1805,31 @@ const clippedSummaryStmt = db.prepare(`
   WHERE r.upload_status = 'clipped'
 `);
 
+/*
+ * The same question asked of the sites the kiosk is *not* on.
+ *
+ * `getUnsafeDataSummary` is machine-wide, which is right for the reset guard —
+ * a reset wipes the machine — and wrong for the message shown when the API key
+ * changes. That one claims the measurements belong to the previous
+ * construction site, and an unfiltered count makes the claim of every reading
+ * on the box: on a machine that had recorded under two keys it reported the
+ * same total whichever key was entered, including when switching *to* the site
+ * that owns the data, which needs no mention at all because it uploads under
+ * the configured key from then on.
+ *
+ * Asked after the switch, so `default` rows the new site has just adopted are
+ * excluded, and so is the new site's own backlog. Not "the previous site" but
+ * every other one: a crew that has worked three piers can still be carrying
+ * the first one's data when it reaches the third.
+ */
+const otherSitesUnsafeStmt = db.prepare(`
+  SELECT COUNT(DISTINCT s.id) AS sessions, COUNT(r.id) AS readings
+  FROM recording_sessions s
+  JOIN session_readings r ON r.session_id = s.id
+  WHERE s.site_id != ?
+    AND s.exported_at IS NULL AND r.upload_status NOT IN ('uploaded', 'clipped')
+`);
+
 export interface UnsafeDataSummary {
   sessions: number;
   readings: number;
@@ -1832,6 +1857,15 @@ export function getUnsafeDataSummary(): UnsafeDataSummary {
   const unsafe = unsafeSummaryStmt.get() as { sessions: number; readings: number };
   const { clipped } = clippedSummaryStmt.get() as { clipped: number };
   return { ...unsafe, clipped };
+}
+
+/**
+ * Unsent measurements belonging to any site but the one the kiosk is on now.
+ *
+ * What the key-change message is actually about. See `otherSitesUnsafeStmt`.
+ */
+export function getOtherSitesUnsafeSummary(): { sessions: number; readings: number } {
+  return otherSitesUnsafeStmt.get(currentSiteId()) as { sessions: number; readings: number };
 }
 
 /**

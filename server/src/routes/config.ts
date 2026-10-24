@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import {
-  getMeta, setMeta, deleteMeta, getUnsafeDataSummary, resetKiosk, getActiveSession,
+  getMeta, setMeta, deleteMeta, getUnsafeDataSummary, getOtherSitesUnsafeSummary,
+  resetKiosk, getActiveSession,
 } from '../db.js';
 import { getApiConfig, fetchImplenia } from '../implenia-api.js';
 import { config as envConfig } from '../config.js';
@@ -85,18 +86,6 @@ export function registerConfigRoutes(app: FastifyInstance): void {
       });
     }
 
-    /*
-     * What is still on the machine, read *before* the switch.
-     *
-     * Reported, not blocked, and it needs nothing from the operator: the kiosk
-     * keeps each site's key, so a session left pending here goes on retrying
-     * under the key of the site it was recorded on (site-credentials.ts). It is
-     * in the answer because this is the one moment somebody is looking at the
-     * screen, and a machine carrying unsent data is one that should not be wiped
-     * or handed on yet.
-     */
-    const pending = getUnsafeDataSummary();
-
     setMeta('implenia_api_key', apiKey.trim());
     if (apiUrl && apiUrl.trim().length > 0) {
       setMeta('implenia_api_url', apiUrl.trim());
@@ -109,12 +98,31 @@ export function registerConfigRoutes(app: FastifyInstance): void {
         : 'API key updated via config page',
     );
 
+    /*
+     * Unsent measurements belonging to the sites the kiosk is *not* on, asked
+     * after the switch.
+     *
+     * Reported, not blocked, and needing nothing from the operator: the kiosk
+     * keeps each site's key, so these go on retrying under the key of the site
+     * that recorded them (site-credentials.ts). It is in the answer because
+     * this is the one moment somebody is looking at the screen, and a machine
+     * carrying unsent data is one that should not be wiped or handed on yet.
+     *
+     * Scoped, and asked *after* `syncSite` rather than before, because the
+     * machine-wide count made a claim it could not support: on a kiosk that had
+     * recorded under two keys it reported every reading on the box as belonging
+     * to the previous site, identically whichever key was entered — including
+     * when switching *to* the site that owns the data, which needs no mention
+     * at all because from then on it uploads under the configured key. After
+     * the switch, the new site's own backlog and the `default` rows it has just
+     * adopted both fall outside the count, which is the whole point.
+     */
+    const pending = moved ? getOtherSitesUnsafeSummary() : { sessions: 0, readings: 0 };
+
     return reply.send({
       ok: true,
       siteChanged: moved,
-      // Only when it matters: unsent measurements are the one thing a key
-      // change can strand, so they are reported only alongside one.
-      pendingReadings: moved && pending.readings > 0 ? pending : null,
+      pendingReadings: pending.readings > 0 ? pending : null,
     });
   });
 

@@ -75,6 +75,66 @@ describe('saving a key moves the kiosk', () => {
   });
 });
 
+/**
+ * A box that has recorded under two keys, which is what a test kiosk looks
+ * like — and what found this.
+ *
+ * The count was machine-wide while the sentence said „der vorherigen
+ * Baustelle", so it reported every reading on the machine as the previous
+ * site's, identically whichever key was entered. Switching *to* the site that
+ * owns the data said it too, when that is the one case with nothing to report:
+ * from then on it uploads under the configured key.
+ */
+describe('a machine carrying more than one site\'s data', () => {
+  /** A finished-but-unsent session with `count` readings, on the current site. */
+  function unsentSession(element: string, count: number): number {
+    const id = db.createSession(element, '{}');
+    for (let i = 0; i < count; i += 1) {
+      db.insertSessionReading(id, 'tiefe', 'sensor-1', 'float', i, null);
+    }
+    db.endSession(id, 'ended');
+    return id;
+  }
+
+  it('counts only the sites the kiosk is not on', async () => {
+    await saveKey(PIER_1);
+    unsentSession('P-01', 3);
+
+    await saveKey(PIER_2);
+    unsentSession('P-01', 5);
+
+    // On pier 3, both earlier piers are "other" — not just the previous one.
+    const { body } = await saveKey('key-for-pier-3');
+    expect(body.pendingReadings).toMatchObject({ sessions: 2, readings: 8 });
+  });
+
+  it('says nothing when switching back to the site that owns the data', async () => {
+    await saveKey(PIER_1);
+    unsentSession('P-01', 3);
+    await saveKey(PIER_2);
+    expect((await saveKey(PIER_1)).body.pendingReadings).toBeNull();
+  });
+
+  it('excludes what the first key has just adopted', async () => {
+    // The upgrade path: everything recorded before site ids existed reads
+    // `default`, and the first key takes it over — so it belongs to the site
+    // now being used and is not somebody else's leftovers.
+    unsentSession('P-01', 7);
+    expect(db.currentSiteId()).toBe(db.DEFAULT_SITE);
+
+    const { body } = await saveKey(PIER_1);
+    expect(body.siteChanged).toBe(true);
+    expect(body.pendingReadings).toBeNull();
+  });
+
+  it('still counts it once a second key is entered', async () => {
+    unsentSession('P-01', 7);
+    await saveKey(PIER_1);
+    const { body } = await saveKey(PIER_2);
+    expect(body.pendingReadings).toMatchObject({ sessions: 1, readings: 7 });
+  });
+});
+
 describe('what the switch would strand', () => {
   it('names the measurements that will be refused by the new key', async () => {
     await saveKey(PIER_1);

@@ -359,14 +359,21 @@ export function VerbindungConfig({ config }: Props) {
  * A new key means a new construction site — one per pier on a bridge — and the
  * kiosk has just moved everything it remembers per element with it. The plain
  * success banner is right for that, with one exception worth a line: there are
- * measurements on the machine that are not on the platform yet, and they belong
- * to the pier just left.
+ * measurements on the machine that are not on the platform yet and belong to a
+ * site this kiosk is no longer on.
  *
- * They need nothing from the operator — the kiosk kept that site's key and
- * retries under it (site-credentials.ts) — so this states a fact rather than
- * asking for anything. It is said at all because this is the one moment
- * somebody is looking, and because a machine carrying unsent data is a machine
- * that should not be wiped or handed on yet.
+ * They need nothing from the operator — the kiosk kept each site's key and
+ * retries under the right one (site-credentials.ts) — so this states a fact
+ * rather than asking for anything. It is said at all because this is the one
+ * moment somebody is looking, and because a machine carrying unsent data is a
+ * machine that should not be wiped or handed on yet.
+ *
+ * **Baustellen, plural, and never „der vorherigen".** The server counts every
+ * site but the one just switched to, which can be more than one: a crew that
+ * has worked three piers may still be carrying the first pier's data when it
+ * reaches the third. The singular wording came with a machine-wide count that
+ * reported the same total whichever key was entered — a sentence that named a
+ * site the number had nothing to do with.
  */
 function savedOverlay(saved: {
   siteChanged?: boolean;
@@ -376,14 +383,14 @@ function savedOverlay(saved: {
   if (!pending) {
     return { type: 'success', title: 'API-Schlüssel gespeichert' };
   }
-  // 143 characters with six-digit counts, against a measured budget of 160 —
-  // see `iconSmall` in CardOverlay. Longer and the last line is cut off.
+  // 140 characters at seven-digit counts, against a card measured to hold the
+  // overlay with room to spare — see `keyCardStyle` and `iconSmall`.
   return {
     type: 'warning',
-    title: 'API-Schlüssel gespeichert — Daten der vorherigen Baustelle',
+    title: 'API-Schlüssel gespeichert — Daten anderer Baustellen',
     detail:
-      `${pending.readings} Messwerte aus ${pending.sessions} Aufzeichnung(en) der `
-      + 'vorherigen Baustelle werden automatisch mit deren Schlüssel hochgeladen, '
+      `${pending.readings} Messwerte aus ${pending.sessions} Aufzeichnung(en) anderer `
+      + 'Baustellen werden automatisch mit deren Schlüsseln hochgeladen, '
       + 'sobald Verbindung besteht.',
   };
 }
