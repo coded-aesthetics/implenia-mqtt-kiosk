@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { DataSource, SensorReading } from './data-source.js';
 import {
   insertBuffer, pruneBuffer, insertSessionReading, getDrillState, setDrillState,
-  getOperatingMode, setOperatingModeRow, clearSessionReadings,
+  getOperatingMode, setOperatingModeRow, clearSessionReadings, clearSessionGeology,
   createSession, endSession, getActiveSession, getLatestSessionReadings,
 } from './db.js';
 import { parsePayload } from './parse-payload.js';
@@ -734,6 +734,11 @@ export class DataIngestion extends EventEmitter {
   resetForSeek(): void {
     if (this.activeSession) {
       clearSessionReadings(this.activeSession.id);
+      // The live geology goes with them. It used to *be* session readings, so
+      // it was cleared here for free; left behind it is a set of layers at
+      // depths the rebuilt run has not reached, committed at the stop against
+      // a hole that no longer has them.
+      clearSessionGeology(this.activeSession.id);
       this.activeSession.drill = initialDrillState();
       this.activeSession.volumeTracker.reset();
       this.lastReadings.clear();

@@ -465,6 +465,40 @@ describe('getGeologyContext', () => {
       .toEqual([{ tiefe: 3, nr: BETON }]);
   });
 
+  it('reads a sign-off edit back as observation on a re-ask', () => {
+    // The sign-off screen is the second source of observations: retyping a
+    // planned boundary, or adding one the taps missed, commits an `ist` layer
+    // that never enters `session_geology`. A step back into `bohren` clears
+    // the mark and the next step out rebuilds this context — so without
+    // reading those layers back, every correction made at the first sign-off
+    // is silently reverted to the Schichtauftrag at the second.
+    const { id, session } = drilledSession(0, 6);
+    db.setElementVorgaben(session.element_name, {
+      int_sensors: { 'Geologie 1': SAND },
+      float_sensors: { 'Tiefe Geologie 1': 6, 'Säulenhöhe': 6 },
+    });
+    geology.commitGeology(db.getSessionById(id)!, [
+      { tiefe: 0, nr: SAND, quelle: 'vorgabe' },
+      { tiefe: 3, nr: TON, quelle: 'ist' },
+    ]);
+
+    // The operator's Ton comes back; the back-filled Sand does not, because a
+    // back-filled layer is a copy of the plan and must never be reported as
+    // something somebody saw.
+    expect(geology.getGeologyContext(db.getSessionById(id)!).beobachtet)
+      .toEqual([{ tiefe: 3, nr: TON }]);
+  });
+
+  it('survives a committed profile that cannot be parsed', () => {
+    const { id, session } = drilledSession(0, 6);
+    db.insertSessionReading(
+      id, 'Geologieprofil', PROFIL_ID, 'string', null, 'nicht json',
+      { receivedAt: geology.PROFILE_SENTINEL_AT },
+    );
+    expect(geology.getGeologyContext(db.getSessionById(id)!).beobachtet).toEqual([]);
+    expect(geology.getGeologyContext(session).verfuegbar).toBe(true);
+  });
+
   it('reports a profile the operator has signed off as bestaetigt', () => {
     const { id, session } = drilledSession(0, 6);
     expect(geology.getGeologyContext(session).bestaetigt).toBe(false);
@@ -629,13 +663,16 @@ describe('hasGeologyReadings', () => {
     expect(geology.hasGeologyReadings(session)).toBe(false);
   });
 
-  it('counts a live entry, even before any commit', () => {
+  it('does not count a live entry — the scratchpad is never uploaded', () => {
     // The stop pairs this with `geology_confirmed_at` before it skips its own
     // back-fill: the mark says "the operator was asked", not "a profile was
-    // written", and the two come apart when a commit threw.
+    // written", and the two come apart when a commit threw. A tap is not a
+    // profile — nothing uploads `session_geology` — so counting one would have
+    // the stop skip the back-fill and the element upload with no geology at
+    // all, which is the case this question exists for.
     const { id, session } = drilledSession(0, 6);
     db.insertSessionGeology(id, 2, SAND, null, T0);
-    expect(geology.hasGeologyReadings(session)).toBe(true);
+    expect(geology.hasGeologyReadings(session)).toBe(false);
   });
 
   it('counts a committed profile', () => {

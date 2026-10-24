@@ -545,9 +545,23 @@ addressing the sensor by hardcoded name go on finding them.
   — so that is minutes of taps landing on one value, and two ground types at
   one depth is not a profile.
 - **Nothing back-filled ever enters `session_geology`.** That is what keeps a
-  re-commit's provenance for free. The series shape had to read its own
-  committed output back and strip the back-filled rows out again, because
-  reading it wholesale marked the kiosk's own Vorgabe back-fill as observation.
+  re-commit's provenance for free. The series shape had to reconstruct it from
+  a ` (Vorgabe)` suffix on display text, because reading its committed output
+  back wholesale marked the kiosk's own back-fill as observation.
+- **`session_geology` is not the only source of observation, and the committed
+  profile is read back for the other one.** The sign-off screen is where an
+  operator retypes a planned boundary or adds one the taps missed, and those
+  arrive as `quelle: 'ist'` layers that never reach the scratchpad. A re-ask
+  rebuilds the context from scratch, so `committedObserved` (geology.ts) takes
+  the layers of the last committed value that carry no `q` — one comparison,
+  because provenance is a field. Without it every correction made at the first
+  sign-off is silently reverted to the Schichtauftrag at the second.
+- **A tap is not a profile.** `session_geology` is never uploaded — only the
+  committed `Geologieprofil` value leaves the kiosk — so `hasGeologyReadings`
+  counts committed profiles alone. Counting a tap had the stop trust
+  `geology_confirmed_at` over a sign-off whose commit threw and skip its own
+  back-fill, which is the signed-off-and-silently-empty element that pairing
+  exists to prevent.
 - **The depth series is still filtered to real drilling** — `phase = 'bohren'`
   (which drops the Rohrverlängerung phantom depths, see `rohrwechsel.ts`) and
   `upload_status != 'clipped'` — because it still bounds the profile. A layer
@@ -670,13 +684,25 @@ Three things make it correct rather than merely kinder, and none may be broken:
   entirely, signed off and silently empty.
 
 **Known deviation: a rejected boundary is not remembered across a re-ask.**
-Nothing records that the operator *deleted* a planned boundary. So on a resumed
-element the step back into `bohren` clears the sign-off, the next step out
-rebuilds the context, and `mergeProfile` re-adds every Vorgabe boundary: one
+Nothing records that the operator *deleted* a planned boundary —
+`committedObserved` recovers what was written, never what was refused. So on a
+resumed element the step back into `bohren` clears the sign-off, the next step
+out rebuilds the context, and `mergeProfile` re-adds every Vorgabe boundary: one
 the operator explicitly deleted at the first sign-off reappears (dashed) at the
 second and is committed unless they delete it again. Within a single sign-off
 the deletion holds, which is the common case; fixing it across one properly
 means persisting rejections, not special-casing the rebuild.
+
+**Known deviation: a profile is one slot per element, so a resumed element's
+second sign-off replaces the first one's.** The value is dated at the sentinel
+and `beobachtet` only ever holds *this* session's taps and *this* session's
+committed layers, so an element drilled 0–8 m in one session and deepened to
+12 m in the next commits a profile whose top 8 m is back-filled from the
+Schichtauftrag — over the layers the first session's operator actually
+observed, marked `q: "vorgabe"`, with nothing saying so. The series shape kept
+both sessions' rows. Fixing it means carrying observations across the
+element's sessions, which is a decision about which of two sign-offs wins, not
+a patch.
 
 **One button, two consequences — never selected by the operating mode.** Which
 button the sign-off screen shows comes from `?beenden=1` in the route, set by

@@ -88,9 +88,17 @@ export interface UploadSensorMeta {
  * Roles whose every reading has to keep the instant it was recorded at.
  *
  * Not a style preference: a grid merges readings, and for these a merge is a
- * lost layer or a lost completion stamp. See the module comment.
+ * lost completion stamp or a lost profile. See the module comment.
+ *
+ * `geology_profile` is the one of the two that actually reaches
+ * `session_readings` today — one value at a sentinel instant, which a grid
+ * would date at a bucket and a chunk would pad with empty cells. It is already
+ * refused for being a string sensor, and that is the accident: the type is a
+ * property of this Verfahren's CSV, the sentinel is a property of the
+ * contract. `is_completed` is here for the documented reason rather than a
+ * live one — `element-completion.ts` posts it straight to the platform.
  */
-export const EXACT_TIMESTAMP_ROLES = new Set(['is_completed']);
+export const EXACT_TIMESTAMP_ROLES = new Set(['is_completed', 'geology_profile']);
 
 export interface CsvChunk {
   /** The request body, header included. */

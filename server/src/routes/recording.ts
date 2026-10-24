@@ -181,13 +181,12 @@ export function registerRecordingRoutes(app: FastifyInstance): void {
        * A pause skips the things that *finish* an element — the
        * Ausführungsdatum, and the sign-off screen the recording bar routes
        * through. It must not skip the back-fill, and the first version did:
-       * `recordLiveLayer` writes each tap straight into `session_readings` as
-       * `pending`, so a worker who drilled to 2 m, tapped „Sand" and then
-       * paused to apply an update uploaded exactly one `GeoDIN` row and
-       * nothing else. implenia-web turns that into "this ground from 2.0 m to
-       * the bottom of the hole" — the partial profile that
-       * "every committed profile is complete" exists to prevent, in a signed
-       * document, from an upload that reported success.
+       * a worker who drilled to 2 m, tapped „Sand" and then paused to apply an
+       * update left the element with a one-layer profile, and a profile is flat
+       * and gapless, so that layer reads as "this ground from 2.0 m to the
+       * bottom of the hole" — the partial profile that "every committed profile
+       * is complete" exists to prevent, in a signed document, from an upload
+       * that reported success.
        *
        * Committing here costs the pause nothing it was protecting: the review
        * is spent by `geology_confirmed_at`, which only the sign-off sets, so a

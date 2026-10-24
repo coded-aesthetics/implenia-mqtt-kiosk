@@ -69,6 +69,7 @@ import {
   getSessionSensorTextSeries,
   insertSessionGeology,
   insertSessionReading,
+  maxDrilledValue,
   type Session,
 } from './db.js';
 import { drilledDepth, type DepthSample } from './depth-timestamp.js';
@@ -97,6 +98,15 @@ export const PROFILE_SENTINEL_AT = Date.UTC(2000, 0, 1);
  * stood-still sessions stop exactly as they always have.
  */
 export const MIN_DRILL_SPAN_M = 0.5;
+
+/**
+ * Depth tolerance, in metres — far below the 0.1 m grid the editor snaps to.
+ *
+ * Comparing a snapped depth against a raw reading is float arithmetic either
+ * way, and the only comparison that matters here decides whether a layer is
+ * kept or dropped.
+ */
+const TIEFE_EPS = 1e-6;
 
 /** Where a boundary came from. */
 export type Quelle = 'ist' | 'vorgabe';
@@ -261,19 +271,29 @@ export interface GeologyContext {
   /** The planned profile, for back-filling what the operator did not confirm. */
   vorgabe: VorgabeProfile | null;
   /**
-   * The layers the operator entered during production, read out of
-   * `session_geology`.
+   * Everything about this hole that somebody actually asserted: the taps in
+   * `session_geology`, plus the layers a previous commit recorded as observed.
    *
    * Deliberately persisted rather than remembered in the browser: a PM2
-   * restart mid-element loses any client-side state. Each entry carries the
-   * depth that was current when the operator tapped, so nothing has to be
+   * restart mid-element loses any client-side state. Each tap carries the
+   * depth that was current when the operator made it, so nothing has to be
    * recovered by joining series on a timestamp — which is what used to make a
    * misaligned write cost a layer silently.
    *
-   * Nothing a previous commit back-filled appears here, because the back-fill
-   * is only ever written into the committed value. The old shape had to read
-   * its own series back and strip those rows out again to avoid reporting the
-   * plan as observation.
+   * **The committed profile is read back too, and only its unmarked layers.**
+   * A tap is not the only way to assert ground: the sign-off screen is where
+   * an operator retypes a planned boundary or adds one the taps missed, and
+   * those edits arrive as `quelle: 'ist'` layers that never enter
+   * `session_geology`. The re-ask — a step back into `bohren` to drill deeper
+   * clears `geology_confirmed_at` — rebuilds this context, so without reading
+   * them back every correction made at the first sign-off is silently
+   * reverted to the Schichtauftrag at the second.
+   *
+   * Nothing back-filled comes back with them: a layer the kiosk filled in
+   * from the plan carries `q: "vorgabe"` in the committed value and is
+   * dropped here, so the plan is never reported as observation. That is what
+   * `observedOnly` had to reconstruct in the series shape, where provenance
+   * only survived as a suffix on display text.
    */
   beobachtet: { tiefe: number; nr: number }[];
   /**
@@ -335,8 +355,18 @@ export function getGeologyContext(session: Session): GeologyContext {
     );
   }
 
-  const beobachtet = getSessionGeology(session.id)
-    .map((e) => ({ tiefe: e.depth, nr: e.nr }));
+  // Live taps first, the committed profile's own observations over them: one
+  // assertion per depth, and at a shared depth the sign-off edit is the newer
+  // of the two. Deduplicated here rather than left to `mergeProfile`, which
+  // would answer the same but hand the screen the layer twice.
+  const beobachtetByTiefe = new Map<number, { tiefe: number; nr: number }>();
+  for (const e of getSessionGeology(session.id)) {
+    beobachtetByTiefe.set(e.depth, { tiefe: e.depth, nr: e.nr });
+  }
+  for (const l of committedObserved(session, sensors)) {
+    beobachtetByTiefe.set(l.tiefe, l);
+  }
+  const beobachtet = [...beobachtetByTiefe.values()].sort((a, b) => a.tiefe - b.tiefe);
 
   return {
     verfuegbar: true,
@@ -348,6 +378,46 @@ export function getGeologyContext(session: Session): GeologyContext {
     bestaetigt: session.geology_confirmed_at != null,
     profil: mergeProfile(vorgabe, beobachtet, maxTiefe),
   };
+}
+
+/**
+ * The layers a previous commit of this session recorded as *observed*.
+ *
+ * The sign-off screen is a second source of observations: the operator retypes
+ * a planned boundary or adds one the taps missed, and those arrive as
+ * `quelle: 'ist'` layers that are committed without ever entering
+ * `session_geology`. A re-ask rebuilds the context from scratch, so these have
+ * to be read back or every correction is reverted to the Schichtauftrag.
+ *
+ * Only the layers without `q` come back. A back-filled one is a copy of the
+ * plan, and returning it would report the Schichtauftrag as something somebody
+ * saw — which is also what stops `mergeProfile` from having anything left to
+ * mark. Provenance is a field now, so the filter is one comparison rather than
+ * the series-shape reconstruction `observedOnly` had to do.
+ *
+ * Never throws: a profile this cannot parse is treated as absent, which costs
+ * the recovery and leaves the taps and the plan to build from.
+ */
+function committedObserved(
+  session: Session, sensors: GeologySensors,
+): { tiefe: number; nr: number }[] {
+  const values = getSessionSensorTextSeries(session.id, sensors.profilId);
+  const latest = values[values.length - 1];
+  if (!latest) return [];
+  try {
+    const parsed = JSON.parse(latest.text) as { layers?: unknown };
+    if (!Array.isArray(parsed.layers)) return [];
+    return parsed.layers
+      .filter((l): l is WireLayer => {
+        const w = l as WireLayer | null;
+        return w != null && w.q === undefined
+          && Number.isFinite(w.t) && Number.isInteger(w.nr) && w.nr > 0;
+      })
+      .map((l) => ({ tiefe: l.t, nr: l.nr }));
+  } catch {
+    log.warn('Session %d: committed geology profile is not readable', session.id);
+    return [];
+  }
 }
 
 /**
@@ -385,14 +455,16 @@ export function commitDefaultGeology(session: Session): GeologyCommitResult | nu
  * trusted the mark and skipped the back-fill: confirmed, nothing written, and
  * the element uploaded with no geology whatsoever.
  *
- * Deliberately only "any", not "complete": a live entry counts, and after a
- * failed commit it is indistinguishable from a profile the operator observed
- * in full. A profile that lost its back-fill is a narrower failure than one
- * that lost everything, and telling those two apart would take a second mark
- * rather than a read.
+ * **A committed profile, never a live entry.** `session_geology` is a
+ * scratchpad that is never uploaded — only the committed `Geologieprofil`
+ * value leaves the kiosk — so counting a tap here would answer "yes" for a
+ * session whose sign-off commit threw and whose taps reach nobody. The stop
+ * would then trust the mark, skip its own back-fill, and upload the element
+ * with no geology whatsoever: exactly the silent, total loss this check
+ * exists to prevent, and the common case rather than the rare one, because an
+ * operator who signs off has usually tapped something.
  */
 export function hasGeologyReadings(session: Session): boolean {
-  if (getSessionGeology(session.id).length > 0) return true;
   const sensors = resolveSensors(session);
   if (isError(sensors)) return false;
   return getSessionSensorTextSeries(session.id, sensors.profilId).length > 0;
@@ -443,8 +515,19 @@ export function commitGeology(
     return { ...empty, hinweis: sensors.fehler };
   }
 
-  const samples = depthSamples(session.id, sensors.depthId, drillingWindowEnd(session));
-  const maxTiefe = samples.reduce((max, s) => (s.depth > max ? s.depth : max), 0);
+  // The deepest reading of the drilling window, as one aggregate rather than
+  // the whole series: `getGeologyContext` has already loaded those 27 000 rows
+  // on this very path, and all that is wanted here is their maximum. A null is
+  // "this session recorded no depth at all", which is the guard below.
+  const gemessen = maxDrilledValue(session.id, sensors.depthId, drillingWindowEnd(session));
+  if (gemessen === null) {
+    const hinweis = `Für diese Aufzeichnung sind keine Messwerte von „${sensors.depthName}" `
+      + 'vorhanden. Die Geologie kann keiner Tiefe zugeordnet werden — bitte die '
+      + 'Tiefenmessung prüfen und das Profil danach erneut bestätigen.';
+    log.warn('Session %d: geology not committed — no depth readings', session.id);
+    return { ...empty, hinweis };
+  }
+  const maxTiefe = Math.max(gemessen, 0);
 
   let vorgabeEnd: number | null = null;
   try {
@@ -469,9 +552,16 @@ export function commitGeology(
   // render ground the drill never reached. The plan's bottom counts, because a
   // planned layer below the deepest reading is legitimate on a hole that
   // stopped short.
+  //
+  // `TIEFE_EPS` is what `alignBoundaries` carried for the same reason: the
+  // sign-off screen snaps a depth onto a 0.1 m grid and the bound comes off a
+  // raw reading, so a layer at the very bottom of the hole can land a float
+  // hair below it. Without the tolerance that layer — the deepest ground
+  // anybody saw — is dropped, and `zuTief` is reported nowhere the operator
+  // looks.
   const grenze = Math.max(maxTiefe, vorgabeEnd ?? 0);
-  const zuTief = usable.filter((l) => l.tiefe > grenze).map((l) => l.tiefe);
-  const behalten = usable.filter((l) => l.tiefe <= grenze);
+  const zuTief = usable.filter((l) => l.tiefe > grenze + TIEFE_EPS).map((l) => l.tiefe);
+  const behalten = usable.filter((l) => l.tiefe <= grenze + TIEFE_EPS);
 
   // At a repeated depth the *first* layer wins: a Schichtauftrag that names
   // ground types without their end depths produces several layers at one

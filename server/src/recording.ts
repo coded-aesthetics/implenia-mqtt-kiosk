@@ -25,7 +25,6 @@ import {
   getSessionById,
   getSessionUploadGroups,
   getSessionReadingCount,
-  getSessionSensorSeries,
   getSessionStats,
   getSessions,
   insertSessionReading,
@@ -226,13 +225,13 @@ export async function beginRecording(
      * counts as drilling data — `session_readings.phase` is only ever `bohren`
      * or `rohrwechsel`, never the operating mode — so `drilledDepth` is the
      * whole hole, `commitDefaultGeology` at the stop finds `gebohrt`, and the
-     * element gets a second, entirely back-filled Schichtauftrag profile dated
-     * against the retraction, over the one the drilling session signed off.
-     * `alignBoundaries` catches a *pure* retraction, every boundary being
-     * shallower than the first reading and going to `aboveHole`, which is why
-     * this looks harmless; one reading before the rig starts pulling is enough
-     * to defeat that and write the fabricated layers. It uploads cleanly, into
-     * a Herstellprotokoll that is signed and archived.
+     * element gets a second, entirely back-filled Schichtauftrag profile over
+     * the one the drilling session signed off — and because the profile is one
+     * value at a sentinel instant, that is a replacement rather than an extra
+     * series nobody reads. It uploads cleanly, into a Herstellprotokoll that is
+     * signed and archived. Nothing else guards it: the depth → timestamp
+     * alignment that used to drop such boundaries for being shallower than the
+     * session's first reading is gone with the series shape.
      *
      * Stamped at the session's own start, which leaves the window empty: this
      * session drilled nothing, `gebohrt` is false, and nothing is committed. A

@@ -573,6 +573,43 @@ describe('POST /api/recording/geology/commit', () => {
     expect(db.getSessionById(id)?.status).toBe('ended');
   });
 
+  it('still back-fills at the stop when the sign-off failed after a live tap', async () => {
+    // `session_geology` is a scratchpad nothing uploads, so a tap is not a
+    // profile. Counting one as "geology on record" had the stop trust the mark,
+    // skip its own back-fill, and upload the element with no geology at all —
+    // and an operator who signs off has usually tapped something, so that was
+    // the common case rather than the rare one.
+    const id = activeDrilledSession();
+    db.setElementVorgaben('P-01', {
+      int_sensors: { 'Geologie 1': SAND, 'Geologie 2': TON },
+      float_sensors: { 'Tiefe Geologie 1': 2, 'Tiefe Geologie 2': 12, 'Säulenhöhe': 12 },
+    });
+    await app.inject({
+      method: 'POST', url: '/api/recording/geology', payload: { nr: SAND },
+    });
+
+    const geology = await import('../geology.js');
+    const spy = vi.spyOn(geology, 'commitGeology').mockImplementation(() => {
+      throw new Error('SQLITE_FULL: database or disk is full');
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/recording/geology/commit',
+      payload: { geology: [{ tiefe: 0, nr: SAND, quelle: 'ist' }] },
+    });
+    expect(db.getSessionById(id)!.geology_confirmed_at).toBeGreaterThan(0);
+    expect(db.getSessionSensorTextSeries(id, PROFIL_ID)).toEqual([]);
+    spy.mockRestore();
+
+    const res = await app.inject({ method: 'POST', url: '/api/recording/stop' });
+    expect(res.statusCode).toBe(200);
+    // A profile reached `session_readings`, which is the only thing that
+    // uploads. Asserted on the committed value rather than through `geoDin`,
+    // which falls back to the live entries and would pass on the tap alone.
+    expect(db.getSessionSensorTextSeries(id, PROFIL_ID)).toHaveLength(1);
+    expect(geoDin(id)).toContain(TON);
+  });
+
   it('still back-fills at the stop when the sign-off never happened', async () => {
     const id = activeDrilledSession();
     db.setElementVorgaben('P-01', {

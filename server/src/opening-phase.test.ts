@@ -208,11 +208,10 @@ describe('a recording opened past Bohren', () => {
 
   /*
    * The series is one reading at rest and then the pipes coming out of a 6 m
-   * hole, which is what makes the fabrication reachable rather than merely
-   * possible: `alignBoundaries` drops a boundary shallower than the session's
-   * first reading, so a *pure* retraction loses every planned boundary to
-   * `aboveHole` — one reading before the rig moves is enough for both to
-   * align, the 3 m boundary onto the reading at 6 m.
+   * hole. `drilling_ended_at` is the only thing standing between that and an
+   * entirely back-filled Schichtauftrag profile written over the one the
+   * drilling session signed off: a layer states its own depth now, so nothing
+   * about the retraction makes the planned boundaries look unreachable.
    */
   it('commits no profile at the stop, however far the rig retracts', async () => {
     db.setElementVorgaben('P-01', VORGABEN);
