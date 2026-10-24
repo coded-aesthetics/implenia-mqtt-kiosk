@@ -467,6 +467,34 @@ const getSensorTextSeriesStmt = db.prepare(`
     AND value_text IS NOT NULL
   ORDER BY received_at ASC
 `);
+// The same read across every session of one element, for the one value that
+// is not session data: the committed `Geologieprofil`.
+//
+// An element worked over two shifts is two sessions, and both write their
+// profile to the same sensor at the same sentinel instant -- so on the
+// platform, which upserts on `(sensor_id, date)`, the second *replaces* the
+// first. Geology reads the whole element back for exactly that reason: the
+// later commit has to carry the earlier one's observations, or resuming an
+// element to drill it deeper reports the top of the hole as planned ground
+// nobody saw.
+//
+// Matching on `sensor_id` rather than the name is what makes that precise.
+// It is the identity the platform upserts on, so these rows are exactly the
+// set that shares one slot there. Two sessions that pinned different ids
+// wrote to different slots, neither overwrites the other, and this correctly
+// finds nothing to recover.
+//
+// Ordered by `(session_id, id)`, never by `received_at`: every one of these
+// rows carries the same sentinel instant, so that column cannot order them
+// and "the latest" would be whatever SQLite happened to return last.
+const getElementSensorTextSeriesStmt = db.prepare(`
+  SELECT sr.session_id, sr.value_text
+  FROM session_readings sr
+  JOIN recording_sessions rs ON rs.id = sr.session_id
+  WHERE rs.element_name = ? AND sr.sensor_id = ?
+    AND sr.upload_status != 'clipped' AND sr.value_text IS NOT NULL
+  ORDER BY sr.session_id ASC, sr.id ASC
+`);
 // The oldest recorded value of one sensor, used to rebuild the volume tracker's
 // baseline after a restart. Deliberately unfiltered beyond "has a value": the
 // live tracker baselines on the first finite value it sees, clipped or not, so
@@ -1174,6 +1202,26 @@ export function getSessionSensorTextSeries(
     received_at: number; value_text: string;
   }[];
   return rows.map((r) => ({ receivedAt: r.received_at, text: r.value_text }));
+}
+
+/**
+ * Every recorded text value of one sensor across an element's sessions.
+ *
+ * Oldest session first, and within a session oldest write first, so a reader
+ * folding them in order ends on the newest assertion. Each row says which
+ * session it came from, because that is what tells the caller which of them
+ * are its own.
+ *
+ * See getElementSensorTextSeriesStmt for why this is keyed on the sensor id
+ * and ordered the way it is.
+ */
+export function getElementSensorTextSeries(
+  elementName: string, sensorId: string,
+): { sessionId: number; text: string }[] {
+  const rows = getElementSensorTextSeriesStmt.all(elementName, sensorId) as {
+    session_id: number; value_text: string;
+  }[];
+  return rows.map((r) => ({ sessionId: r.session_id, text: r.value_text }));
 }
 
 export interface LatestReading {

@@ -67,8 +67,11 @@ beforeEach(() => {
 });
 
 /** A session with a depth series descending `from` → `to` at 0.5 m per second. */
-function drilledSession(from = 0, to = 6, step = 0.5): { id: number; session: import('./db.js').Session } {
-  const id = db.createSession(`E-${Math.random().toString(36).slice(2, 8)}`, SENSOR_MAP);
+function drilledSession(
+  from = 0, to = 6, step = 0.5,
+  element = `E-${Math.random().toString(36).slice(2, 8)}`,
+): { id: number; session: import('./db.js').Session } {
+  const id = db.createSession(element, SENSOR_MAP);
   let i = 0;
   for (let d = from; d <= to + 1e-9; d += step) {
     db.insertSessionReading(
@@ -504,6 +507,105 @@ describe('getGeologyContext', () => {
     expect(geology.getGeologyContext(session).bestaetigt).toBe(false);
     db.setGeologyConfirmedAt(id, Date.now());
     expect(geology.getGeologyContext(db.getSessionById(id)!).bestaetigt).toBe(true);
+  });
+});
+
+describe('an element worked over more than one session', () => {
+  /*
+   * The profile is one sentinel-dated slot per element, so a later session's
+   * commit *replaces* the earlier one's on the platform instead of adding to
+   * it. A session that reopens an element to drill deeper therefore has to
+   * carry what the earlier session observed, or its back-fill overwrites real
+   * observations with copies of the Schichtauftrag.
+   */
+  const PLAN = {
+    int_sensors: { 'Geologie 1': SAND },
+    float_sensors: { 'Tiefe Geologie 1': 12, 'Säulenhöhe': 12 },
+  };
+
+  it('carries an earlier session observation into the later session', () => {
+    const element = 'P-RESUME-1';
+    const erste = drilledSession(0, 8, 0.5, element);
+    db.setElementVorgaben(element, PLAN);
+    db.insertSessionGeology(erste.id, 3, TON, null, T0);
+    geology.commitDefaultGeology(db.getSessionById(erste.id)!);
+
+    // The element is resumed and drilled deeper. Nothing is tapped this time.
+    const zweite = drilledSession(8, 12, 0.5, element);
+
+    expect(geology.getGeologyContext(db.getSessionById(zweite.id)!).beobachtet)
+      .toEqual([{ tiefe: 3, nr: TON }]);
+  });
+
+  it('commits the earlier observation unmarked rather than as plan', () => {
+    // The payoff: the value the later session uploads — which replaces the
+    // earlier one in the sentinel slot — still reports Ton at 3 m as observed.
+    const element = 'P-RESUME-2';
+    const erste = drilledSession(0, 8, 0.5, element);
+    db.setElementVorgaben(element, PLAN);
+    db.insertSessionGeology(erste.id, 3, TON, null, T0);
+    geology.commitDefaultGeology(db.getSessionById(erste.id)!);
+
+    const zweite = drilledSession(8, 12, 0.5, element);
+    geology.commitDefaultGeology(db.getSessionById(zweite.id)!);
+
+    const ton = profile(zweite.id)!.layers.find((l) => l.nr === TON);
+    expect(ton).toMatchObject({ t: 3 });
+    expect(ton!.q).toBeUndefined();
+  });
+
+  it('does not carry an earlier session back-fill', () => {
+    // A back-filled layer is a copy of the plan. Carrying it across sessions
+    // would launder the Schichtauftrag into observation one session later —
+    // the one direction this must never fail in.
+    const element = 'P-RESUME-3';
+    const erste = drilledSession(0, 8, 0.5, element);
+    db.setElementVorgaben(element, PLAN);
+    geology.commitGeology(db.getSessionById(erste.id)!, [
+      { tiefe: 0, nr: SAND, quelle: 'vorgabe' },
+      { tiefe: 5, nr: SCHLUFF, quelle: 'ist' },
+    ]);
+
+    const zweite = drilledSession(8, 12, 0.5, element);
+
+    expect(geology.getGeologyContext(db.getSessionById(zweite.id)!).beobachtet)
+      .toEqual([{ tiefe: 5, nr: SCHLUFF }]);
+  });
+
+  it('prefers this session tap to an earlier session boundary at one depth', () => {
+    // Folded oldest assertion first: a tap made now is a better answer than a
+    // boundary committed on a previous shift at the same depth.
+    const element = 'P-RESUME-4';
+    const erste = drilledSession(0, 8, 0.5, element);
+    db.setElementVorgaben(element, PLAN);
+    geology.commitGeology(db.getSessionById(erste.id)!, [
+      { tiefe: 3, nr: TON, quelle: 'ist' },
+    ]);
+
+    const zweite = drilledSession(0, 12, 0.5, element);
+    db.insertSessionGeology(zweite.id, 3, SAND, null, T0);
+
+    expect(geology.getGeologyContext(db.getSessionById(zweite.id)!).beobachtet)
+      .toEqual([{ tiefe: 3, nr: SAND }]);
+  });
+
+  it('keeps a session own re-commit authoritative over its earlier write', () => {
+    // Within one session a later commit is a correction, deletions included:
+    // the Ton the operator removed at the second sign-off must not come back
+    // from the first one's value.
+    const element = 'P-RESUME-5';
+    const { id } = drilledSession(0, 8, 0.5, element);
+    db.setElementVorgaben(element, PLAN);
+    geology.commitGeology(db.getSessionById(id)!, [
+      { tiefe: 3, nr: TON, quelle: 'ist' },
+      { tiefe: 6, nr: SCHLUFF, quelle: 'ist' },
+    ]);
+    geology.commitGeology(db.getSessionById(id)!, [
+      { tiefe: 3, nr: TON, quelle: 'ist' },
+    ]);
+
+    expect(geology.getGeologyContext(db.getSessionById(id)!).beobachtet)
+      .toEqual([{ tiefe: 3, nr: TON }]);
   });
 });
 

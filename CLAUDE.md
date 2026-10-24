@@ -693,16 +693,36 @@ second and is committed unless they delete it again. Within a single sign-off
 the deletion holds, which is the common case; fixing it across one properly
 means persisting rejections, not special-casing the rebuild.
 
-**Known deviation: a profile is one slot per element, so a resumed element's
-second sign-off replaces the first one's.** The value is dated at the sentinel
-and `beobachtet` only ever holds *this* session's taps and *this* session's
-committed layers, so an element drilled 0–8 m in one session and deepened to
-12 m in the next commits a profile whose top 8 m is back-filled from the
-Schichtauftrag — over the layers the first session's operator actually
-observed, marked `q: "vorgabe"`, with nothing saying so. The series shape kept
-both sessions' rows. Fixing it means carrying observations across the
-element's sessions, which is a decision about which of two sign-offs wins, not
-a patch.
+**The profile is one slot per element, so every commit must carry the whole
+element.** The value is dated at the sentinel, so a resumed element's second
+commit *replaces* the first's on the platform rather than adding to it — where
+the `GeoDIN` series kept both sessions' rows. `committedObserved` therefore
+reads back every session of the *element*, not of the session: without it, an
+element drilled 0–8 m on one shift and deepened to 12 m on the next committed
+a profile whose top 8 m was back-filled from the Schichtauftrag, over the
+layers the first operator actually observed, marked `q: "vorgabe"` with nothing
+saying so.
+
+Three rules inside that read, each load-bearing:
+
+- **Keyed on the sensor id, not the name.** That is the identity the platform
+  upserts on, so the rows it finds are exactly the set sharing one slot there.
+  Two sessions that pinned different ids wrote to different slots, neither
+  overwrites the other, and the read correctly recovers nothing.
+- **Only the newest value per session, but every session.** Within a session a
+  later commit is a correction of the one before it, *deletions included*, so
+  folding an earlier write back in would resurrect a boundary the operator had
+  just removed. Across sessions they accumulate, which is the point.
+- **Folded oldest assertion first**: an earlier session's commit, then this
+  session's taps, then this session's own commit. A tap made now is a better
+  answer than a boundary committed on a previous shift at the same depth, and
+  this session's sign-off is a better answer than the tap it corrected. The
+  order is the entire content of the rule.
+
+Still bounded by `grenze`: a recovered layer deeper than this session drilled
+*or* the plan reaches is dropped like any other, so re-working an element to a
+shallower depth with no Schichtauftrag on file loses the deeper observations.
+Rare, and the alternative is reporting ground below the hole.
 
 **One button, two consequences — never selected by the operating mode.** Which
 button the sign-off screen shows comes from `?beenden=1` in the route, set by

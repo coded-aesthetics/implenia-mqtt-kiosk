@@ -66,6 +66,7 @@ import {
   getElementVorgaben,
   getSessionDepthSamples,
   getSessionGeology,
+  getElementSensorTextSeries,
   getSessionSensorTextSeries,
   insertSessionGeology,
   insertSessionReading,
@@ -355,16 +356,27 @@ export function getGeologyContext(session: Session): GeologyContext {
     );
   }
 
-  // Live taps first, the committed profile's own observations over them: one
-  // assertion per depth, and at a shared depth the sign-off edit is the newer
-  // of the two. Deduplicated here rather than left to `mergeProfile`, which
-  // would answer the same but hand the screen the layer twice.
+  // One assertion per depth, folded oldest first so the newest wins:
+  //
+  //   1. what an *earlier* session of this element committed,
+  //   2. this session's live taps,
+  //   3. this session's own last commit.
+  //
+  // The order is the whole content of this. A tap made now is a better answer
+  // than a boundary committed on a previous shift at the same depth, and this
+  // session's sign-off is a better answer than the tap it was correcting.
+  // Deduplicated here rather than left to `mergeProfile`, which would answer
+  // the same but hand the screen the layer twice.
+  const committed = committedObserved(session, sensors);
   const beobachtetByTiefe = new Map<number, { tiefe: number; nr: number }>();
+  for (const l of committed) {
+    if (l.sessionId !== session.id) beobachtetByTiefe.set(l.tiefe, { tiefe: l.tiefe, nr: l.nr });
+  }
   for (const e of getSessionGeology(session.id)) {
     beobachtetByTiefe.set(e.depth, { tiefe: e.depth, nr: e.nr });
   }
-  for (const l of committedObserved(session, sensors)) {
-    beobachtetByTiefe.set(l.tiefe, l);
+  for (const l of committed) {
+    if (l.sessionId === session.id) beobachtetByTiefe.set(l.tiefe, { tiefe: l.tiefe, nr: l.nr });
   }
   const beobachtet = [...beobachtetByTiefe.values()].sort((a, b) => a.tiefe - b.tiefe);
 
@@ -381,13 +393,25 @@ export function getGeologyContext(session: Session): GeologyContext {
 }
 
 /**
- * The layers a previous commit of this session recorded as *observed*.
+ * The layers an already-committed profile of this *element* recorded as
+ * observed, oldest session first and tagged with the session that wrote them.
  *
- * The sign-off screen is a second source of observations: the operator retypes
- * a planned boundary or adds one the taps missed, and those arrive as
- * `quelle: 'ist'` layers that are committed without ever entering
- * `session_geology`. A re-ask rebuilds the context from scratch, so these have
- * to be read back or every correction is reverted to the Schichtauftrag.
+ * Two different losses make this necessary, and they need the same read:
+ *
+ * 1. **A re-ask inside one session.** The sign-off screen is a second source
+ *    of observations — the operator retypes a planned boundary or adds one the
+ *    taps missed, and those arrive as `quelle: 'ist'` layers that never enter
+ *    `session_geology`. A step back into `bohren` clears
+ *    `geology_confirmed_at`, so the next step out rebuilds this context: no
+ *    read-back, and every correction is reverted to the Schichtauftrag.
+ * 2. **A resumed element.** The profile is one sentinel-dated slot per
+ *    element, so a second session's commit *replaces* the first's on the
+ *    platform rather than adding to it. A session that reopens an element to
+ *    drill deeper observes only its own stretch, and without the earlier
+ *    session's layers its commit back-fills the whole hole above from the plan
+ *    — overwriting real observations with `q: "vorgabe"` copies of the
+ *    Schichtauftrag. The element's own Herstellprotokoll then reports planned
+ *    ground for the part somebody actually looked at.
  *
  * Only the layers without `q` come back. A back-filled one is a copy of the
  * plan, and returning it would report the Schichtauftrag as something somebody
@@ -395,29 +419,41 @@ export function getGeologyContext(session: Session): GeologyContext {
  * mark. Provenance is a field now, so the filter is one comparison rather than
  * the series-shape reconstruction `observedOnly` had to do.
  *
+ * Only the newest value *per session* is read. Within one session a later
+ * commit is a correction of the one before it, deletions included, so folding
+ * an earlier write in too would resurrect a boundary the operator had just
+ * removed. Across sessions they accumulate, which is the point.
+ *
  * Never throws: a profile this cannot parse is treated as absent, which costs
- * the recovery and leaves the taps and the plan to build from.
+ * that session's recovery and leaves the taps, the other sessions and the plan
+ * to build from.
  */
 function committedObserved(
   session: Session, sensors: GeologySensors,
-): { tiefe: number; nr: number }[] {
-  const values = getSessionSensorTextSeries(session.id, sensors.profilId);
-  const latest = values[values.length - 1];
-  if (!latest) return [];
-  try {
-    const parsed = JSON.parse(latest.text) as { layers?: unknown };
-    if (!Array.isArray(parsed.layers)) return [];
-    return parsed.layers
-      .filter((l): l is WireLayer => {
-        const w = l as WireLayer | null;
-        return w != null && w.q === undefined
-          && Number.isFinite(w.t) && Number.isInteger(w.nr) && w.nr > 0;
-      })
-      .map((l) => ({ tiefe: l.t, nr: l.nr }));
-  } catch {
-    log.warn('Session %d: committed geology profile is not readable', session.id);
-    return [];
+): { sessionId: number; tiefe: number; nr: number }[] {
+  // Newest value per session. Insertion order survives an overwrite in a Map,
+  // so this stays in the query's ascending session order.
+  const latestBySession = new Map<number, string>();
+  for (const v of getElementSensorTextSeries(session.element_name, sensors.profilId)) {
+    latestBySession.set(v.sessionId, v.text);
   }
+
+  const out: { sessionId: number; tiefe: number; nr: number }[] = [];
+  for (const [sessionId, text] of latestBySession) {
+    try {
+      const parsed = JSON.parse(text) as { layers?: unknown };
+      if (!Array.isArray(parsed.layers)) continue;
+      for (const l of parsed.layers) {
+        const w = l as WireLayer | null;
+        if (w == null || w.q !== undefined) continue;
+        if (!Number.isFinite(w.t) || !Number.isInteger(w.nr) || w.nr <= 0) continue;
+        out.push({ sessionId, tiefe: w.t, nr: w.nr });
+      }
+    } catch {
+      log.warn('Session %d: committed geology profile is not readable', sessionId);
+    }
+  }
+  return out;
 }
 
 /**
