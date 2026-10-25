@@ -1155,6 +1155,77 @@ The phase is both navigation and a recording setting: it picks which screen rend
 
 The stepper carries one slot that is **not** a phase — see Ausrichten below.
 
+## Vorgaben-Briefing
+
+What is planned at an element, shown before anyone drills it: the planned
+**Bohrlänge** and **Sollvolumen** as the two heroes, the two Soll angles, the
+Ansatz- and Fusspunkt, and the planned geology as the same column the drilling
+screen draws. Injektionsbohren only — DSV reads its Vorgaben in
+`ElementDetail`'s own Vorgabe tab, while Injektionsbohren's element route goes
+straight to the drilling screen, so until this existed the planned depth was on
+the kiosk and on no screen.
+
+**It is a render of `#/element/<name>`, not a route of its own.** That is the
+same two-name scheme the alignment screen relies on — `element/` means "open
+this element", `bohren/` means "the drilling screen, directly" — so the forward
+button can navigate on without being bounced back, and tapping the element in
+the list is the way to it again. A route of its own would need something to
+point at it, and would collide with the alignment redirect on the same page.
+
+```
+element list ─▶ #/element/P-04 ─▶ Briefing ─▶ Weiter zum Ausrichten
+                                                      │
+                                              #/ausrichten/P-04 ─▶ #/bohren/P-04
+```
+
+Where the element is plumb, or the Verfahren has no angle sensors, the button
+reads **Weiter zum Bohren** and goes straight to `#/bohren/<name>` — the same
+condition that decides whether the Ausrichten slot exists at all, so the
+briefing never offers a screen the stepper would not.
+
+**It never blocks.** The recording bar is live underneath it, so an operator who
+does not need the briefing starts from here; the moment the session opens the
+drilling screen takes over by itself, because a running recording is one of the
+conditions below.
+
+The briefing is **not** shown when:
+
+| case | why |
+| --- | --- |
+| a recording is running | the rig is in the hole; "show me what it is doing" is the question, not "what was planned" |
+| this kiosk has recorded the element before | it is being **resumed** — drilling has started, and it reopens on the phase its last session was in |
+| the session lookup has not answered | `laedt` is not "no": answering early flashes the briefing in front of a resumed element for a frame |
+| the Vorgaben carry neither a planned depth nor a geology profile | there would be nothing on it, and the drilling screen works with no Soll values at all |
+
+The same rule, and the same reasoning, as the alignment redirect below — which
+is why the two are decided together: a fresh element shows the briefing
+*instead of* being redirected to the dials, and reaches them from its own
+forward button. `briefingBeimOeffnen` (`ui/src/utils/briefing.ts`) owns the
+condition; `briefing.test.ts` pins it.
+
+### Where the profile bottoms out, and what is below the survey
+
+The column ends at the **planned bore depth**, not at the last
+`Tiefe Geologie n`. Those are routinely different: the probe drilling the
+geology stops short of the hole, so an element surveyed to 36 m with a 43 m
+bore drew a profile that stopped at 36 — and because everything the chart draws
+is clipped to `endTiefe`, the depth indicator with it, the column stopped saying
+where the drill was for the last seven metres.
+
+One list of Vorgabe names answers "how deep is this hole planned to go", per
+Verfahren: DSV's `Säulenhöhe`, Injektionsbohren's `Bohrlaenge` (spelled in ASCII
+in the CSV; the umlaut spelling is matched too, because a miss here is silent —
+the profile just falls back to the last geology depth and nothing says so). It
+lives in `GEPLANTE_TIEFE`, twice: `server/src/vorgabe-geology.ts` for the
+committed profile and `ui/src/utils/vorgaben.ts` for what is drawn. Keep the two
+in step.
+
+A profile is gapless, so the deepest planned layer is carried down to the bottom
+of the bore — which means the stretch below the survey is ground nobody looked
+at, drawn as if it were planned. The briefing marks that boundary
+(`markierteGrenze`) and says so underneath: *Unterhalb 36,00 m ist die Geologie
+nicht erkundet.* It is the one screen with the room for that sentence.
+
 ## Ausrichten
 
 An element whose **Vertikalneigung** is not 0 has to be aimed before drilling: the machine turned until its rotation matches the **Horizontalneigung** of the Schichtauftrag, and the mast set to the Vertikalneigung. The screen at `#/ausrichten/<element>` is those two dials and nothing else — the one thing the operator is doing at that moment.
@@ -1176,6 +1247,8 @@ The slot appears only where `Vertikalneigung ≠ 0` — a plumb hole has no dire
 ### Opening a tilted element lands here
 
 Aiming the rig is the first thing that happens at such an element, so it is the first thing on screen: tapping it in the element list opens `#/ausrichten/<element>` rather than the drilling screen with a stepper slot nobody has noticed. The way on is the stepper's Bohren slot, one tap, and the recording starts from there as before — nothing here gates it.
+
+**Unless the briefing is showing**, which on Injektionsbohren it is for exactly the elements this redirect fires on. The briefing comes first in the sequence and its forward button is what navigates here, so the redirect stands down rather than firing on the very page the briefing renders on. See Vorgaben-Briefing above.
 
 **The element screen has two route names, and that is what keeps the redirect from being a trap.** Both render the same thing:
 

@@ -118,8 +118,14 @@ export function statusFarbe(status: AusrichtungStatus): string {
   return 'var(--color-danger)';
 }
 
-/** `1,0°` — one decimal, which is the resolution these sensors actually have. */
-function grad(wert: number): string {
+/**
+ * `1,0°` — one decimal, which is the resolution these sensors actually have.
+ *
+ * Exported because the briefing screen shows the same two Soll angles one tap
+ * before this screen does, and `12,50°` there against `12,5°` here would be
+ * two spellings of one number on consecutive screens.
+ */
+export function grad(wert: number): string {
   return `${formatNumber(wert, 1)}°`;
 }
 

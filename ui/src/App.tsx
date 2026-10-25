@@ -17,10 +17,12 @@ import { DatenstromPage } from './components/DatenstromPage';
 import { DatenstromDetail } from './components/DatenstromDetail';
 import { RohrverlaengerungPage } from './components/RohrverlaengerungPage';
 import { BohrenScreen, INJEKTIONSBOHREN_BOHREN } from './components/BohrenScreen';
+import { BriefingScreen } from './components/BriefingScreen';
 import { GeologieBestaetigung } from './components/GeologieBestaetigung';
 import { VerpressenScreen, INJEKTIONSBOHREN_VERPRESSEN } from './components/VerpressenScreen';
 import { AusrichtenScreen } from './components/AusrichtenScreen';
 import { ausrichtenBeimOeffnen, ausrichtungErforderlich, ausrichtungMoeglich } from './utils/ausrichtung';
+import { briefingBeimOeffnen } from './utils/briefing';
 import { resolveScreen, needsSetupRedirect } from './setupGate';
 import { useCommentQueue } from './hooks/useCommentQueue';
 import { isVerpressenMode, MODE_LABELS } from './utils/operating-mode';
@@ -168,6 +170,25 @@ export function App() {
   const verfahrenSensoren = useVerfahrenSensors(setup.verfahren);
 
   /**
+   * The Vorgaben briefing: what is planned here, before anyone drills it.
+   *
+   * Rendered by `element/<name>` rather than reached by a redirect, which is
+   * what lets its forward button navigate on without being bounced straight
+   * back — see `briefingBeimOeffnen` for the whole rule. It is deliberately
+   * asked *before* the alignment redirect below and suppresses it: both answer
+   * the same question about the same page, and the briefing comes first in the
+   * sequence, with the dials one tap on from it.
+   */
+  const briefingOffen = briefingBeimOeffnen({
+    seite: route.page,
+    verfahren: setup.verfahren,
+    aufzeichnungLaeuft: recordingState.active,
+    bereitsAufgezeichnet: rueckkehr.bekannt,
+    nochUnbekannt: rueckkehr.status === 'laedt',
+    vorgaben: deviceVorgaben,
+  });
+
+  /**
    * Aiming the rig: offered as the stepper slot before Bohren, and only for an
    * element whose Vertikalneigung is not 0 — a plumb hole has no direction to
    * aim — on a Verfahren that actually has the two live angle sensors.
@@ -221,6 +242,10 @@ export function App() {
    */
   useEffect(() => {
     if (!ausrichtenElement) return;
+    // The briefing is showing, and its forward button is the way to the dials.
+    // Without this the redirect fires on the very page the briefing renders on
+    // and the operator never sees it.
+    if (briefingOffen) return;
     if (!ausrichtenBeimOeffnen({
       seite: route.page,
       aufzeichnungLaeuft: recordingState.active,
@@ -233,7 +258,7 @@ export function App() {
   }, [
     ausrichtenElement, route.page, recordingState.active,
     rueckkehr.bekannt, rueckkehr.status,
-    deviceVorgaben, verfahrenSensoren.sensoren,
+    deviceVorgaben, verfahrenSensoren.sensoren, briefingOffen,
   ]);
 
   // The wizard is a route, so its visibility cannot be knocked out by the
@@ -705,7 +730,27 @@ export function App() {
     }
     case 'bohren':
     case 'element': {
-      if (setup.verfahren === 'injektionsbohren') {
+      if (briefingOffen) {
+        /*
+         * `bohren/`, never `element/` — the two render the same screens and
+         * the route is the only thing that tells "open this element" from
+         * "the drilling screen, directly". Leaving by way of the former would
+         * land straight back on the briefing. Same reasoning as the alignment
+         * screen's own exit.
+         */
+        const ziel = ausrichtenSlot
+          ? `ausrichten/${encodeURIComponent(route.params.name ?? '')}`
+          : `bohren/${encodeURIComponent(route.params.name ?? '')}`;
+        content = (
+          <BriefingScreen
+            vorgaben={deviceVorgaben}
+            weiter={{
+              label: ausrichtenSlot ? 'Weiter zum Ausrichten' : 'Weiter zum Bohren',
+              aktion: () => navigate(ziel),
+            }}
+          />
+        );
+      } else if (setup.verfahren === 'injektionsbohren') {
         if (isVerpressenMode(angezeigterModus)) {
           content = (
             <VerpressenScreen
