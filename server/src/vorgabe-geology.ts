@@ -33,13 +33,15 @@ const TIEFE_GEOLOGIE_RE = /^Tiefe\s+Geologie\s+(\d+)$/i;
  * clipped to the last `Tiefe Geologie n`). The list is ordered rather than a
  * set so an element somehow carrying two gets the same answer every time.
  *
- * **It is one half of what bounds the profile, never the whole of it** — see
- * `endTiefe` below, which takes the deeper of this and the geology's own
- * bottom. The planned geology is usually the shallower of the two, because the
- * probe it comes from stops short of the hole: an element surveyed to 36 m
- * with a 43 m bore drew a profile that stopped at 36, and since everything the
- * chart draws is clipped to `endTiefe`, the depth indicator included, the
- * column said nothing about where the drill was for the last seven metres.
+ * **It is what bounds the committed profile**, together with the deepest
+ * reading — see `endTiefe` below. The planned geology is usually the shallower
+ * of the two, because the probe it comes from stops short of the hole: an
+ * element surveyed to 36 m with a 43 m bore drew a profile that stopped at 36,
+ * and since everything the chart draws is clipped to `endTiefe`, the depth
+ * indicator included, the column said nothing about where the drill was for
+ * the last seven metres. It is used alone rather than maximised with the
+ * survey's bottom, which would report ground below the hole; `endTiefe`
+ * carries that reasoning.
  *
  * `Bohrlaenge` is spelled in ASCII in `injektionsbohren-sensors.csv`, which is
  * where the platform's sensor names come from (implenia-web's
@@ -65,6 +67,14 @@ export interface VorgabeLayer {
 
 export interface VorgabeProfile {
   schichten: VorgabeLayer[];
+  /**
+   * How deep the hole is planned to go — the bore Vorgabe, falling back to the
+   * planned geology's own bottom when no Verfahren names one.
+   *
+   * Deliberately not the deeper of the two: see the reasoning where it is
+   * computed. A planned layer below this is below the element, and the
+   * committed profile must not claim it.
+   */
   endTiefe: number;
 }
 
@@ -151,21 +161,35 @@ export function parseVorgabeGeology(vorgaben: unknown): VorgabeProfile | null {
     .find((tiefe): tiefe is number => tiefe !== undefined && tiefe > 0);
 
   /*
-   * The deeper of the two, never one of them alone.
+   * The bore, and the geology's own bottom only when no bore is named.
    *
-   * A Schichtauftrag can state a bore shallower than the geology it carries —
-   * a pillar keyed at 13 m against a 36 m profile, and a site may legitimately
-   * share one geological section across every element (see the `Geologie 1`
-   * comment in the Vorgabe CSV). Letting the bore win there silently **drops
-   * every planned layer below it**: `mergeProfile` bounds the plan by this
-   * number, so those layers never reach the committed profile, and
-   * `normalisiere` clips them out of the drawn one.
+   * **This is the bottom of a hole, not the extent of a survey**, and the two
+   * part company in both directions. A probe stopping short of the bore is why
+   * the bore has to win when it is the deeper one: 36 m of survey against a
+   * 43 m hole once stopped the drawn column — the depth indicator with it —
+   * seven metres above the drill.
    *
-   * Taking the maximum is also never narrower than what either rule produced
-   * on its own, so no layer that used to appear in a profile can fall out of
-   * one — which is the property that matters for a change reaching the field.
+   * The other direction is what this function must not do, and briefly did.
+   * A site may legitimately share one geological section across every element
+   * (see the `Geologie 1` comment in the Vorgabe CSV), so a pillar keyed at
+   * 13 m routinely carries a 36 m section. Taking the maximum there bounded
+   * the *committed* profile at 36 and had the kiosk upload 23 m of planned
+   * ground below the bottom of the hole, back-filled and marked
+   * `q: "vorgabe"` — ground nobody drilled and nobody claimed. Those layers
+   * are not lost by being dropped: they are below the element.
+   *
+   * A hole that outruns its own Vorgabe is still covered, because
+   * `profileEndTiefe` and `grenze` take this together with the deepest
+   * reading. That is also what keeps a DSV `Säulenhöhe` safe here — it is a
+   * column height rather than a depth to the bottom, so it can sit above the
+   * real hole, and the readings make up the difference.
+   *
+   * The briefing draws the deeper of the two instead (`buildSchichten` in
+   * `ui/src/utils/vorgaben.ts`), because showing the whole planned section is
+   * informative and commits nothing. That is the display-only parser CLAUDE.md
+   * names as the known deviation; this one decides what leaves the kiosk.
    */
-  const tiefste = Math.max(geplanteTiefe ?? 0, prev);
+  const tiefste = geplanteTiefe ?? prev;
   const endTiefe = tiefste > 0 ? tiefste : FALLBACK_END_TIEFE;
 
   return { schichten, endTiefe };
