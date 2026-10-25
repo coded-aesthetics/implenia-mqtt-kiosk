@@ -108,6 +108,93 @@ describe('parseVorgabeGeology', () => {
     expect(profile).toEqual({ schichten: [{ tiefe: 0, nr: 5 }], endTiefe: 4 });
   });
 
+  it('prefers Injektionsbohren\u2019s Bohrlaenge over the last geology depth', () => {
+    // The planned geology ends at 36 m, the bore goes to 43: the profile has
+    // to reach the bottom of the hole or the chart stops drawing the depth
+    // indicator seven metres above it.
+    const profile = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5, 'Geologie 2': 9 },
+      float_sensors: {
+        'Tiefe Geologie 1': 12, 'Tiefe Geologie 2': 36, Bohrlaenge: 43,
+      },
+    });
+    expect(profile?.endTiefe).toBe(43);
+    expect(profile?.schichten).toEqual([{ tiefe: 0, nr: 5 }, { tiefe: 12, nr: 9 }]);
+  });
+
+  it('accepts the umlaut spelling of Bohrl\u00e4nge too', () => {
+    // A miss here is silent \u2014 the profile falls back to the last geology
+    // depth and nothing says so \u2014 so both spellings are matched.
+    const profile = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 8, 'Bohrl\u00e4nge': 15 },
+    });
+    expect(profile?.endTiefe).toBe(15);
+  });
+
+  it('reads Ankerbohren\u2019s Bohrl\u00e4nge Anker', () => {
+    // Its own `Bema\u00dfungen` name in `ankerbohren-sensors.csv`, which none of
+    // the other three match by prefix \u2014 and Ankerbohren records geology, so
+    // missing it clipped every one of its profiles to the last geology depth.
+    const profile = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 8, 'Bohrl\u00e4nge Anker': 18 },
+    });
+    expect(profile?.endTiefe).toBe(18);
+  });
+
+  it('ignores a Bohrlaenge of zero rather than collapsing the profile', () => {
+    const profile = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 6, Bohrlaenge: 0 },
+    });
+    expect(profile?.endTiefe).toBe(6);
+  });
+
+  it('is deterministic when an element carries more than one planned depth', () => {
+    // Not a shape any Verfahren produces, but the answer must not depend on
+    // key order.
+    const vorwaerts = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 6, 'S\u00e4ulenh\u00f6he': 12, Bohrlaenge: 43 },
+    });
+    const rueckwaerts = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 6, Bohrlaenge: 43, 'S\u00e4ulenh\u00f6he': 12 },
+    });
+    expect(vorwaerts?.endTiefe).toBe(12);
+    expect(rueckwaerts?.endTiefe).toBe(12);
+  });
+
+  it('keeps the geology when the planned bore is shallower than it', () => {
+    // A pillar keyed at 13 m carrying a profile that runs to 36 \u2014 a site may
+    // share one geological section across every element. Letting the bore win
+    // bounds the plan at 13, and `mergeProfile` then drops every planned layer
+    // below it from the committed profile.
+    const profile = parseVorgabeGeology({
+      int_sensors: {
+        'Geologie 1': 5, 'Geologie 2': 9, 'Geologie 3': 1, 'Geologie 4': 20,
+      },
+      float_sensors: {
+        'Tiefe Geologie 1': 15, 'Tiefe Geologie 2': 20,
+        'Tiefe Geologie 3': 30, 'Tiefe Geologie 4': 36,
+        Bohrlaenge: 13,
+      },
+    });
+    expect(profile?.endTiefe).toBe(36);
+    expect(profile?.schichten).toEqual([
+      { tiefe: 0, nr: 5 }, { tiefe: 15, nr: 9 },
+      { tiefe: 20, nr: 1 }, { tiefe: 30, nr: 20 },
+    ]);
+  });
+
+  it('takes the deeper of the two whichever one it is', () => {
+    const tief = { int_sensors: { 'Geologie 1': 5 }, float_sensors: { 'Tiefe Geologie 1': 36, Bohrlaenge: 43 } };
+    const flach = { int_sensors: { 'Geologie 1': 5 }, float_sensors: { 'Tiefe Geologie 1': 36, Bohrlaenge: 13 } };
+    expect(parseVorgabeGeology(tief)?.endTiefe).toBe(43);
+    expect(parseVorgabeGeology(flach)?.endTiefe).toBe(36);
+  });
+
   it('rounds a fractional ground-type number', () => {
     // int_float_sensors can deliver a code as a float.
     const profile = parseVorgabeGeology({

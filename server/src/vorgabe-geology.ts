@@ -3,8 +3,8 @@
  *
  * `Geologie n` holds a DIN 4023 ground-type number and `Tiefe Geologie n` the
  * depth that layer *ends* at, so layer n runs from layer n−1's end depth down
- * to its own. `Säulenhöhe`, where present, is the authoritative bottom of the
- * hole — the last geology depth is only a fallback.
+ * to its own. The profile bottoms out at the **deeper** of the planned bore
+ * depth and the planned geology's own bottom — see `GEPLANTE_TIEFE`.
  *
  * This lives on the server rather than in the UI because the back-fill that
  * fills unconfirmed stretches of a recorded profile happens where the
@@ -21,7 +21,37 @@
 
 const GEOLOGIE_RE = /^Geologie\s+(\d+)$/i;
 const TIEFE_GEOLOGIE_RE = /^Tiefe\s+Geologie\s+(\d+)$/i;
-const PILLAR_HEIGHT = 'Säulenhöhe';
+
+/**
+ * The Vorgabe naming how deep the hole is planned to go, in preference order.
+ *
+ * One per Verfahren, and the name is the Verfahren's own: DSV plans a
+ * `Säulenhöhe`, Injektionsbohren a `Bohrlaenge`, Ankerbohren a
+ * `Bohrlänge Anker` (its `Bemaßungen` row in `ankerbohren-sensors.csv` —
+ * nothing here matches it by prefix, and it records geology like the other
+ * two, so leaving it out left every Ankerbohren element with the profile
+ * clipped to the last `Tiefe Geologie n`). The list is ordered rather than a
+ * set so an element somehow carrying two gets the same answer every time.
+ *
+ * **It is one half of what bounds the profile, never the whole of it** — see
+ * `endTiefe` below, which takes the deeper of this and the geology's own
+ * bottom. The planned geology is usually the shallower of the two, because the
+ * probe it comes from stops short of the hole: an element surveyed to 36 m
+ * with a 43 m bore drew a profile that stopped at 36, and since everything the
+ * chart draws is clipped to `endTiefe`, the depth indicator included, the
+ * column said nothing about where the drill was for the last seven metres.
+ *
+ * `Bohrlaenge` is spelled in ASCII in `injektionsbohren-sensors.csv`, which is
+ * where the platform's sensor names come from (implenia-web's
+ * `sensor-blueprint.server.ts` takes `name` straight off the CSV row). The
+ * umlaut spelling is accepted beside it because a miss here is **silent** —
+ * the profile simply falls back to the last geology depth, which is the
+ * previous behaviour and looks like nothing went wrong.
+ */
+const GEPLANTE_TIEFE = [
+  'Säulenhöhe', 'Bohrlaenge', 'Bohrlänge', 'Bohrlänge Anker',
+] as const;
+const GEPLANTE_TIEFE_NAMEN: ReadonlySet<string> = new Set(GEPLANTE_TIEFE);
 
 /** Fallback bottom depth when the Vorgaben name neither a height nor a depth. */
 const FALLBACK_END_TIEFE = 10;
@@ -81,11 +111,12 @@ function num(value: unknown): number | null {
 export function parseVorgabeGeology(vorgaben: unknown): VorgabeProfile | null {
   const codes = new Map<number, number>();
   const endDepths = new Map<number, number>();
-  let pillarHeight: number | null = null;
+  const geplant = new Map<string, number>();
 
   for (const [name, value] of entries(vorgaben)) {
-    if (name === PILLAR_HEIGHT) {
-      pillarHeight = num(value);
+    if (GEPLANTE_TIEFE_NAMEN.has(name)) {
+      const tiefe = num(value);
+      if (tiefe !== null) geplant.set(name, tiefe);
       continue;
     }
     const codeMatch = name.match(GEOLOGIE_RE);
@@ -114,9 +145,28 @@ export function parseVorgabeGeology(vorgaben: unknown): VorgabeProfile | null {
     if (end !== undefined) prev = end;
   }
 
-  const endTiefe = pillarHeight !== null && pillarHeight > 0
-    ? pillarHeight
-    : prev > 0 ? prev : FALLBACK_END_TIEFE;
+  // A zero or negative planned depth is "not set", not a hole of no depth.
+  const geplanteTiefe = GEPLANTE_TIEFE
+    .map((name) => geplant.get(name))
+    .find((tiefe): tiefe is number => tiefe !== undefined && tiefe > 0);
+
+  /*
+   * The deeper of the two, never one of them alone.
+   *
+   * A Schichtauftrag can state a bore shallower than the geology it carries —
+   * a pillar keyed at 13 m against a 36 m profile, and a site may legitimately
+   * share one geological section across every element (see the `Geologie 1`
+   * comment in the Vorgabe CSV). Letting the bore win there silently **drops
+   * every planned layer below it**: `mergeProfile` bounds the plan by this
+   * number, so those layers never reach the committed profile, and
+   * `normalisiere` clips them out of the drawn one.
+   *
+   * Taking the maximum is also never narrower than what either rule produced
+   * on its own, so no layer that used to appear in a profile can fall out of
+   * one — which is the property that matters for a change reaching the field.
+   */
+  const tiefste = Math.max(geplanteTiefe ?? 0, prev);
+  const endTiefe = tiefste > 0 ? tiefste : FALLBACK_END_TIEFE;
 
   return { schichten, endTiefe };
 }
