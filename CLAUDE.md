@@ -751,29 +751,44 @@ addressing the sensor by hardcoded name go on finding them.
   thickness, so it can land deeper than any recorded reading when the hole
   stopped short of the plan. Anything recomputing it downstream gets a
   different number.
-- **The plan's bottom is the deeper of a per-Verfahren Vorgabe and the last
-  `Tiefe Geologie n` — never either one alone.** DSV plans a `Säulenhöhe`,
-  Injektionsbohren a `Bohrlaenge` (ASCII, as
-  `injektionsbohren-sensors.csv` spells it, with the umlaut matched beside it
-  because a miss is **silent**: the profile falls back to the geology depth,
-  which is a number that looks entirely plausible), Ankerbohren a
+- **The plan's bottom is the bore, not the extent of the survey — and the two
+  parsers answer differently on purpose.** The per-Verfahren Vorgabe naming the
+  bore is `GEPLANTE_TIEFE`: DSV's `Säulenhöhe`, Injektionsbohren's `Bohrlaenge`
+  (ASCII, as `injektionsbohren-sensors.csv` spells it, with the umlaut matched
+  beside it because a miss is **silent**: the profile falls back to the geology
+  depth, which is a number that looks entirely plausible), Ankerbohren's
   `Bohrlänge Anker` — its own `Bemaßungen` row, which none of the other three
-  match by prefix, so it was missing from the list until 2026-10-25 and every
-  Ankerbohren element carried a profile clipped to its geology. A Verfahren
-  that records geology and is not on this list has that bug, silently.
-  The two kinds of depth differ in both
-  directions and getting either one wrong loses data:
-  a probe stopping short of the hole gives 36 m of survey against a 43 m
-  bore, and the chart clips everything to `endTiefe` — the depth indicator
-  included — so the column stops saying where the drill is; while a pillar
-  keyed at 13 m against a 36 m profile, which happens because a site may share
-  one geological section across all its elements, drops every planned layer
-  below 13 out of `mergeProfile`'s `planned` filter and out of the committed
-  profile with it. The maximum is never narrower than either rule alone, which
-  is the property that makes it safe to change. The list is `GEPLANTE_TIEFE`
-  and it exists twice, in `vorgabe-geology.ts` for the committed profile and in
-  `ui/src/utils/vorgaben.ts` for what is drawn (the known deviation below).
-  Keep the two in step.
+  match by prefix, so it was missing until 2026-10-25 and every Ankerbohren
+  element carried a profile clipped to its geology. A Verfahren that records
+  geology and is not on this list has that bug, silently.
+
+  The survey and the hole differ in **both** directions, and each direction
+  has a wrong answer:
+
+  - *Survey shallower than the hole* — 36 m of probe against a 43 m bore, the
+    ordinary case. The bore has to win, or the chart clips everything to
+    `endTiefe`, the depth indicator included, and the column stops saying
+    where the drill is for the last seven metres.
+  - *Survey deeper than the hole* — a pillar keyed at 13 m against a 36 m
+    section, which happens because a site may share one geological section
+    across all its elements. The bore has to win here too: taking the maximum
+    had the kiosk **commit 23 m of planned ground below the bottom of the
+    hole**, back-filled and marked `q: "vorgabe"`, ground nobody drilled and
+    nobody claimed. Those layers are not lost by being dropped — they are
+    below the element.
+
+  So `vorgabe-geology.ts` uses the bore alone, falling back to the geology's
+  bottom only when no Verfahren names one. A hole that outruns its own Vorgabe
+  is still covered, because `profileEndTiefe` and `grenze` take this together
+  with the deepest reading — which is also what makes a DSV `Säulenhöhe` safe
+  here, since it is a column height rather than a depth to the bottom and can
+  sit above the real hole.
+
+  The UI's `buildSchichten` (`ui/src/utils/vorgaben.ts`) takes the **deeper**
+  of the two instead, because the briefing draws the whole planned section and
+  commits nothing by doing so. That is the known deviation below, and it is
+  now a difference in answer rather than only in implementation. Keep both in
+  step on the list of names; do not make them agree on the bottom.
 - **Depth is never taken from the browser.** The live entry route
   (`POST /api/recording/geology`) carries only a ground-type number; the server
   reads the depth off its own latest depth reading. The route **refuses
@@ -1018,7 +1033,11 @@ exactly that. A second exit there would quietly make the review skippable.
   suggestion. That path is display-only and renders synchronously from
   already-cached props. The server's `vorgabe-geology.ts` is the only parser on
   the correctness-critical path — if the two ever disagree, a drawn picture is
-  slightly wrong and nothing is miscommitted.
+  slightly wrong and nothing is miscommitted. **They now disagree
+  deliberately**, on the one thing above: the drawn profile bottoms out at the
+  deeper of the bore and the survey, the committed one at the bore. The
+  briefing showing a site's whole 52 m section above a 13 m Bohrlänge is
+  information; uploading it is a claim.
 
 Keep both projects in sync when this contract changes.
 

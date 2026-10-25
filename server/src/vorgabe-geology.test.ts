@@ -166,11 +166,12 @@ describe('parseVorgabeGeology', () => {
     expect(rueckwaerts?.endTiefe).toBe(12);
   });
 
-  it('keeps the geology when the planned bore is shallower than it', () => {
+  it('bounds the plan at the bore when the geology runs deeper', () => {
     // A pillar keyed at 13 m carrying a profile that runs to 36 \u2014 a site may
-    // share one geological section across every element. Letting the bore win
-    // bounds the plan at 13, and `mergeProfile` then drops every planned layer
-    // below it from the committed profile.
+    // share one geological section across every element, so this is ordinary.
+    // The layers below 13 m are below the hole: `mergeProfile` drops them, and
+    // taking the deeper of the two instead had the kiosk commit 23 m of
+    // planned ground the drill never reached.
     const profile = parseVorgabeGeology({
       int_sensors: {
         'Geologie 1': 5, 'Geologie 2': 9, 'Geologie 3': 1, 'Geologie 4': 20,
@@ -181,18 +182,29 @@ describe('parseVorgabeGeology', () => {
         Bohrlaenge: 13,
       },
     });
-    expect(profile?.endTiefe).toBe(36);
+    expect(profile?.endTiefe).toBe(13);
+    // The layers themselves are untouched here \u2014 bounding them is the
+    // merge\u2019s job, against this number *and* the deepest reading.
     expect(profile?.schichten).toEqual([
       { tiefe: 0, nr: 5 }, { tiefe: 15, nr: 9 },
       { tiefe: 20, nr: 1 }, { tiefe: 30, nr: 20 },
     ]);
   });
 
-  it('takes the deeper of the two whichever one it is', () => {
+  it('answers with the bore whichever way the two run', () => {
     const tief = { int_sensors: { 'Geologie 1': 5 }, float_sensors: { 'Tiefe Geologie 1': 36, Bohrlaenge: 43 } };
     const flach = { int_sensors: { 'Geologie 1': 5 }, float_sensors: { 'Tiefe Geologie 1': 36, Bohrlaenge: 13 } };
     expect(parseVorgabeGeology(tief)?.endTiefe).toBe(43);
-    expect(parseVorgabeGeology(flach)?.endTiefe).toBe(36);
+    expect(parseVorgabeGeology(flach)?.endTiefe).toBe(13);
+  });
+
+  // Nothing names a bore: the survey's own bottom is the only plan there is,
+  // and it is what this fell back to before any Verfahren was on the list.
+  it('falls back to the geology bottom when no bore is named', () => {
+    expect(parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 36 },
+    })?.endTiefe).toBe(36);
   });
 
   it('rounds a fractional ground-type number', () => {
