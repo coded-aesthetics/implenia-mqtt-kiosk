@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { BohrprofilLog, normalisiere } from '@coded-aesthetics/din4023/profile';
 import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 import type { VorgabenData } from '../hooks/useImplenia';
@@ -9,6 +9,7 @@ import { grad, VORGABE_HORIZONTAL, VORGABE_VERTIKAL } from '../utils/ausrichtung
 import {
   buildSchichten, collectVorgabeEntries, extractCoordinates, geplanteTiefe,
 } from '../utils/vorgaben';
+import type { CoordinateGroup } from '../utils/vorgaben';
 
 /**
  * What is planned at this element, before anyone starts drilling it.
@@ -129,40 +130,25 @@ export function BriefingScreen({ vorgaben, weiter }: Props) {
         )}
       </div>
 
-      {/* Right: the Soll values */}
+      {/* Right: the Soll values, three rows of two cells — see `Zelle` */}
       <div style={styles.werte}>
-        <div style={styles.heroReihe}>
+        <div style={{ ...styles.reihe, flex: 1.25 }}>
           <Hero label="Bohrlänge" wert={tiefe === null ? '–' : formatNumber(tiefe)} einheit="m" />
           <Hero label="Sollvolumen" wert={soll(vorgaben, 'Sollvolumen')} einheit="l" />
         </div>
 
-        <section style={styles.karte}>
-          <div style={styles.kartenTitel}>Ausrichtung</div>
-          <div style={styles.paar}>
-            <Winkel label="Horizontalneigung" wert={findSoll(vorgaben, VORGABE_HORIZONTAL)} />
-            <Winkel label="Vertikalneigung" wert={findSoll(vorgaben, VORGABE_VERTIKAL)} />
-          </div>
-        </section>
+        <div style={{ ...styles.reihe, flex: 1.25 }}>
+          <Winkel label="Horizontalneigung" wert={findSoll(vorgaben, VORGABE_HORIZONTAL)} />
+          <Winkel label="Vertikalneigung" wert={findSoll(vorgaben, VORGABE_VERTIKAL)} />
+        </div>
 
-        <section style={styles.karte}>
-          <div style={styles.kartenTitel}>Ansatz- und Fusspunkt</div>
+        <div style={{ ...styles.reihe, flex: 1 }}>
           {koordinaten.length > 0 ? (
-            <div style={styles.koordinaten}>
-              {koordinaten.map((k) => (
-                <div key={k.label} style={styles.koordinatenZeile}>
-                  <span style={styles.koordinatenName}>{k.label}</span>
-                  <span style={styles.koordinatenWerte}>
-                    <span><span style={styles.achse}>X</span>&nbsp;{koordinate(k.x)}</span>
-                    <span><span style={styles.achse}>Y</span>&nbsp;{koordinate(k.y)}</span>
-                    <span><span style={styles.achse}>Z</span>&nbsp;{koordinate(k.z)}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
+            koordinaten.map((k) => <Punkt key={k.label} punkt={k} />)
           ) : (
             <div style={styles.leer}>Der Schichtauftrag nennt keine Punkte.</div>
           )}
-        </section>
+        </div>
 
         <button style={styles.weiter} onClick={weiter.aktion}>
           {weiter.label}
@@ -173,15 +159,36 @@ export function BriefingScreen({ vorgaben, weiter }: Props) {
   );
 }
 
+/**
+ * One planned value, under the name of the thing it plans.
+ *
+ * All six cells have the same shape — label above, value below, both centred —
+ * because they are one grid read in one glance, not three sections: the labels
+ * line up across a row and the eye drops straight to the numbers. The angles
+ * used to carry theirs underneath, which put two of the four large numbers on
+ * a different line from the other two.
+ *
+ * The label is the only thing saying what the number is, so it is
+ * `--font-base` and never `--font-sm`, which this screen reserves for the
+ * geology column's meta line.
+ */
+function Zelle({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div style={styles.zelle}>
+      <div style={styles.zellenLabel}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
 function Hero({ label, wert, einheit }: { label: string; wert: string; einheit: string }) {
   return (
-    <div style={styles.hero}>
-      <div style={styles.heroLabel}>{label}</div>
+    <Zelle label={label}>
       <div style={styles.heroZeile}>
         <span style={styles.heroWert}>{wert}</span>
         <span style={styles.heroEinheit}>{einheit}</span>
       </div>
-    </div>
+    </Zelle>
   );
 }
 
@@ -194,10 +201,31 @@ function Hero({ label, wert, einheit }: { label: string; wert: string; einheit: 
  */
 function Winkel({ label, wert }: { label: string; wert: number | null }) {
   return (
-    <div style={styles.paarZelle}>
-      <span style={styles.paarWert}>{wert === null ? '–' : grad(wert)}</span>
-      <span style={styles.paarLabel}>{label}</span>
-    </div>
+    <Zelle label={label}>
+      <span style={styles.winkelWert}>{wert === null ? '–' : grad(wert)}</span>
+    </Zelle>
+  );
+}
+
+/**
+ * Where the hole starts and where it is meant to come out.
+ *
+ * The three axes are stacked rather than set on one line, which is what the
+ * numbers are: an LV95 easting formats as `2.681.432,18`, so a triple runs
+ * ~390px and two of them side by side do not fit the column — on the first
+ * version the two points overlapped and the leading axis letter was cut off.
+ * Stacked, they fit at any magnitude, and the X of one point sits on the X of
+ * the other, which is the comparison worth making here.
+ */
+function Punkt({ punkt }: { punkt: CoordinateGroup }) {
+  return (
+    <Zelle label={punkt.label}>
+      <div style={styles.koordinaten}>
+        <span style={styles.achse}>X</span><span>{koordinate(punkt.x)}</span>
+        <span style={styles.achse}>Y</span><span>{koordinate(punkt.y)}</span>
+        <span style={styles.achse}>Z</span><span>{koordinate(punkt.z)}</span>
+      </div>
+    </Zelle>
   );
 }
 
@@ -231,19 +259,19 @@ const styles: Record<string, CSSProperties> = {
     overflow: 'hidden',
   },
   /*
-   * 258px, of which the chart's depth gutter takes a fixed 48 and the hatched
-   * column fills the remaining 210.
+   * 194px, of which the chart's depth gutter takes a fixed 48 and the hatched
+   * column fills the remaining 146 — within a couple of pixels of the drilling
+   * screen's 144.
    *
    * `breite` is passed for form's sake and decides nothing: the chart lays its
    * two parts out with flex, so the column takes whatever this width leaves.
-   * Wider than the drilling screen's 144px because this screen has the room
-   * and the profile is the densest thing on it — and because nothing here
-   * competes for the space, there being no depth indicator and no live value
-   * above it.
+   * It was 258 while the Soll values were set in cards at 3.5rem; at 5.5rem
+   * they are what the screen is for, and the profile — which has no depth
+   * indicator and no live value to carry here — gives up the 64px.
    */
   geoSpalte: {
     flexShrink: 0,
-    width: 258,
+    width: 194,
     minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
@@ -295,16 +323,16 @@ const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     gap: '0.75rem',
   },
-  // The cards share what is left rather than stacking at their content height:
-  // a column of small cards over 200px of empty screen reads as unfinished,
-  // and the space is better spent on bigger numbers.
-  heroReihe: {
-    flex: 1.25,
+  // The rows share what is left rather than stacking at their content height:
+  // a column of values over 200px of empty screen reads as unfinished, and the
+  // space is better spent on bigger numbers. `flex` is set per row at the call
+  // site, so the two rows of large numbers take more of it than the points.
+  reihe: {
     minHeight: 0,
     display: 'flex',
     gap: '0.75rem',
   },
-  hero: {
+  zelle: {
     flex: 1,
     minWidth: 0,
     display: 'flex',
@@ -312,12 +340,8 @@ const styles: Record<string, CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: '0.1rem',
-    padding: '0.5rem 1rem 0.75rem',
-    backgroundColor: 'var(--surface-2)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)',
   },
-  heroLabel: {
+  zellenLabel: {
     fontSize: 'var(--font-base)',
     fontWeight: 600,
     color: 'var(--text-muted)',
@@ -331,7 +355,7 @@ const styles: Record<string, CSSProperties> = {
     gap: '0.35rem',
   },
   heroWert: {
-    fontSize: '3.5rem',
+    fontSize: '5.5rem',
     fontWeight: 800,
     lineHeight: 1.05,
     fontVariantNumeric: 'tabular-nums',
@@ -342,97 +366,77 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 600,
     color: 'var(--text-muted)',
   },
-  karte: {
-    flex: 1,
-    minHeight: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    justifyContent: 'center',
-    gap: '0.5rem',
-    padding: '0.5rem 1rem 0.75rem',
-    backgroundColor: 'var(--surface-2)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)',
-  },
-  kartenTitel: {
-    flexShrink: 0,
-    fontSize: 'var(--font-sm)',
-    fontWeight: 700,
-    color: 'var(--text-muted)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-  },
-  paar: { display: 'flex', gap: '0.75rem' },
-  paarZelle: {
-    flex: 1,
-    minWidth: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-  },
-  paarWert: {
-    fontSize: '2rem',
+  winkelWert: {
+    fontSize: '5rem',
     fontWeight: 800,
-    lineHeight: 1.1,
+    lineHeight: 1.05,
     fontVariantNumeric: 'tabular-nums',
     color: 'var(--text-primary)',
   },
-  paarLabel: {
-    fontSize: 'var(--font-sm)',
-    fontWeight: 600,
-    color: 'var(--text-muted)',
-    whiteSpace: 'nowrap',
-  },
-  koordinaten: { display: 'flex', flexDirection: 'column', gap: '0.5rem' },
-  koordinatenZeile: {
-    display: 'flex',
-    alignItems: 'baseline',
-    gap: '0.75rem',
-  },
-  koordinatenName: {
-    width: 112,
-    flexShrink: 0,
-    fontSize: 'var(--font-base)',
-    fontWeight: 700,
-    color: 'var(--text-muted)',
-  },
-  koordinatenWerte: {
-    flex: 1,
-    display: 'flex',
-    gap: '1rem',
-    // Monospace so the digits line up between the two rows: the difference
-    // between them is the length and the inclination of the hole, which is the
-    // one check worth making on this screen.
+  koordinaten: {
+    display: 'grid',
+    gridTemplateColumns: 'auto auto',
+    columnGap: '0.6rem',
+    rowGap: '0.1rem',
+    // Monospace and right-aligned so the digits line up between the two
+    // points: the difference between them is the length and the inclination of
+    // the hole, which is the one check worth making on this screen.
     fontFamily: 'var(--font-mono)',
-    fontSize: '1.2rem',
+    fontSize: 'var(--font-md)',
     fontWeight: 600,
     fontVariantNumeric: 'tabular-nums',
+    textAlign: 'right',
     color: 'var(--text-primary)',
     whiteSpace: 'nowrap',
   },
-  achse: { color: 'var(--text-muted)', fontWeight: 400 },
+  achse: { color: 'var(--text-muted)', fontWeight: 400, textAlign: 'left' },
   leer: {
-    fontSize: 'var(--font-sm)',
+    flex: 1,
+    alignSelf: 'center',
+    textAlign: 'center',
+    fontSize: 'var(--font-base)',
     color: 'var(--text-muted)',
   },
+  /*
+   * The forward step, deliberately the quieter of the two buttons at the foot
+   * of this screen.
+   *
+   * **Not green**, although `Weiter zum Austausch` on the geology sign-off is:
+   * that one only ever appears while a recording runs, so the bar beneath it
+   * shows stop and pause. This is the pre-recording screen, so the bar beneath
+   * *this* is showing „Aufzeichnung beginnen" in green — and green on this
+   * kiosk means the recording lifecycle, nothing else. Two green buttons 12px
+   * apart meaning „start recording" and „next screen" is the one way to get
+   * that mapping wrong.
+   *
+   * **Not filled**, so the screen has exactly one solid button and it is the
+   * one that starts recording. This button is a convenience and not a gate — a
+   * worker can start the recording from here and the drilling screen takes
+   * over under their finger — so it must not out-shout the action that matters.
+   * Still high contrast and still a 64px full-width tap target: quieter than
+   * the green one, not a fine control.
+   *
+   * Otherwise it is the forward-step button the rest of the app uses:
+   * `--font-md`, 800, sentence case, `--tap-min`. The uppercase and the 72px
+   * it used to carry matched nothing — not this family, not the recording
+   * bar's own (52px, 1.1rem).
+   */
   weiter: {
     flexShrink: 0,
-    minHeight: 72,
+    minHeight: 'var(--tap-min)',
     width: '100%',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     gap: '0.5rem',
-    border: 'none',
+    border: '2px solid var(--color-accent)',
     borderRadius: 'var(--radius-md)',
-    backgroundColor: 'var(--color-accent)',
-    color: '#fff',
+    backgroundColor: 'var(--surface-2)',
+    color: 'var(--color-accent)',
     fontFamily: 'inherit',
     fontSize: 'var(--font-md)',
     fontWeight: 800,
-    textTransform: 'uppercase',
-    letterSpacing: '0.03em',
     cursor: 'pointer',
   },
-  pfeil: { fontSize: '1.6rem', fontWeight: 800, lineHeight: 1, opacity: 0.8 },
+  pfeil: { fontSize: '1.6rem', fontWeight: 800, lineHeight: 1, opacity: 0.7 },
 };
