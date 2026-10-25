@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildSchichten, byPriority, collectVorgabeEntries, extractCoordinates,
-  geplanteTiefe, getPriority, isSpecialSensor, letzteVorgabeTiefe,
-  parseRawPayload, vorgabeText,
+  geplanteTiefe, getPriority, isSpecialSensor, parseRawPayload, vorgabeText,
 } from './vorgaben';
 import type { VorgabenData } from '../hooks/useImplenia';
 
@@ -119,6 +118,7 @@ describe('buildSchichten', () => {
     ])).toEqual({
       schichten: [{ tiefe: 0, nr: 3 }, { tiefe: 4.5, nr: 7 }],
       endTiefe: 9,
+      vermessenBis: 9,
     });
   });
 
@@ -168,6 +168,21 @@ describe('buildSchichten', () => {
     ])?.endTiefe).toBe(6);
   });
 
+  it('keeps the geology when the planned bore is shallower than it', () => {
+    // The misconfigured pillar: bore keyed at 13, profile running to 36.
+    // Clipping to 13 leaves the chart drawing one layer out of four.
+    expect(buildSchichten([
+      { name: 'Geologie 1', value: '5' },
+      { name: 'Tiefe Geologie 1', value: '15' },
+      { name: 'Geologie 2', value: '9' },
+      { name: 'Tiefe Geologie 2', value: '36' },
+      { name: 'Bohrlaenge', value: '13' },
+    ])).toMatchObject({
+      endTiefe: 36,
+      schichten: [{ tiefe: 0, nr: 5 }, { tiefe: 15, nr: 9 }],
+    });
+  });
+
   it('falls back to a nominal depth when nothing says how deep', () => {
     expect(buildSchichten([{ name: 'Geologie 1', value: '3' }])?.endTiefe).toBe(10);
   });
@@ -190,6 +205,7 @@ describe('buildSchichten', () => {
     expect(buildSchichten(entries)).toEqual({
       schichten: [{ tiefe: 0, nr: 3 }],
       endTiefe: 2000.75,
+      vermessenBis: 1234.5,
     });
   });
 });
@@ -221,25 +237,27 @@ describe('geplanteTiefe', () => {
   });
 });
 
-describe('letzteVorgabeTiefe', () => {
-  it('is the deepest surveyed boundary, whatever order it arrives in', () => {
-    expect(letzteVorgabeTiefe([
-      { name: 'Tiefe Geologie 2', value: '36' },
-      { name: 'Tiefe Geologie 1', value: '2.5' },
-    ])).toBe(36);
-  });
-
-  it('ignores everything that is not a geology depth', () => {
-    expect(letzteVorgabeTiefe([
-      { name: 'Tiefe Geologie 1', value: '12' },
+describe('buildSchichten · vermessenBis', () => {
+  it('reports where the planned geology itself stops', () => {
+    expect(buildSchichten([
+      { name: 'Geologie 1', value: '5' },
+      { name: 'Tiefe Geologie 1', value: '36' },
       { name: 'Bohrlaenge', value: '43' },
-      { name: 'Geologie 1', value: '20' },
-    ])).toBe(12);
+    ])).toMatchObject({ endTiefe: 43, vermessenBis: 36 });
   });
 
-  it('is null when the Schichtauftrag names no depth at all', () => {
-    expect(letzteVorgabeTiefe([{ name: 'Geologie 1', value: '5' }])).toBeNull();
-    expect(letzteVorgabeTiefe([{ name: 'Tiefe Geologie 1', value: 'n/a' }])).toBeNull();
+  it('equals endTiefe when the survey reaches the bottom', () => {
+    // Which is how the briefing knows there is no boundary worth marking.
+    expect(buildSchichten([
+      { name: 'Geologie 1', value: '5' },
+      { name: 'Tiefe Geologie 1', value: '28' },
+      { name: 'Bohrlaenge', value: '28' },
+    ])).toMatchObject({ endTiefe: 28, vermessenBis: 28 });
+  });
+
+  it('is 0 when the Schichtauftrag names ground but no depths', () => {
+    expect(buildSchichten([{ name: 'Geologie 1', value: '5' }]))
+      .toMatchObject({ endTiefe: 10, vermessenBis: 0 });
   });
 });
 

@@ -1205,12 +1205,24 @@ condition; `briefing.test.ts` pins it.
 
 ### Where the profile bottoms out, and what is below the survey
 
-The column ends at the **planned bore depth**, not at the last
-`Tiefe Geologie n`. Those are routinely different: the probe drilling the
-geology stops short of the hole, so an element surveyed to 36 m with a 43 m
-bore drew a profile that stopped at 36 — and because everything the chart draws
-is clipped to `endTiefe`, the depth indicator with it, the column stopped saying
-where the drill was for the last seven metres.
+The column ends at the **deeper** of the planned bore depth and the planned
+geology's own bottom — never one of them alone. Those two are routinely
+different in both directions:
+
+- **Geology shallower than the bore**, the usual case: the probe it comes from
+  stops short of the hole. An element surveyed to 36 m with a 43 m bore drew a
+  profile that stopped at 36, and because everything the chart draws is clipped
+  to `endTiefe`, the depth indicator with it, the column stopped saying where
+  the drill was for the last seven metres.
+- **Bore shallower than the geology**: a pillar keyed at 13 m carrying a
+  profile that runs to 36, which happens because a site may share one
+  geological section across every element. Letting the bore win silently drops
+  every layer below it — out of the drawing via `normalisiere`, and out of the
+  **committed** profile too, since `mergeProfile` bounds the plan by the same
+  number.
+
+The maximum is also never narrower than what either rule produced on its own,
+so no layer that used to appear in a profile can fall out of one.
 
 One list of Vorgabe names answers "how deep is this hole planned to go", per
 Verfahren: DSV's `Säulenhöhe`, Injektionsbohren's `Bohrlaenge` (spelled in ASCII
@@ -1225,6 +1237,12 @@ of the bore — which means the stretch below the survey is ground nobody looked
 at, drawn as if it were planned. The briefing marks that boundary
 (`markierteGrenze`) and says so underneath: *Unterhalb 36,00 m ist die Geologie
 nicht erkundet.* It is the one screen with the room for that sentence.
+
+**The briefing's caption counts the layers the chart draws, never the ones the
+Schichtauftrag listed.** `normalisiere` — which the chart runs on its input
+anyway — collapses layers sharing a depth, merges adjacent ones of the same
+ground type, and drops anything at or below `endTiefe`. Counting the raw list
+instead read *4 Schichten* over a column showing one.
 
 ## Ausrichten
 

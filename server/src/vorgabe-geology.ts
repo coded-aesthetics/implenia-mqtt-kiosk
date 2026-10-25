@@ -3,9 +3,8 @@
  *
  * `Geologie n` holds a DIN 4023 ground-type number and `Tiefe Geologie n` the
  * depth that layer *ends* at, so layer n runs from layer n−1's end depth down
- * to its own. The planned bore depth, where present, is the authoritative
- * bottom of the hole — the last geology depth is only a fallback. See
- * `GEPLANTE_TIEFE`.
+ * to its own. The profile bottoms out at the **deeper** of the planned bore
+ * depth and the planned geology's own bottom — see `GEPLANTE_TIEFE`.
  *
  * This lives on the server rather than in the UI because the back-fill that
  * fills unconfirmed stretches of a recorded profile happens where the
@@ -31,12 +30,13 @@ const TIEFE_GEOLOGIE_RE = /^Tiefe\s+Geologie\s+(\d+)$/i;
  * than a set so an element somehow carrying two gets the same answer every
  * time.
  *
- * **It is not a nicety, it is what bounds the profile.** The planned geology
- * is routinely shallower than the hole — the probe it comes from stops short —
- * and everything the chart draws is clipped to `endTiefe`, the depth indicator
- * included. Without this an element whose `Tiefe Geologie n` end at 36 m and
- * whose bore is 43 m drew a profile that stopped at 36, so for the last seven
- * metres the column said nothing about where the drill was.
+ * **It is one half of what bounds the profile, never the whole of it** — see
+ * `endTiefe` below, which takes the deeper of this and the geology's own
+ * bottom. The planned geology is usually the shallower of the two, because the
+ * probe it comes from stops short of the hole: an element surveyed to 36 m
+ * with a 43 m bore drew a profile that stopped at 36, and since everything the
+ * chart draws is clipped to `endTiefe`, the depth indicator included, the
+ * column said nothing about where the drill was for the last seven metres.
  *
  * `Bohrlaenge` is spelled in ASCII in `injektionsbohren-sensors.csv`, which is
  * where the platform's sensor names come from (implenia-web's
@@ -140,14 +140,28 @@ export function parseVorgabeGeology(vorgaben: unknown): VorgabeProfile | null {
     if (end !== undefined) prev = end;
   }
 
-  // A zero or negative planned depth is "not set", not a hole of no depth, so
-  // it falls through to the last geology depth rather than collapsing the
-  // profile.
+  // A zero or negative planned depth is "not set", not a hole of no depth.
   const geplanteTiefe = GEPLANTE_TIEFE
     .map((name) => geplant.get(name))
     .find((tiefe): tiefe is number => tiefe !== undefined && tiefe > 0);
 
-  const endTiefe = geplanteTiefe ?? (prev > 0 ? prev : FALLBACK_END_TIEFE);
+  /*
+   * The deeper of the two, never one of them alone.
+   *
+   * A Schichtauftrag can state a bore shallower than the geology it carries —
+   * a pillar keyed at 13 m against a 36 m profile, and a site may legitimately
+   * share one geological section across every element (see the `Geologie 1`
+   * comment in the Vorgabe CSV). Letting the bore win there silently **drops
+   * every planned layer below it**: `mergeProfile` bounds the plan by this
+   * number, so those layers never reach the committed profile, and
+   * `normalisiere` clips them out of the drawn one.
+   *
+   * Taking the maximum is also never narrower than what either rule produced
+   * on its own, so no layer that used to appear in a profile can fall out of
+   * one — which is the property that matters for a change reaching the field.
+   */
+  const tiefste = Math.max(geplanteTiefe ?? 0, prev);
+  const endTiefe = tiefste > 0 ? tiefste : FALLBACK_END_TIEFE;
 
   return { schichten, endTiefe };
 }

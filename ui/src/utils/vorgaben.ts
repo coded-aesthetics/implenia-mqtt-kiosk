@@ -33,6 +33,27 @@ const HIDDEN_SENSORS = new Set(['Nummer']);
  */
 const GEPLANTE_TIEFE = ['Säulenhöhe', 'Bohrlaenge', 'Bohrlänge'] as const;
 
+export interface VorgabeProfil {
+  schichten: Schicht[];
+  /**
+   * Where the drawn profile bottoms out: the deeper of the planned bore depth
+   * and `vermessenBis`.
+   */
+  endTiefe: number;
+  /**
+   * Where the planned geology itself stops — the bottom of its deepest layer.
+   *
+   * 0 when the Schichtauftrag names ground types but no depths at all, which
+   * is a profile that makes no claim about where anything ends.
+   *
+   * Below this the deepest planned layer is carried down to `endTiefe`,
+   * because a profile is gapless and has no way to say "and no claim below
+   * that". The briefing marks the boundary and says so; callers that do not
+   * care can ignore the field.
+   */
+  vermessenBis: number;
+}
+
 export interface VorgabeEntry {
   name: string;
   value: string;
@@ -53,28 +74,6 @@ export function geplanteTiefe(vorgaben: VorgabenData | null): number | null {
     if (wert !== null && wert > 0) return wert;
   }
   return null;
-}
-
-/**
- * The deepest `Tiefe Geologie n` the Schichtauftrag names, or null when it
- * names none.
- *
- * Where this is shallower than the planned depth, the profile's last layer is
- * carried down over ground nobody surveyed — so the briefing marks the
- * boundary and says the stretch below it is an assumption. Returned separately
- * rather than folded into `buildSchichten` because it is not part of the
- * profile: a layer boundary and the end of the survey are different facts that
- * happen to share a number.
- */
-export function letzteVorgabeTiefe(entries: VorgabeEntry[]): number | null {
-  let tiefste: number | null = null;
-  for (const { name, value } of entries) {
-    if (!TIEFE_GEOLOGIE_RE.test(name)) continue;
-    const tiefe = parseFloat(value);
-    if (!Number.isFinite(tiefe) || tiefe <= 0) continue;
-    if (tiefste === null || tiefe > tiefste) tiefste = tiefe;
-  }
-  return tiefste;
 }
 
 export interface CoordinateGroup {
@@ -150,9 +149,7 @@ export function extractCoordinates(entries: VorgabeEntry[]): CoordinateGroup[] {
  * Returns null when the Schichtauftrag carries no geology at all, which is
  * how the screen knows not to reserve a column for it.
  */
-export function buildSchichten(
-  entries: VorgabeEntry[],
-): { schichten: Schicht[]; endTiefe: number } | null {
+export function buildSchichten(entries: VorgabeEntry[]): VorgabeProfil | null {
   const geoCodes = new Map<number, number>();
   const geoDepths = new Map<number, number>();
 
@@ -185,18 +182,20 @@ export function buildSchichten(
     if (endDepth !== undefined) prevDepth = endDepth;
   }
 
-  // The planned bore depth beats the last geology depth — see GEPLANTE_TIEFE.
-  // Zero or negative is "not set" rather than a hole of no depth, so it falls
-  // through instead of collapsing the profile.
-  const geplanteTiefe = GEPLANTE_TIEFE
+  // Zero or negative is "not set" rather than a hole of no depth.
+  const geplant = GEPLANTE_TIEFE
     .map((name) => {
       const entry = entries.find((e) => e.name === name);
       return entry ? parseFloat(entry.value) : NaN;
     })
     .find((tiefe) => Number.isFinite(tiefe) && tiefe > 0);
 
-  const endTiefe = geplanteTiefe ?? (prevDepth > 0 ? prevDepth : 10);
-  return { schichten, endTiefe };
+  // The deeper of the two — see the server's `GEPLANTE_TIEFE`, which carries
+  // the reasoning. A bore keyed shallower than the geology it comes with would
+  // otherwise clip the layers below it straight out of the drawing.
+  const tiefste = Math.max(geplant ?? 0, prevDepth);
+  const endTiefe = tiefste > 0 ? tiefste : 10;
+  return { schichten, endTiefe, vermessenBis: prevDepth };
 }
 
 /** Parse a raw MQTT payload (plain number or text, not JSON). */

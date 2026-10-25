@@ -1,14 +1,13 @@
 import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
-import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
+import { BohrprofilLog, normalisiere } from '@coded-aesthetics/din4023/profile';
 import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 import type { VorgabenData } from '../hooks/useImplenia';
 import { findSoll } from '../utils/sensors';
 import { formatNumber } from '../utils/format';
 import { grad, VORGABE_HORIZONTAL, VORGABE_VERTIKAL } from '../utils/ausrichtung';
 import {
-  buildSchichten, collectVorgabeEntries, extractCoordinates,
-  geplanteTiefe, letzteVorgabeTiefe,
+  buildSchichten, collectVorgabeEntries, extractCoordinates, geplanteTiefe,
 } from '../utils/vorgaben';
 
 /**
@@ -61,28 +60,42 @@ export function BriefingScreen({ vorgaben, weiter }: Props) {
   const koordinaten = useMemo(() => extractCoordinates(entries), [entries]);
 
   const tiefe = geplanteTiefe(vorgaben);
-  const vermessenBis = letzteVorgabeTiefe(entries);
 
   /*
-   * The depth the survey stops at, where the hole goes deeper.
+   * The depth the survey stops at, where the drawn profile goes deeper.
    *
    * A profile is gapless, so the deepest planned layer is carried down to the
-   * bottom of the bore — which means the stretch below the last
-   * `Tiefe Geologie n` is ground nobody surveyed, drawn as if it were planned.
-   * The briefing is the one screen with room to say so, and `markierteGrenze`
-   * is the marker the chart already has for a boundary worth noticing.
+   * bottom — which means the stretch below `vermessenBis` is ground nobody
+   * surveyed, drawn as if it were planned. The briefing is the one screen with
+   * room to say so, and `markierteGrenze` is the marker the chart already has
+   * for a boundary worth noticing.
    *
    * Null when the survey reaches the bottom, which is the ordinary case and
-   * needs no marker.
+   * needs no marker, and when it states no depth at all.
    */
-  const grenze = profil !== null && vermessenBis !== null
-    && vermessenBis < profil.endTiefe ? vermessenBis : null;
+  const grenze = profil !== null && profil.vermessenBis > 0
+    && profil.vermessenBis < profil.endTiefe ? profil.vermessenBis : null;
+
+  /*
+   * The layers the chart will actually draw.
+   *
+   * Never `profil.schichten.length`, which is what the Schichtauftrag listed
+   * and not what appears: `normalisiere` — which the chart runs on its input
+   * anyway — collapses layers sharing a depth, merges adjacent ones of the
+   * same ground type, and drops anything at or below `endTiefe`. A pillar
+   * whose bore was keyed shallower than its geology read „4 Schichten" over a
+   * column showing one. Counting the same list the chart draws is what keeps
+   * the two from ever disagreeing again.
+   */
+  const gezeichnet = useMemo(
+    () => (profil ? normalisiere(profil.schichten, profil.endTiefe) : []),
+    [profil],
+  );
 
   const profilUntertitel = profil === null
     ? 'Keine Vorgabe'
-    : grenze !== null
-      ? `${profil.schichten.length} Schichten bis ${formatNumber(grenze)} m`
-      : `${profil.schichten.length} Schichten bis ${formatNumber(profil.endTiefe)} m`;
+    : `${gezeichnet.length} ${gezeichnet.length === 1 ? 'Schicht' : 'Schichten'}`
+      + ` bis ${formatNumber(profil.endTiefe)} m`;
 
   return (
     <div style={styles.container}>

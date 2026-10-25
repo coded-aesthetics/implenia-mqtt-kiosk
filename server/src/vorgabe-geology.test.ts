@@ -155,6 +155,35 @@ describe('parseVorgabeGeology', () => {
     expect(rueckwaerts?.endTiefe).toBe(12);
   });
 
+  it('keeps the geology when the planned bore is shallower than it', () => {
+    // A pillar keyed at 13 m carrying a profile that runs to 36 \u2014 a site may
+    // share one geological section across every element. Letting the bore win
+    // bounds the plan at 13, and `mergeProfile` then drops every planned layer
+    // below it from the committed profile.
+    const profile = parseVorgabeGeology({
+      int_sensors: {
+        'Geologie 1': 5, 'Geologie 2': 9, 'Geologie 3': 1, 'Geologie 4': 20,
+      },
+      float_sensors: {
+        'Tiefe Geologie 1': 15, 'Tiefe Geologie 2': 20,
+        'Tiefe Geologie 3': 30, 'Tiefe Geologie 4': 36,
+        Bohrlaenge: 13,
+      },
+    });
+    expect(profile?.endTiefe).toBe(36);
+    expect(profile?.schichten).toEqual([
+      { tiefe: 0, nr: 5 }, { tiefe: 15, nr: 9 },
+      { tiefe: 20, nr: 1 }, { tiefe: 30, nr: 20 },
+    ]);
+  });
+
+  it('takes the deeper of the two whichever one it is', () => {
+    const tief = { int_sensors: { 'Geologie 1': 5 }, float_sensors: { 'Tiefe Geologie 1': 36, Bohrlaenge: 43 } };
+    const flach = { int_sensors: { 'Geologie 1': 5 }, float_sensors: { 'Tiefe Geologie 1': 36, Bohrlaenge: 13 } };
+    expect(parseVorgabeGeology(tief)?.endTiefe).toBe(43);
+    expect(parseVorgabeGeology(flach)?.endTiefe).toBe(36);
+  });
+
   it('rounds a fractional ground-type number', () => {
     // int_float_sensors can deliver a code as a float.
     const profile = parseVorgabeGeology({

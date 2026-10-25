@@ -751,18 +751,24 @@ addressing the sensor by hardcoded name go on finding them.
   thickness, so it can land deeper than any recorded reading when the hole
   stopped short of the plan. Anything recomputing it downstream gets a
   different number.
-- **The plan's bottom is a Vorgabe named per Verfahren, never the last
-  `Tiefe Geologie n`.** DSV plans a `Säulenhöhe`, Injektionsbohren a
-  `Bohrlaenge` — ASCII, as `injektionsbohren-sensors.csv` spells it, with the
-  umlaut matched beside it because a miss is **silent**: the profile falls back
-  to the last geology depth, which is a number that looks entirely plausible.
-  The two are routinely different, because the probe the geology comes from
-  stops short of the hole — 36 m of survey against a 43 m bore is a real
-  element — and everything the chart draws is clipped to `endTiefe`, the depth
-  indicator included, so the column stops saying where the drill is. The list
-  is `GEPLANTE_TIEFE` and it exists twice, in `vorgabe-geology.ts` for the
-  committed profile and in `ui/src/utils/vorgaben.ts` for what is drawn (the
-  known deviation below). Keep the two in step.
+- **The plan's bottom is the deeper of a per-Verfahren Vorgabe and the last
+  `Tiefe Geologie n` — never either one alone.** DSV plans a `Säulenhöhe`,
+  Injektionsbohren a `Bohrlaenge` (ASCII, as
+  `injektionsbohren-sensors.csv` spells it, with the umlaut matched beside it
+  because a miss is **silent**: the profile falls back to the geology depth,
+  which is a number that looks entirely plausible). The two differ in both
+  directions and getting either one wrong loses data:
+  a probe stopping short of the hole gives 36 m of survey against a 43 m
+  bore, and the chart clips everything to `endTiefe` — the depth indicator
+  included — so the column stops saying where the drill is; while a pillar
+  keyed at 13 m against a 36 m profile, which happens because a site may share
+  one geological section across all its elements, drops every planned layer
+  below 13 out of `mergeProfile`'s `planned` filter and out of the committed
+  profile with it. The maximum is never narrower than either rule alone, which
+  is the property that makes it safe to change. The list is `GEPLANTE_TIEFE`
+  and it exists twice, in `vorgabe-geology.ts` for the committed profile and in
+  `ui/src/utils/vorgaben.ts` for what is drawn (the known deviation below).
+  Keep the two in step.
 - **Depth is never taken from the browser.** The live entry route
   (`POST /api/recording/geology`) carries only a ground-type number; the server
   reads the depth off its own latest depth reading. The route **refuses
