@@ -88,3 +88,30 @@ export function hatBriefingInhalt(vorgaben: VorgabenData | null): boolean {
   return collectVorgabeEntries(vorgaben)
     .some((e) => /^Geologie\s+\d+$/i.test(e.name) && parseInt(e.value, 10) > 0);
 }
+
+/**
+ * The size a planned value is set at, stepped down when the number is long
+ * enough to overrun its cell.
+ *
+ * At 1024x768 each of the briefing's six cells is 385px wide. The UI declares
+ * no `font-family`, so a kiosk renders them in DejaVu Sans — the only face
+ * `fonts-dejavu-core` installs — which is materially wider than the default a
+ * developer machine or a Playwright run uses. Measured in DejaVu Sans Bold at
+ * 5.5rem: a digit is 61px and a thousands separator 34px, so „2.500,00" is
+ * **434px** and overruns its cell by 63px, while measuring 356px and looking
+ * comfortable everywhere a screenshot gets taken. A four-digit Sollvolumen is
+ * ordinary — `briefing.test.ts` has carried 2500 as its fixture since
+ * this screen was written.
+ *
+ * Counting characters is enough because the digits are `tabular-nums`: width
+ * is linear in the string, and every step leaves ≥35px of slack for the unit,
+ * the separators and the degree sign, all of which are narrower than a digit.
+ * The same reason `--font-sm` budgets elsewhere in this repo are measured
+ * against a deliberately wide face rather than derived on paper.
+ */
+export function wertGroesse(text: string, basisRem: number): string {
+  const rem = (faktor: number) => `${+(basisRem * faktor).toFixed(3)}rem`;
+  if (text.length <= 6) return rem(1);
+  if (text.length <= 8) return rem(0.75);
+  return rem(0.6);
+}

@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { BohrprofilLog, normalisiere } from '@coded-aesthetics/din4023/profile';
 import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 import type { VorgabenData } from '../hooks/useImplenia';
+import { wertGroesse } from '../utils/briefing';
 import { findSoll } from '../utils/sensors';
 import { formatNumber } from '../utils/format';
 import { grad, VORGABE_HORIZONTAL, VORGABE_VERTIKAL } from '../utils/ausrichtung';
@@ -28,6 +29,14 @@ import type { CoordinateGroup } from '../utils/vorgaben';
  * does not need the briefing starts the recording from here and the drilling
  * screen takes over by itself. The forward button is a convenience, not a gate.
  */
+
+/*
+ * The full size of each of the two value rows. Not in `styles`, because
+ * `wertGroesse` steps them down for a number too long for its cell — see
+ * there for the measurement that makes that necessary.
+ */
+const HERO_REM = 5.5;
+const WINKEL_REM = 5;
 
 interface Props {
   vorgaben: VorgabenData | null;
@@ -185,7 +194,7 @@ function Hero({ label, wert, einheit }: { label: string; wert: string; einheit: 
   return (
     <Zelle label={label}>
       <div style={styles.heroZeile}>
-        <span style={styles.heroWert}>{wert}</span>
+        <span style={{ ...styles.heroWert, fontSize: wertGroesse(wert, HERO_REM) }}>{wert}</span>
         <span style={styles.heroEinheit}>{einheit}</span>
       </div>
     </Zelle>
@@ -200,9 +209,12 @@ function Hero({ label, wert, einheit }: { label: string; wert: string; einheit: 
  * ways on consecutive screens.
  */
 function Winkel({ label, wert }: { label: string; wert: number | null }) {
+  const text = wert === null ? '–' : grad(wert);
   return (
     <Zelle label={label}>
-      <span style={styles.winkelWert}>{wert === null ? '–' : grad(wert)}</span>
+      <span style={{ ...styles.winkelWert, fontSize: wertGroesse(text, WINKEL_REM) }}>
+        {text}
+      </span>
     </Zelle>
   );
 }
@@ -355,7 +367,6 @@ const styles: Record<string, CSSProperties> = {
     gap: '0.35rem',
   },
   heroWert: {
-    fontSize: '5.5rem',
     fontWeight: 800,
     lineHeight: 1.05,
     fontVariantNumeric: 'tabular-nums',
@@ -367,7 +378,6 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--text-muted)',
   },
   winkelWert: {
-    fontSize: '5rem',
     fontWeight: 800,
     lineHeight: 1.05,
     fontVariantNumeric: 'tabular-nums',

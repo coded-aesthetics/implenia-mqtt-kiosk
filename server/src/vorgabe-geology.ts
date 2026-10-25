@@ -26,9 +26,12 @@ const TIEFE_GEOLOGIE_RE = /^Tiefe\s+Geologie\s+(\d+)$/i;
  * The Vorgabe naming how deep the hole is planned to go, in preference order.
  *
  * One per Verfahren, and the name is the Verfahren's own: DSV plans a
- * `Säulenhöhe`, Injektionsbohren a `Bohrlaenge`. The list is ordered rather
- * than a set so an element somehow carrying two gets the same answer every
- * time.
+ * `Säulenhöhe`, Injektionsbohren a `Bohrlaenge`, Ankerbohren a
+ * `Bohrlänge Anker` (its `Bemaßungen` row in `ankerbohren-sensors.csv` —
+ * nothing here matches it by prefix, and it records geology like the other
+ * two, so leaving it out left every Ankerbohren element with the profile
+ * clipped to the last `Tiefe Geologie n`). The list is ordered rather than a
+ * set so an element somehow carrying two gets the same answer every time.
  *
  * **It is one half of what bounds the profile, never the whole of it** — see
  * `endTiefe` below, which takes the deeper of this and the geology's own
@@ -45,7 +48,9 @@ const TIEFE_GEOLOGIE_RE = /^Tiefe\s+Geologie\s+(\d+)$/i;
  * the profile simply falls back to the last geology depth, which is the
  * previous behaviour and looks like nothing went wrong.
  */
-const GEPLANTE_TIEFE = ['Säulenhöhe', 'Bohrlaenge', 'Bohrlänge'] as const;
+const GEPLANTE_TIEFE = [
+  'Säulenhöhe', 'Bohrlaenge', 'Bohrlänge', 'Bohrlänge Anker',
+] as const;
 const GEPLANTE_TIEFE_NAMEN: ReadonlySet<string> = new Set(GEPLANTE_TIEFE);
 
 /** Fallback bottom depth when the Vorgaben name neither a height nor a depth. */

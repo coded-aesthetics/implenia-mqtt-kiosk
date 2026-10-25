@@ -132,6 +132,17 @@ describe('parseVorgabeGeology', () => {
     expect(profile?.endTiefe).toBe(15);
   });
 
+  it('reads Ankerbohren\u2019s Bohrl\u00e4nge Anker', () => {
+    // Its own `Bema\u00dfungen` name in `ankerbohren-sensors.csv`, which none of
+    // the other three match by prefix \u2014 and Ankerbohren records geology, so
+    // missing it clipped every one of its profiles to the last geology depth.
+    const profile = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 8, 'Bohrl\u00e4nge Anker': 18 },
+    });
+    expect(profile?.endTiefe).toBe(18);
+  });
+
   it('ignores a Bohrlaenge of zero rather than collapsing the profile', () => {
     const profile = parseVorgabeGeology({
       int_sensors: { 'Geologie 1': 5 },

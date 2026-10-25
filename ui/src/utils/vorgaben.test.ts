@@ -219,6 +219,11 @@ describe('geplanteTiefe', () => {
     expect(geplanteTiefe({ float_sensors: { 'S\u00e4ulenh\u00f6he': 12.5 } })).toBe(12.5);
   });
 
+  // Its own `Bemaßungen` name, which no prefix of the other three matches.
+  it('reads Ankerbohren’s Bohrlänge Anker', () => {
+    expect(geplanteTiefe({ float_sensors: { 'Bohrlänge Anker': 18 } })).toBe(18);
+  });
+
   it('agrees with the profile\u2019s own bottom', () => {
     // The briefing\u2019s hero and the column\u2019s endTiefe are the same number,
     // read through one list of names \u2014 that is the point of the helper.
@@ -244,6 +249,20 @@ describe('buildSchichten · vermessenBis', () => {
       { name: 'Tiefe Geologie 1', value: '36' },
       { name: 'Bohrlaenge', value: '43' },
     ])).toMatchObject({ endTiefe: 43, vermessenBis: 36 });
+  });
+
+  /*
+   * The deepest layer carrying no depth of its own is „and this one runs to
+   * the bottom", not a survey that stopped — the plan does name the ground
+   * down there, so the briefing must not state it is unexplored.
+   */
+  it('reaches the bottom when the deepest layer states no depth', () => {
+    expect(buildSchichten([
+      { name: 'Geologie 1', value: '5' },
+      { name: 'Tiefe Geologie 1', value: '12' },
+      { name: 'Geologie 2', value: '9' },
+      { name: 'Bohrlaenge', value: '43' },
+    ])).toMatchObject({ endTiefe: 43, vermessenBis: 43 });
   });
 
   it('equals endTiefe when the survey reaches the bottom', () => {

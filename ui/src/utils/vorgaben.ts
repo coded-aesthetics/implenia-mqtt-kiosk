@@ -23,7 +23,8 @@ const HIDDEN_SENSORS = new Set(['Nummer']);
 
 /**
  * The Vorgabe naming how deep the hole is planned to go, in preference order —
- * DSV's `Säulenhöhe`, Injektionsbohren's `Bohrlaenge`.
+ * DSV's `Säulenhöhe`, Injektionsbohren's `Bohrlaenge`, Ankerbohren's
+ * `Bohrlänge Anker`.
  *
  * The same list as the server's `GEPLANTE_TIEFE` (`vorgabe-geology.ts`), which
  * carries the full reasoning: the planned geology is routinely shallower than
@@ -31,7 +32,9 @@ const HIDDEN_SENSORS = new Set(['Nummer']);
  * drawing the depth indicator with it. Keep the two in step — this is the
  * display-only parser the CLAUDE.md "Known deviation" note names.
  */
-const GEPLANTE_TIEFE = ['Säulenhöhe', 'Bohrlaenge', 'Bohrlänge'] as const;
+const GEPLANTE_TIEFE = [
+  'Säulenhöhe', 'Bohrlaenge', 'Bohrlänge', 'Bohrlänge Anker',
+] as const;
 
 export interface VorgabeProfil {
   schichten: Schicht[];
@@ -44,7 +47,9 @@ export interface VorgabeProfil {
    * Where the planned geology itself stops — the bottom of its deepest layer.
    *
    * 0 when the Schichtauftrag names ground types but no depths at all, which
-   * is a profile that makes no claim about where anything ends.
+   * is a profile that makes no claim about where anything ends, and
+   * `endTiefe` when its deepest layer states no depth — that one runs to the
+   * bottom, so there is no unsurveyed stretch to mark.
    *
    * Below this the deepest planned layer is carried down to `endTiefe`,
    * because a profile is gapless and has no way to say "and no claim below
@@ -182,6 +187,24 @@ export function buildSchichten(entries: VorgabeEntry[]): VorgabeProfil | null {
     if (endDepth !== undefined) prevDepth = endDepth;
   }
 
+  /*
+   * The deepest layer with no `Tiefe Geologie n` of its own is the
+   * Schichtauftrag saying "and this one runs to the bottom".
+   *
+   * It is not the same shape as a survey that stopped: both leave `prevDepth`
+   * above `endTiefe`, but here the plan does name the ground down there. The
+   * briefing used to mark the boundary and state „Unterhalb X m ist die
+   * Geologie nicht erkundet" over a stretch the plan explicitly covers —
+   * which is a confident false sentence to a worker about unexplored ground.
+   *
+   * A Schichtauftrag naming ground types and **no** depths at all is not this
+   * and keeps `vermessenBis` at 0: it is the one that makes no claim about
+   * where anything ends, rather than one claim reaching the bottom. The
+   * marker does not fire for either — it needs a boundary above 0 — so this
+   * only decides what the field means.
+   */
+  const offenesEnde = prevDepth > 0 && !geoDepths.has(indices[indices.length - 1]);
+
   // Zero or negative is "not set" rather than a hole of no depth.
   const geplant = GEPLANTE_TIEFE
     .map((name) => {
@@ -195,7 +218,7 @@ export function buildSchichten(entries: VorgabeEntry[]): VorgabeProfil | null {
   // otherwise clip the layers below it straight out of the drawing.
   const tiefste = Math.max(geplant ?? 0, prevDepth);
   const endTiefe = tiefste > 0 ? tiefste : 10;
-  return { schichten, endTiefe, vermessenBis: prevDepth };
+  return { schichten, endTiefe, vermessenBis: offenesEnde ? endTiefe : prevDepth };
 }
 
 /** Parse a raw MQTT payload (plain number or text, not JSON). */

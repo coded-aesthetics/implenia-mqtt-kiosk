@@ -756,7 +756,12 @@ addressing the sensor by hardcoded name go on finding them.
   Injektionsbohren a `Bohrlaenge` (ASCII, as
   `injektionsbohren-sensors.csv` spells it, with the umlaut matched beside it
   because a miss is **silent**: the profile falls back to the geology depth,
-  which is a number that looks entirely plausible). The two differ in both
+  which is a number that looks entirely plausible), Ankerbohren a
+  `Bohrlänge Anker` — its own `Bemaßungen` row, which none of the other three
+  match by prefix, so it was missing from the list until 2026-10-25 and every
+  Ankerbohren element carried a profile clipped to its geology. A Verfahren
+  that records geology and is not on this list has that bug, silently.
+  The two kinds of depth differ in both
   directions and getting either one wrong loses data:
   a probe stopping short of the hole gives 36 m of survey against a 43 m
   bore, and the chart clips everything to `endTiefe` — the depth indicator
