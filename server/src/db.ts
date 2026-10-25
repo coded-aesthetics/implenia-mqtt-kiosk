@@ -209,16 +209,49 @@ db.exec(`
     PRIMARY KEY (device_id, value_index)
   );
 
+  /*
+   * Both element caches are keyed by (site, name), never by name alone: a
+   * bridge's piers are separate sites with separate API keys, and every one of
+   * them has a P-01. See site.ts, and the rebuild migration below for the
+   * tables that predate the site column.
+   */
   CREATE TABLE IF NOT EXISTS element_vorgaben (
-    element_name TEXT    PRIMARY KEY,
+    site_id      TEXT    NOT NULL DEFAULT 'default',
+    element_name TEXT    NOT NULL,
     vorgaben     TEXT    NOT NULL,
-    updated_at   INTEGER NOT NULL
+    updated_at   INTEGER NOT NULL,
+    PRIMARY KEY (site_id, element_name)
   );
 
   CREATE TABLE IF NOT EXISTS element_sensors (
-    element_name TEXT    PRIMARY KEY,
+    site_id      TEXT    NOT NULL DEFAULT 'default',
+    element_name TEXT    NOT NULL,
     defs         TEXT    NOT NULL,
-    updated_at   INTEGER NOT NULL
+    updated_at   INTEGER NOT NULL,
+    PRIMARY KEY (site_id, element_name)
+  );
+
+  /*
+   * The credentials of each site this kiosk has been given a key for.
+   *
+   * Measurements upload to the sensor ids of the site they were recorded on,
+   * so they can only be sent with *that site's* key — and the site id is a
+   * one-way hash, deliberately, so it cannot produce one. Without this table a
+   * pier's unsent data was stranded the moment the crew moved on: every retry
+   * went out under the new pier's key and came back 401, for the whole life of
+   * the machine, and the only way out was retyping the old key by hand.
+   *
+   * Keys accumulate rather than being pruned when a site is done. Pruning
+   * needs to prove no session of that site has a pending or failed reading
+   * left, and getting that wrong restores the exact bug this removes — against
+   * a kiosk that already stores the current key in this same table in the
+   * clear, on a machine with remote access, which is the real exposure.
+   */
+  CREATE TABLE IF NOT EXISTS site_credentials (
+    site_id    TEXT    PRIMARY KEY,
+    api_url    TEXT    NOT NULL,
+    api_key    TEXT    NOT NULL,
+    updated_at INTEGER NOT NULL
   );
 
   /*
@@ -326,6 +359,72 @@ db.exec(`
   }
 }
 
+/*
+ * Scope the per-element caches to a site.
+ *
+ * **The one non-additive migration in this file, and it is one-way.** The rest
+ * add a column, which older code does not select; this moves a PRIMARY KEY, so
+ * the previous release's `ON CONFLICT(element_name)` matches no constraint
+ * afterwards — and since every statement here is prepared at import time, that
+ * release throws on boot rather than on write. Nothing in the app can get
+ * there (the updater refuses anything not newer and keeps no previous copy),
+ * but a release rolled back by hand needs the database rolled back with it.
+ *
+ * Both tables were keyed by element name alone, which is not an identity: a
+ * bridge's piers each have their own API key and each have a `P-01`. The rows
+ * are rebuilt rather than dropped, because `element_sensors` is what lets an
+ * offline site record at all — dropping it on an update would leave a kiosk
+ * mid-shift unable to start an element until it saw the platform again. They
+ * are stamped `default` and adopted by the first key the kiosk is given (see
+ * `adoptCurrentSite`), which is the honest reading: they were cached before
+ * this machine knew which site it was on.
+ */
+{
+  /*
+   * Each rebuild is one transaction. `db.exec` runs its statements one after
+   * another with no implicit one, so a power cut between the DROP and the
+   * RENAME — a kiosk losing power mid-boot is an ordinary Tuesday — would come
+   * back with the real table gone, `…_new` orphaned, and the next boot's
+   * CREATE IF NOT EXISTS quietly making an empty one. For `element_sensors`
+   * that is an offline site that can no longer start a recording.
+   */
+  const rebuild = (sql: string): void => { db.transaction(() => db.exec(sql))(); };
+
+  const vorgabenCols = db.prepare('PRAGMA table_info(element_vorgaben)').all() as { name: string }[];
+  if (!vorgabenCols.some((c) => c.name === 'site_id')) {
+    rebuild(`
+      CREATE TABLE element_vorgaben_new (
+        site_id      TEXT    NOT NULL DEFAULT 'default',
+        element_name TEXT    NOT NULL,
+        vorgaben     TEXT    NOT NULL,
+        updated_at   INTEGER NOT NULL,
+        PRIMARY KEY (site_id, element_name)
+      );
+      INSERT INTO element_vorgaben_new (site_id, element_name, vorgaben, updated_at)
+        SELECT 'default', element_name, vorgaben, updated_at FROM element_vorgaben;
+      DROP TABLE element_vorgaben;
+      ALTER TABLE element_vorgaben_new RENAME TO element_vorgaben;
+    `);
+  }
+
+  const sensorCols = db.prepare('PRAGMA table_info(element_sensors)').all() as { name: string }[];
+  if (!sensorCols.some((c) => c.name === 'site_id')) {
+    rebuild(`
+      CREATE TABLE element_sensors_new (
+        site_id      TEXT    NOT NULL DEFAULT 'default',
+        element_name TEXT    NOT NULL,
+        defs         TEXT    NOT NULL,
+        updated_at   INTEGER NOT NULL,
+        PRIMARY KEY (site_id, element_name)
+      );
+      INSERT INTO element_sensors_new (site_id, element_name, defs, updated_at)
+        SELECT 'default', element_name, defs, updated_at FROM element_sensors;
+      DROP TABLE element_sensors;
+      ALTER TABLE element_sensors_new RENAME TO element_sensors;
+    `);
+  }
+}
+
 // --- Prepared statements ---
 
 // Buffer
@@ -377,9 +476,14 @@ const getMostRecentSessionStmt = db.prepare(
  * `id DESC` behind `started_at DESC` because two sessions started inside one
  * millisecond is a replay, not a fiction, and a tie that resolves arbitrarily
  * would make the restored phase flip between two runs of the same data.
+ *
+ * Site-scoped: this decides which screen a pillar reopens on and whether it
+ * needs aligning, so the previous pier's `P-01` would reopen this one's on
+ * Auffüllen with its drilling treated as done.
  */
 const getLastSessionForElementStmt = db.prepare(
-  'SELECT * FROM recording_sessions WHERE element_name = ? ORDER BY started_at DESC, id DESC LIMIT 1'
+  `SELECT * FROM recording_sessions WHERE element_name = ? AND site_id = ?
+   ORDER BY started_at DESC, id DESC LIMIT 1`
 );
 const updateSessionStatusStmt = db.prepare(
   'UPDATE recording_sessions SET status = ? WHERE id = ?'
@@ -390,10 +494,14 @@ const getSessionsStmt = db.prepare(
 // COALESCE because ended_at is only written by endSession(): a session uploaded
 // while it was still open has none, and `new Date(null)` on the resume tile
 // would read "01.01.1970".
+//
+// Scoped to one site, like every element-name question: a bridge's piers each
+// carry a `P-01`, so without it the pier the machine just left kept filling
+// the next one's „Abgeschlossene Elemente" row. See site.ts.
 const getCompletedElementsStmt = db.prepare(`
   SELECT element_name, MAX(COALESCE(ended_at, started_at)) as last_upload
   FROM recording_sessions
-  WHERE status = 'uploaded' AND paused = 0
+  WHERE status = 'uploaded' AND paused = 0 AND site_id = ?
   GROUP BY element_name
   ORDER BY last_upload DESC
 `);
@@ -657,7 +765,11 @@ export function getTopicHistory(topic: string, from: number, to: number): Buffer
 
 // --- Session functions ---
 
-export function createSession(elementName: string, sensorMapJson: string, siteId = 'default'): number {
+export function createSession(
+  elementName: string,
+  sensorMapJson: string,
+  siteId = currentSiteId(),
+): number {
   const result = createSessionStmt.run(elementName, sensorMapJson, Date.now(), siteId);
   return result.lastInsertRowid as number;
 }
@@ -675,7 +787,7 @@ export function getMostRecentSession(): Session | null {
 }
 
 export function getLastSessionForElement(elementName: string): Session | null {
-  return (getLastSessionForElementStmt.get(elementName) as Session) ?? null;
+  return (getLastSessionForElementStmt.get(elementName, currentSiteId()) as Session) ?? null;
 }
 
 export function getSessionById(id: number): Session | null {
@@ -716,7 +828,8 @@ export interface CompletedElement {
 }
 
 export function getCompletedElements(): CompletedElement[] {
-  const rows = getCompletedElementsStmt.all() as { element_name: string; last_upload: number }[];
+  const rows = getCompletedElementsStmt.all(currentSiteId()) as
+    { element_name: string; last_upload: number }[];
   return rows.map((r) => ({ elementName: r.element_name, lastUpload: r.last_upload }));
 }
 
@@ -743,18 +856,23 @@ export interface StartedElement {
  * and a session that is still waiting to upload, was paused, or recorded
  * nothing at all answers yes. That is the difference from
  * `getCompletedElements`, which answers "is this element finished".
+ *
+ * A site filter, though: "here" is this pier's `P-01`, not the previous
+ * pier's. Without it an untouched pillar was marked begun — at the depth the
+ * identically-named one on the site before it reached. See site.ts.
  */
 const getStartedElementsStmt = db.prepare(`
   SELECT element_name,
          MAX(COALESCE(max_depth, 0)) AS tiefe,
          MAX(COALESCE(ended_at, started_at)) AS letzte
   FROM recording_sessions
+  WHERE site_id = ?
   GROUP BY element_name
   ORDER BY letzte DESC
 `);
 
 export function getStartedElements(): StartedElement[] {
-  const rows = getStartedElementsStmt.all() as {
+  const rows = getStartedElementsStmt.all(currentSiteId()) as {
     element_name: string; tiefe: number | null; letzte: number;
   }[];
   return rows.map((r) => ({
@@ -949,12 +1067,12 @@ export function deleteCalibration(sensorName: string): void {
 // --- Vorgaben cache ---
 
 const setElementVorgabenStmt = db.prepare(
-  `INSERT INTO element_vorgaben (element_name, vorgaben, updated_at) VALUES (?, ?, ?)
-   ON CONFLICT(element_name) DO UPDATE SET
+  `INSERT INTO element_vorgaben (site_id, element_name, vorgaben, updated_at) VALUES (?, ?, ?, ?)
+   ON CONFLICT(site_id, element_name) DO UPDATE SET
      vorgaben = excluded.vorgaben, updated_at = excluded.updated_at`
 );
 const getElementVorgabenStmt = db.prepare(
-  'SELECT vorgaben FROM element_vorgaben WHERE element_name = ?'
+  'SELECT vorgaben FROM element_vorgaben WHERE site_id = ? AND element_name = ?'
 );
 
 /**
@@ -968,12 +1086,13 @@ const getElementVorgabenStmt = db.prepare(
  * and parsing it here would only add a way to corrupt it.
  */
 export function setElementVorgaben(elementName: string, vorgaben: unknown): void {
-  setElementVorgabenStmt.run(elementName, JSON.stringify(vorgaben), Date.now());
+  setElementVorgabenStmt.run(currentSiteId(), elementName, JSON.stringify(vorgaben), Date.now());
 }
 
 /** Cached vorgaben for an element, or null if none were ever seen. */
 export function getElementVorgaben(elementName: string): unknown | null {
-  const row = getElementVorgabenStmt.get(elementName) as { vorgaben: string } | undefined;
+  const row = getElementVorgabenStmt.get(currentSiteId(), elementName) as
+    { vorgaben: string } | undefined;
   if (!row) return null;
   try {
     return JSON.parse(row.vorgaben);
@@ -987,12 +1106,12 @@ export function getElementVorgaben(elementName: string): unknown | null {
 // --- Sensor definition cache ---
 
 const setElementSensorsStmt = db.prepare(
-  `INSERT INTO element_sensors (element_name, defs, updated_at) VALUES (?, ?, ?)
-   ON CONFLICT(element_name) DO UPDATE SET
+  `INSERT INTO element_sensors (site_id, element_name, defs, updated_at) VALUES (?, ?, ?, ?)
+   ON CONFLICT(site_id, element_name) DO UPDATE SET
      defs = excluded.defs, updated_at = excluded.updated_at`
 );
 const getElementSensorsStmt = db.prepare(
-  'SELECT defs FROM element_sensors WHERE element_name = ?'
+  'SELECT defs FROM element_sensors WHERE site_id = ? AND element_name = ?'
 );
 
 /**
@@ -1013,12 +1132,13 @@ const getElementSensorsStmt = db.prepare(
  * CSV sync or a fix to that filter applies to everything already cached.
  */
 export function setElementSensors(elementName: string, defs: unknown): void {
-  setElementSensorsStmt.run(elementName, JSON.stringify(defs), Date.now());
+  setElementSensorsStmt.run(currentSiteId(), elementName, JSON.stringify(defs), Date.now());
 }
 
 /** Cached sensor definitions for an element, or null if none were ever seen. */
 export function getElementSensors(elementName: string): unknown | null {
-  const row = getElementSensorsStmt.get(elementName) as { defs: string } | undefined;
+  const row = getElementSensorsStmt.get(currentSiteId(), elementName) as
+    { defs: string } | undefined;
   if (!row) return null;
   try {
     return JSON.parse(row.defs);
@@ -1368,6 +1488,144 @@ export function deleteMeta(key: string): void {
   deleteMetaStmt.run(key);
 }
 
+// --- Site credentials ---
+
+const setSiteCredentialsStmt = db.prepare(
+  `INSERT INTO site_credentials (site_id, api_url, api_key, updated_at) VALUES (?, ?, ?, ?)
+   ON CONFLICT(site_id) DO UPDATE SET
+     api_url = excluded.api_url, api_key = excluded.api_key, updated_at = excluded.updated_at`
+);
+const getSiteCredentialsStmt = db.prepare(
+  'SELECT api_url, api_key FROM site_credentials WHERE site_id = ?'
+);
+
+export interface SiteCredentials {
+  apiUrl: string;
+  apiKey: string;
+}
+
+/**
+ * Remember the key a site is reached with, so its measurements can still be
+ * uploaded after the kiosk has moved on. Written on every `syncSite`.
+ */
+export function setSiteCredentials(siteId: string, apiUrl: string, apiKey: string): void {
+  setSiteCredentialsStmt.run(siteId, apiUrl, apiKey, Date.now());
+}
+
+/**
+ * The credentials for a site, or null if this kiosk never held them.
+ *
+ * Null for every session recorded before this table existed, and for one
+ * recorded with no key configured at all — both of which upload under whatever
+ * key is current, exactly as they did before.
+ */
+export function getSiteCredentials(siteId: string): SiteCredentials | null {
+  const row = getSiteCredentialsStmt.get(siteId) as
+    { api_url: string; api_key: string } | undefined;
+  return row ? { apiUrl: row.api_url, apiKey: row.api_key } : null;
+}
+
+// --- Site scoping ---
+
+/**
+ * The site id of a kiosk that has never been given an API key.
+ *
+ * Also what every row recorded before sites existed carries, until the first
+ * key adopts them — see `adoptCurrentSite`.
+ */
+export const DEFAULT_SITE = 'default';
+
+const SITE_META_KEY = 'current_site_id';
+
+/**
+ * Which site this kiosk is working on. See site.ts for what identifies one.
+ *
+ * Read from meta on every call rather than cached in a module variable: it is
+ * one indexed row and the alternative is a cache that goes stale in exactly
+ * the situation this exists to handle.
+ */
+export function currentSiteId(): string {
+  return getMeta(SITE_META_KEY) ?? DEFAULT_SITE;
+}
+
+/**
+ * Meta keys that hold a *site's* state rather than this machine's, and so are
+ * suffixed with the site id.
+ *
+ * The shift assignment, fetched or imported, is a list of one site's elements.
+ * Served unscoped, an import made for the pier the machine just left kept
+ * overriding the element list on the pier it moved to — and an import
+ * overrides everything, so that one does not even degrade, it simply stays
+ * wrong until somebody notices.
+ */
+export function siteMetaKey(base: string): string {
+  const site = currentSiteId();
+  return site === DEFAULT_SITE ? base : `${base}:${site}`;
+}
+
+/** The site-scoped meta keys, by their unscoped base name. */
+const SITE_SCOPED_META = ['last_shift_assignment', 'imported_shift_assignment'];
+
+/**
+ * Move the kiosk to a site, adopting whatever it recorded before it knew it
+ * was on one.
+ *
+ * **Nothing is ever deleted and nothing is re-stamped from one real site to
+ * another.** A pier the machine has left keeps its rows under its own id, so
+ * switching the key back brings its finished elements, its depths and its
+ * cached sensor ids back with it — which is also the only way its
+ * still-pending measurements can ever reach the platform.
+ *
+ * `default` rows are the exception, and adopting them is the honest reading
+ * rather than a convenience: that id means "recorded before this kiosk knew
+ * which site it was on", and the first key it is given is the answer to that
+ * question. It covers both the update that introduced sites and a machine set
+ * up offline from an imported Schichtauftrag and keyed afterwards — whose
+ * recordings would otherwise vanish from the element list the moment a
+ * technician typed the key in.
+ */
+export function adoptCurrentSite(siteId: string): void {
+  const previous = currentSiteId();
+  if (siteId === previous) return;
+
+  const tx = db.transaction(() => {
+    if (previous === DEFAULT_SITE) {
+      db.prepare('UPDATE recording_sessions SET site_id = ? WHERE site_id = ?')
+        .run(siteId, DEFAULT_SITE);
+      /*
+       * Where both exist for one element name, the site's own row wins and the
+       * unattributed one is dropped — it is a cache, and a row the platform
+       * served *for this site* is the better answer by definition.
+       *
+       * Reachable only by a kiosk that returned to `default` after holding a
+       * key, which nothing currently does. It is handled rather than argued
+       * away because the alternative is a UNIQUE violation thrown out of the
+       * route that saves the key, which would leave the credential written and
+       * the move half-applied — the one outcome worse than either row winning.
+       */
+      for (const table of ['element_vorgaben', 'element_sensors']) {
+        db.prepare(
+          `DELETE FROM ${table} WHERE site_id = ? AND element_name IN
+             (SELECT element_name FROM ${table} WHERE site_id = ?)`,
+        ).run(DEFAULT_SITE, siteId);
+        db.prepare(`UPDATE ${table} SET site_id = ? WHERE site_id = ?`)
+          .run(siteId, DEFAULT_SITE);
+      }
+      for (const base of SITE_SCOPED_META) {
+        const value = getMeta(base);
+        if (value === undefined) continue;
+        // Same rule: a list already stored for this site is not overwritten by
+        // the unattributed one, which is dropped either way so the next key
+        // cannot adopt it a second time.
+        if (getMeta(`${base}:${siteId}`) === undefined) setMeta(`${base}:${siteId}`, value);
+        deleteMeta(base);
+      }
+    }
+    setMeta(SITE_META_KEY, siteId);
+  });
+  tx();
+}
+
 // --- Device functions ---
 
 const getDevicesStmt = db.prepare('SELECT * FROM devices ORDER BY id');
@@ -1547,6 +1805,31 @@ const clippedSummaryStmt = db.prepare(`
   WHERE r.upload_status = 'clipped'
 `);
 
+/*
+ * The same question asked of the sites the kiosk is *not* on.
+ *
+ * `getUnsafeDataSummary` is machine-wide, which is right for the reset guard —
+ * a reset wipes the machine — and wrong for the message shown when the API key
+ * changes. That one claims the measurements belong to the previous
+ * construction site, and an unfiltered count makes the claim of every reading
+ * on the box: on a machine that had recorded under two keys it reported the
+ * same total whichever key was entered, including when switching *to* the site
+ * that owns the data, which needs no mention at all because it uploads under
+ * the configured key from then on.
+ *
+ * Asked after the switch, so `default` rows the new site has just adopted are
+ * excluded, and so is the new site's own backlog. Not "the previous site" but
+ * every other one: a crew that has worked three piers can still be carrying
+ * the first one's data when it reaches the third.
+ */
+const otherSitesUnsafeStmt = db.prepare(`
+  SELECT COUNT(DISTINCT s.id) AS sessions, COUNT(r.id) AS readings
+  FROM recording_sessions s
+  JOIN session_readings r ON r.session_id = s.id
+  WHERE s.site_id != ?
+    AND s.exported_at IS NULL AND r.upload_status NOT IN ('uploaded', 'clipped')
+`);
+
 export interface UnsafeDataSummary {
   sessions: number;
   readings: number;
@@ -1576,8 +1859,24 @@ export function getUnsafeDataSummary(): UnsafeDataSummary {
   return { ...unsafe, clipped };
 }
 
-/** meta keys that survive a reset: the site's credentials, not this machine's setup. */
-const RESET_PRESERVED_META = ['implenia_api_key', 'implenia_api_url'];
+/**
+ * Unsent measurements belonging to any site but the one the kiosk is on now.
+ *
+ * What the key-change message is actually about. See `otherSitesUnsafeStmt`.
+ */
+export function getOtherSitesUnsafeSummary(): { sessions: number; readings: number } {
+  return otherSitesUnsafeStmt.get(currentSiteId()) as { sessions: number; readings: number };
+}
+
+/**
+ * meta keys that survive a reset: the site's credentials, not this machine's
+ * setup.
+ *
+ * The site id belongs with them because it *is* the key, hashed — leaving it
+ * behind would put the kiosk on `default` while still holding the key that
+ * identifies the site, and have the next boot adopt it back.
+ */
+const RESET_PRESERVED_META = ['implenia_api_key', 'implenia_api_url', 'current_site_id'];
 
 /**
  * Wipe this machine's setup and its recorded data, leaving the API

@@ -32,6 +32,24 @@ interface Props {
 type Transport = 'mqtt' | 'serial';
 type Step = 'netzwerk' | 'verfahren' | 'transport' | 'mqtt' | 'serial' | 'verbindung' | 'done';
 
+/**
+ * Steps that embed a whole config screen rather than their own tiles, and so
+ * need `mainWide` instead of the wizard's own 900px column.
+ *
+ * Both of these screens lay their cards out as
+ * `repeat(auto-fit, minmax(440px, 1fr))`, which needs 904px of track plus the
+ * screen's own 64px of padding. The wizard's column gives 900, so the grid
+ * silently drops to one track and the cards stack — measured at 1024x768, the
+ * Verbindung step then overflowed `main` by 49px and pushed its own „Zurück"
+ * and „Weiter" buttons off the bottom of the display, which on the
+ * first-install screen is a dead end with no way back. `main` is not
+ * scrollable; only `mainWide` is.
+ *
+ * `verbindung` was missing from here, and the comment on `mainWide` said „the
+ * WLAN step only" while describing this step's problem exactly.
+ */
+const EMBEDS_CONFIG_SCREEN = new Set<string>(['netzwerk', 'verbindung']);
+
 const STEP_TITLES: Record<Step, string> = {
   netzwerk: 'WLAN verbinden',
   verfahren: 'Verfahren wählen',
@@ -251,7 +269,7 @@ export function SetupWizard({ step: rawStep, onFinish, config }: Props) {
         </div>
       </header>
 
-      <main style={step === 'netzwerk' ? { ...styles.main, ...styles.mainWide } : styles.main}>
+      <main style={EMBEDS_CONFIG_SCREEN.has(step) ? { ...styles.main, ...styles.mainWide } : styles.main}>
         {step === 'netzwerk' && (
           <>
             {/*
@@ -566,8 +584,9 @@ const styles: Record<string, React.CSSProperties> = {
     margin: '0 auto',
   },
   /**
-   * The WLAN step only. The wizard's 900px column collapses the screen's two
-   * card columns into one, which stacks three cards taller than the viewport.
+   * The steps that embed a whole config screen — see `EMBEDS_CONFIG_SCREEN`.
+   * The wizard's 900px column collapses such a screen's two card columns into
+   * one, which stacks the cards taller than the viewport.
    */
   mainWide: {
     maxWidth: '1024px',

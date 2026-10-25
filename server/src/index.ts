@@ -19,6 +19,7 @@ import {
   ensureLogSensor, resumeRecording, autoUploadOnConnectivity, uploadPendingSessionsAtBoot,
 } from './recording.js';
 import { backfillMaxDepth } from './element-progress.js';
+import { syncSite } from './site.js';
 import { registerLogRoutes } from './routes/logs.js';
 import { registerVerfahrenRoutes } from './routes/verfahren.js';
 import { registerTranscribeRoutes } from './routes/transcribe.js';
@@ -30,6 +31,17 @@ const log = createLogger('server');
 const app = Fastify({ loggerInstance: logger as FastifyBaseLogger });
 
 async function start(): Promise<void> {
+  /*
+   * Which site this kiosk is on, before anything can read element state.
+   *
+   * First thing in the boot, ahead of the routes and of `resumeRecording`:
+   * every element-name question is scoped to the site, so a boot that served
+   * the element list before answering this would answer it from `default`.
+   * This is also where the rows of a kiosk updating into this version get
+   * adopted — see `adoptCurrentSite`.
+   */
+  if (syncSite()) log.info('Adopted the site of the configured API key');
+
   // Register plugins
   await app.register(fastifyWebsocket);
   await app.register(fastifyMultipart, { limits: { fileSize: 200 * 1024 * 1024 } });

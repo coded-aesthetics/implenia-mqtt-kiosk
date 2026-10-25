@@ -29,11 +29,30 @@
  */
 
 import { fetchImplenia, type ApiError } from './implenia-api.js';
+import { effectiveSiteId } from './site-credentials.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('element-device');
 
+/**
+ * Cached ids, keyed by **site and** element name.
+ *
+ * The name alone is not an identity — a bridge's piers each have a `P-01` (see
+ * site.ts) — and clearing the map on a key change is not enough on its own any
+ * more: an upload of a session recorded on a pier the kiosk has left runs under
+ * *that* pier's key, so both sites' answers are now in flight within one
+ * process. Keyed by name only, the previous pier's resolve would be handed back
+ * for the current pier's element, and the next `Ausführungsdatum` written to
+ * the wrong pillar — with a 200 and nothing to notice.
+ *
+ * The unit separator is there because an element name comes off the wire and
+ * has carried spaces and slashes before; it is the one byte it cannot contain.
+ */
 const deviceIds = new Map<string, string>();
+
+function cacheKey(elementName: string): string {
+  return `${effectiveSiteId()}\u001f${elementName}`;
+}
 
 /**
  * The platform answered, and knows no device for this element.
@@ -59,7 +78,8 @@ export function isElementNotResolvable(err: unknown): boolean {
 const STALE_ID_STATUS = new Set([401, 403, 404]);
 
 async function resolveElementDeviceId(elementName: string): Promise<string> {
-  const cached = deviceIds.get(elementName);
+  const key = cacheKey(elementName);
+  const cached = deviceIds.get(key);
   if (cached) return cached;
 
   const encoded = encodeURIComponent(elementName);
@@ -74,7 +94,7 @@ async function resolveElementDeviceId(elementName: string): Promise<string> {
     );
   }
 
-  deviceIds.set(elementName, deviceId);
+  deviceIds.set(key, deviceId);
   log.debug('Resolved element "%s" to device %s', elementName, deviceId);
   return deviceId;
 }
@@ -97,7 +117,7 @@ export async function withElementDevice<T>(
     const status = (err as ApiError).statusCode;
     if (!status || !STALE_ID_STATUS.has(status)) throw err;
 
-    deviceIds.delete(elementName);
+    deviceIds.delete(cacheKey(elementName));
     let fresh: string;
     try {
       fresh = await resolveElementDeviceId(elementName);
