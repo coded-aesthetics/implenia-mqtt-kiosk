@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildSchichten, byPriority, collectVorgabeEntries, extractCoordinates,
-  getPriority, isSpecialSensor, parseRawPayload, vorgabeText,
+  geplanteTiefe, getPriority, isSpecialSensor, letzteVorgabeTiefe,
+  parseRawPayload, vorgabeText,
 } from './vorgaben';
 import type { VorgabenData } from '../hooks/useImplenia';
 
@@ -139,6 +140,34 @@ describe('buildSchichten', () => {
     ])?.endTiefe).toBe(20);
   });
 
+  it('prefers Injektionsbohren\u2019s Bohrlaenge over the last geology depth', () => {
+    // The planned geology ends at 36 m, the bore goes to 43. Below endTiefe
+    // the chart draws neither a layer nor the depth indicator.
+    expect(buildSchichten([
+      { name: 'Geologie 1', value: '3' },
+      { name: 'Tiefe Geologie 1', value: '36' },
+      { name: 'Bohrlaenge', value: '43' },
+    ])?.endTiefe).toBe(43);
+  });
+
+  it('accepts the umlaut spelling of Bohrl\u00e4nge too', () => {
+    // A miss here is silent: the profile quietly stops at the last geology
+    // depth, which is what this change exists to fix.
+    expect(buildSchichten([
+      { name: 'Geologie 1', value: '3' },
+      { name: 'Tiefe Geologie 1', value: '36' },
+      { name: 'Bohrl\u00e4nge', value: '43' },
+    ])?.endTiefe).toBe(43);
+  });
+
+  it('ignores a planned depth of zero rather than collapsing the profile', () => {
+    expect(buildSchichten([
+      { name: 'Geologie 1', value: '3' },
+      { name: 'Tiefe Geologie 1', value: '6' },
+      { name: 'Bohrlaenge', value: '0' },
+    ])?.endTiefe).toBe(6);
+  });
+
   it('falls back to a nominal depth when nothing says how deep', () => {
     expect(buildSchichten([{ name: 'Geologie 1', value: '3' }])?.endTiefe).toBe(10);
   });
@@ -162,6 +191,55 @@ describe('buildSchichten', () => {
       schichten: [{ tiefe: 0, nr: 3 }],
       endTiefe: 2000.75,
     });
+  });
+});
+
+describe('geplanteTiefe', () => {
+  it('reads Injektionsbohren\u2019s Bohrlaenge', () => {
+    expect(geplanteTiefe({ float_sensors: { Bohrlaenge: 43 } })).toBe(43);
+  });
+
+  it('reads DSV\u2019s S\u00e4ulenh\u00f6he', () => {
+    expect(geplanteTiefe({ float_sensors: { 'S\u00e4ulenh\u00f6he': 12.5 } })).toBe(12.5);
+  });
+
+  it('agrees with the profile\u2019s own bottom', () => {
+    // The briefing\u2019s hero and the column\u2019s endTiefe are the same number,
+    // read through one list of names \u2014 that is the point of the helper.
+    const vorgaben = {
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 36, Bohrlaenge: 43 },
+    };
+    expect(geplanteTiefe(vorgaben))
+      .toBe(buildSchichten(collectVorgabeEntries(vorgaben as never))?.endTiefe);
+  });
+
+  it('is null when nothing names a depth, and for zero', () => {
+    expect(geplanteTiefe({ float_sensors: { 'Tiefe Geologie 1': 36 } })).toBeNull();
+    expect(geplanteTiefe({ float_sensors: { Bohrlaenge: 0 } })).toBeNull();
+    expect(geplanteTiefe(null)).toBeNull();
+  });
+});
+
+describe('letzteVorgabeTiefe', () => {
+  it('is the deepest surveyed boundary, whatever order it arrives in', () => {
+    expect(letzteVorgabeTiefe([
+      { name: 'Tiefe Geologie 2', value: '36' },
+      { name: 'Tiefe Geologie 1', value: '2.5' },
+    ])).toBe(36);
+  });
+
+  it('ignores everything that is not a geology depth', () => {
+    expect(letzteVorgabeTiefe([
+      { name: 'Tiefe Geologie 1', value: '12' },
+      { name: 'Bohrlaenge', value: '43' },
+      { name: 'Geologie 1', value: '20' },
+    ])).toBe(12);
+  });
+
+  it('is null when the Schichtauftrag names no depth at all', () => {
+    expect(letzteVorgabeTiefe([{ name: 'Geologie 1', value: '5' }])).toBeNull();
+    expect(letzteVorgabeTiefe([{ name: 'Tiefe Geologie 1', value: 'n/a' }])).toBeNull();
   });
 });
 

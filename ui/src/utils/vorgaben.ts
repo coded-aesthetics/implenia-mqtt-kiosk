@@ -1,5 +1,6 @@
 import type { Schicht } from '@coded-aesthetics/din4023/profile';
 import { formatNumber, isNoValue } from './format';
+import { findSoll } from './sensors';
 import type { SensorDef, VorgabenData } from '../hooks/useImplenia';
 
 /**
@@ -20,9 +21,60 @@ const TIEFE_GEOLOGIE_RE = /^Tiefe\s+Geologie\s+(\d+)$/i;
 const COORDINATE_RE = /^(Startpunkt|Fusspunkt)\s+(X|Y|Z)$/i;
 const HIDDEN_SENSORS = new Set(['Nummer']);
 
+/**
+ * The Vorgabe naming how deep the hole is planned to go, in preference order —
+ * DSV's `Säulenhöhe`, Injektionsbohren's `Bohrlaenge`.
+ *
+ * The same list as the server's `GEPLANTE_TIEFE` (`vorgabe-geology.ts`), which
+ * carries the full reasoning: the planned geology is routinely shallower than
+ * the bore, and a profile that stops at the last `Tiefe Geologie n` stops
+ * drawing the depth indicator with it. Keep the two in step — this is the
+ * display-only parser the CLAUDE.md "Known deviation" note names.
+ */
+const GEPLANTE_TIEFE = ['Säulenhöhe', 'Bohrlaenge', 'Bohrlänge'] as const;
+
 export interface VorgabeEntry {
   name: string;
   value: string;
+}
+
+/**
+ * How deep this element is planned to go, in metres, or null when the
+ * Schichtauftrag does not say.
+ *
+ * The number the briefing screen shows as its hero and the number the profile
+ * column bottoms out at, from one lookup — so the two cannot disagree about
+ * how deep the hole is. Reads the raw Vorgaben rather than `VorgabeEntry[]`
+ * because every caller outside the profile has them in that shape already.
+ */
+export function geplanteTiefe(vorgaben: VorgabenData | null): number | null {
+  for (const name of GEPLANTE_TIEFE) {
+    const wert = findSoll(vorgaben, name);
+    if (wert !== null && wert > 0) return wert;
+  }
+  return null;
+}
+
+/**
+ * The deepest `Tiefe Geologie n` the Schichtauftrag names, or null when it
+ * names none.
+ *
+ * Where this is shallower than the planned depth, the profile's last layer is
+ * carried down over ground nobody surveyed — so the briefing marks the
+ * boundary and says the stretch below it is an assumption. Returned separately
+ * rather than folded into `buildSchichten` because it is not part of the
+ * profile: a layer boundary and the end of the survey are different facts that
+ * happen to share a number.
+ */
+export function letzteVorgabeTiefe(entries: VorgabeEntry[]): number | null {
+  let tiefste: number | null = null;
+  for (const { name, value } of entries) {
+    if (!TIEFE_GEOLOGIE_RE.test(name)) continue;
+    const tiefe = parseFloat(value);
+    if (!Number.isFinite(tiefe) || tiefe <= 0) continue;
+    if (tiefste === null || tiefe > tiefste) tiefste = tiefe;
+  }
+  return tiefste;
 }
 
 export interface CoordinateGroup {
@@ -133,12 +185,17 @@ export function buildSchichten(
     if (endDepth !== undefined) prevDepth = endDepth;
   }
 
-  // Prefer Säulenhöhe (pillar height) from vorgaben over last geology depth
-  const pillarEntry = entries.find((e) => e.name === 'Säulenhöhe');
-  const pillarHeight = pillarEntry ? parseFloat(pillarEntry.value) : NaN;
-  const endTiefe = Number.isFinite(pillarHeight) && pillarHeight > 0
-    ? pillarHeight
-    : prevDepth > 0 ? prevDepth : 10;
+  // The planned bore depth beats the last geology depth — see GEPLANTE_TIEFE.
+  // Zero or negative is "not set" rather than a hole of no depth, so it falls
+  // through instead of collapsing the profile.
+  const geplanteTiefe = GEPLANTE_TIEFE
+    .map((name) => {
+      const entry = entries.find((e) => e.name === name);
+      return entry ? parseFloat(entry.value) : NaN;
+    })
+    .find((tiefe) => Number.isFinite(tiefe) && tiefe > 0);
+
+  const endTiefe = geplanteTiefe ?? (prevDepth > 0 ? prevDepth : 10);
   return { schichten, endTiefe };
 }
 

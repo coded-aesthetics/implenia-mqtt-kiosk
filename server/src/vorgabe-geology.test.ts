@@ -108,6 +108,53 @@ describe('parseVorgabeGeology', () => {
     expect(profile).toEqual({ schichten: [{ tiefe: 0, nr: 5 }], endTiefe: 4 });
   });
 
+  it('prefers Injektionsbohren\u2019s Bohrlaenge over the last geology depth', () => {
+    // The planned geology ends at 36 m, the bore goes to 43: the profile has
+    // to reach the bottom of the hole or the chart stops drawing the depth
+    // indicator seven metres above it.
+    const profile = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5, 'Geologie 2': 9 },
+      float_sensors: {
+        'Tiefe Geologie 1': 12, 'Tiefe Geologie 2': 36, Bohrlaenge: 43,
+      },
+    });
+    expect(profile?.endTiefe).toBe(43);
+    expect(profile?.schichten).toEqual([{ tiefe: 0, nr: 5 }, { tiefe: 12, nr: 9 }]);
+  });
+
+  it('accepts the umlaut spelling of Bohrl\u00e4nge too', () => {
+    // A miss here is silent \u2014 the profile falls back to the last geology
+    // depth and nothing says so \u2014 so both spellings are matched.
+    const profile = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 8, 'Bohrl\u00e4nge': 15 },
+    });
+    expect(profile?.endTiefe).toBe(15);
+  });
+
+  it('ignores a Bohrlaenge of zero rather than collapsing the profile', () => {
+    const profile = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 6, Bohrlaenge: 0 },
+    });
+    expect(profile?.endTiefe).toBe(6);
+  });
+
+  it('is deterministic when an element carries more than one planned depth', () => {
+    // Not a shape any Verfahren produces, but the answer must not depend on
+    // key order.
+    const vorwaerts = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 6, 'S\u00e4ulenh\u00f6he': 12, Bohrlaenge: 43 },
+    });
+    const rueckwaerts = parseVorgabeGeology({
+      int_sensors: { 'Geologie 1': 5 },
+      float_sensors: { 'Tiefe Geologie 1': 6, Bohrlaenge: 43, 'S\u00e4ulenh\u00f6he': 12 },
+    });
+    expect(vorwaerts?.endTiefe).toBe(12);
+    expect(rueckwaerts?.endTiefe).toBe(12);
+  });
+
   it('rounds a fractional ground-type number', () => {
     // int_float_sensors can deliver a code as a float.
     const profile = parseVorgabeGeology({
