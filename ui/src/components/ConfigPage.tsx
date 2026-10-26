@@ -13,6 +13,8 @@ interface Props {
   devMode: boolean;
   deviceFrames: Map<number, DeviceFrame>;
   updateAvailable: string | null;
+  /** Passed through to the hub's shutdown tile, which warns rather than blocks. */
+  recording: boolean;
   section?: string;
 }
 
@@ -25,9 +27,9 @@ function isSection(v: string): v is Section {
   return (VALID_SECTIONS as readonly string[]).includes(v);
 }
 
-export function ConfigPage({ config, devMode, deviceFrames, updateAvailable, section }: Props) {
+export function ConfigPage({ config, devMode, deviceFrames, updateAvailable, recording, section }: Props) {
   if (!section || !isSection(section)) {
-    return <ConfigHub config={config} updateAvailable={updateAvailable} />;
+    return <ConfigHub config={config} updateAvailable={updateAvailable} recording={recording} />;
   }
   switch (section) {
     case 'netzwerk':
