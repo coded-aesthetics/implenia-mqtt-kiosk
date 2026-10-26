@@ -333,7 +333,12 @@ describe('POST /api/recording/geology', () => {
     expect(res.json().error).toContain('Aufzeichnung');
   });
 
-  it('explains itself before the first depth reading', async () => {
+  /*
+   * The two ways "no depth to hang a layer on" happens, which look identical
+   * from the depth series and need opposite things done about them. Both cost
+   * a field setup on 2026-10-26, when the message named neither.
+   */
+  it('names the Sensorzuordnung when the depth channel never arrives', async () => {
     db.createSession('P-02', SENSOR_MAP);
     recording.resumeRecording();
     const res = await app.inject({
@@ -341,6 +346,30 @@ describe('POST /api/recording/geology', () => {
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toContain('Tiefe');
+    // The expensive half of this state is that nothing is being uploaded
+    // either, so the message has to point at where it gets fixed.
+    expect(res.json().error).toContain('Sensorzuordnung');
+  });
+
+  it('names the Klemmbacke when every depth reading was clipped', async () => {
+    // A Klemmbacke reading "zu" for everything tags the whole series as a pipe
+    // change. On a rig publishing an absolute depth nothing else shows it: the
+    // depth is not frozen during a Rohrwechsel, so the screen keeps moving.
+    const id = db.createSession('P-03', SENSOR_MAP);
+    for (let i = 0; i < 5; i++) {
+      db.insertSessionReading(
+        id, 'rig/tiefe', DEPTH_ID, 'float', i * 0.5, null,
+        { receivedAt: T0 + i * 1000, phase: 'rohrwechsel', clipped: true },
+      );
+    }
+    recording.resumeRecording();
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/recording/geology', payload: { nr: SAND },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toContain('Rohrverlängerung');
+    expect(res.json().error).not.toContain('Sensorzuordnung');
   });
 });
 
