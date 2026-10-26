@@ -543,6 +543,7 @@ export function App() {
           devMode={devMode}
           deviceFrames={deviceFrames}
           updateAvailable={updateAvailable}
+          recording={recordingState.active}
           section={section}
         />
       );

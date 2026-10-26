@@ -532,6 +532,66 @@ RULES
   fi
 }
 
+# --- 2b. switching the machine off ----------------------------------------
+
+power_access() {
+  log "Power off from the touchscreen"
+
+  # Einstellungen -> Ausschalten runs `systemctl poweroff`. The server runs as
+  # this user and PM2 gives it no login session, so logind asks polkit — whose
+  # default for an inactive subject is `auth_admin`, an admin password nobody
+  # on a construction site can type. Without this rule the tile fails with
+  # "Interactive authentication required" and the operator is back at the
+  # socket, which is the unclean shutdown the button exists to replace.
+  #
+  # Its own file rather than an entry in 50-kiosk-network.rules: that one is
+  # about the WLAN, and a permission hidden under the wrong name is a
+  # permission nobody finds.
+  local rules=/etc/polkit-1/rules.d/50-kiosk-power.rules
+
+  # All three power-off actions, because logind picks between them by the state
+  # of the machine and a refusal looks the same from the screen whichever one
+  # it was: `power-off` for the ordinary case, `-multiple-sessions` when
+  # another user is logged in (a service tech over AnyDesk, say), and
+  # `-ignore-inhibit` when something holds a shutdown inhibitor. Granting only
+  # the first leaves a button that works until the day somebody is watching.
+  local actions=(
+    org.freedesktop.login1.power-off
+    org.freedesktop.login1.power-off-multiple-sessions
+    org.freedesktop.login1.power-off-ignore-inhibit
+  )
+  local rule_body
+  rule_body="$(printf '    "%s",\n' "${actions[@]}" | sed '$ s/,$//')"
+  local rule_text
+  rule_text="$(cat <<RULES
+// The kiosk app switches this machine off from its own settings screen
+// (Einstellungen -> Ausschalten). The server runs as $USER, not as root.
+//
+// Written by scripts/provision-kiosk.sh. Edit it there, not here: this file is
+// compared against what that script would write and replaced when it differs.
+polkit.addRule(function(action, subject) {
+  var allowed = [
+$rule_body
+  ];
+  if (subject.user == "$USER" && allowed.indexOf(action.id) >= 0) {
+    return polkit.Result.YES;
+  }
+});
+RULES
+)"
+  # Compared in full, and elevated to read it: rules.d is mode 0700, so an
+  # unprivileged test always says "absent". Same reasoning as the network rule
+  # — asking only "does a rule for this user exist" would skip an added action
+  # forever on every machine that already had the old file.
+  if sudo test -f "$rules" && [[ "$(sudo cat "$rules")" == "$rule_text" ]]; then
+    skip "polkit power rule for $USER already in place"
+  else
+    sudo mkdir -p "$(dirname "$rules")"
+    printf '%s\n' "$rule_text" | sudo tee "$rules" >/dev/null
+    ok "polkit: $USER may switch this machine off"
+  fi
+}
+
 # --- 3. swap --------------------------------------------------------------
 
 compressed_swap() {
@@ -1203,6 +1263,7 @@ main() {
   system_basics
   touch_input
   wifi_access
+  power_access
   kernel_cmdline
   compressed_swap
   node_runtime

@@ -106,6 +106,7 @@ The settings page (`#/config`) provides:
 - **Datenübertragung** — how much of a recording leaves the kiosk and by which route (see "Data Reduction" below)
 - **Software update** — manual `.tar.gz` upload for offline environments
 - **Fernwartung** — this machine's AnyDesk ID, and whether AnyDesk is connected
+- **Ausschalten** — the sixth tile on the hub: switch this machine off (see "Switching the machine off" below)
 
 ## On-Screen Keyboard
 
@@ -336,6 +337,38 @@ so rather than showing an error. Only a hit is cached, so a kiosk provisioned
 after the server started shows its ID without a restart.
 
 See [docs/kiosk-provisioning.md](docs/kiosk-provisioning.md) for the setup.
+
+## Switching the machine off
+
+```
+GET  /api/system/power     → { capability: { available: true } | { available: false, reason } }
+POST /api/system/shutdown  → { ok: true } | 500 { error }   (runs `systemctl poweroff`)
+```
+
+The sixth tile on `#/config`, tap-to-confirm like every other destructive
+control. It exists because the alternative is the socket: the industry PC's
+power button sits behind the monitor, and an unclean shutdown is something the
+kiosk then papers over — `~/.xsession` rewrites Chromium's `exited_cleanly`
+flag on every start so the "Restore pages?" bubble does not land on top of the
+UI.
+
+**It is deliberately not refused while a recording runs**, unlike
+`POST /api/update`, the WLAN switch and the site switch. Those three cost the
+running session measurements it can never get back; this one costs nothing —
+the session stays open in SQLite and `resumeRecording()` picks it up at the
+next boot. A button that refused would send a crew going home back to the
+socket, which is the failure it replaces. The tile warns instead, and says how
+the machine comes back on: the first revision in the field has no
+restore-on-AC-power-loss, so somebody has to reach the knob.
+
+The server runs as the kiosk user with no login session, so logind asks polkit,
+which `scripts/provision-kiosk.sh` grants (`50-kiosk-power.rules`, all three
+`power-off*` actions). A kiosk provisioned before this existed answers
+"Interactive authentication required" and the tile says in German that the
+permission is missing and the knob is the way out — systemd's own wording is
+logged (`GET /api/logs?module=power`), not shown. A machine with no systemd is
+a state and not an error: `capability` reports it and the tile offers no tap
+target, the same way the WLAN screen behaves without NetworkManager.
 
 ## Sensor Schema
 
@@ -2000,6 +2033,7 @@ server/src/
   source-health.ts    — Is sensor data *arriving*; polled in the ingestion seam
   shift-cache.ts      — Last element list the platform served (pure: store, prune)
   network.ts          — WLAN: scan, and the staged switch that cannot lock the kiosk out
+  power.ts            — `systemctl poweroff`, and whether this machine can do it
   updater.ts          — Self-update from GitHub Releases
   device-manager.ts   — Device lifecycle management
   routes/
@@ -2012,6 +2046,7 @@ server/src/
     recording.ts      — /api/recording (sessions)
     implenia.ts       — /api/shift-assignment proxy
     logs.ts           — /api/logs (remote log access)
+    system.ts         — /api/system/shutdown (the settings hub's sixth tile)
     status.ts         — /health endpoint
 
 ui/src/
