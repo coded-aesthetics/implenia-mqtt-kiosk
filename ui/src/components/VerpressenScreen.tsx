@@ -5,13 +5,12 @@ import { SensorGauge } from './SensorGauge';
 import { SensorChart, type ChartSeries, type ChartScale } from './SensorChart';
 import { KlemmbackeIndicator } from './KlemmbackeIndicator';
 import { formatNumber } from '../utils/format';
-import { findSoll, sensorValue } from '../utils/sensors';
+import { findSoll, sensorValue, type Kanal } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
 import { useClampState } from '../hooks/useClampState';
 import { useBoxFit } from '../hooks/useFitScale';
 
-export interface GaugeSlot {
-  sensor: string;
+export interface GaugeSlot extends Kanal {
   label: string;
   unit: string;
   min: number;
@@ -19,8 +18,7 @@ export interface GaugeSlot {
   vorgabeName?: string;
 }
 
-export interface ChartTrace {
-  sensor: string;
+export interface ChartTrace extends Kanal {
   label: string;
   unit: string;
   color: string;
@@ -28,8 +26,8 @@ export interface ChartTrace {
 }
 
 export interface VerpressenConfig {
-  depthSensor: string;
-  volumeSensor: string;
+  depth: Kanal;
+  volume: Kanal;
   gauges: GaugeSlot[];
   chartTraces: ChartTrace[];
   chartScales?: ChartScale[];
@@ -53,8 +51,8 @@ export function VerpressenScreen({ readings, vorgaben, config, onKorrigieren }: 
   const sensorValues = useSensorValues(readings);
   const { clampConfig, clampValue, isClampOpen } = useClampState(sensorValues);
 
-  const depth = sensorValue(sensorValues, config.depthSensor) ?? 0;
-  const volume = sensorValue(sensorValues, config.volumeSensor) ?? 0;
+  const depth = sensorValue(sensorValues, config.depth.sensor, config.depth.topic) ?? 0;
+  const volume = sensorValue(sensorValues, config.volume.sensor, config.volume.topic) ?? 0;
   // Same reason as the drilling screen: five figures of litres is wider than a
   // third of the row, and a total that paints over its neighbours is worse
   // than one drawn a little smaller.
@@ -74,7 +72,7 @@ export function VerpressenScreen({ readings, vorgaben, config, onKorrigieren }: 
     const buf = chartBufferRef.current;
 
     for (const trace of config.chartTraces) {
-      const val = sensorValue(sensorValues, trace.sensor);
+      const val = sensorValue(sensorValues, trace.sensor, trace.topic);
       if (val === undefined) continue;
 
       let arr = buf.get(trace.sensor);
@@ -150,7 +148,7 @@ export function VerpressenScreen({ readings, vorgaben, config, onKorrigieren }: 
         {config.gauges.map((g) => (
           <div key={g.sensor} style={styles.gaugeCell}>
             <SensorGauge
-              value={sensorValue(sensorValues, g.sensor) ?? 0}
+              value={sensorValue(sensorValues, g.sensor, g.topic) ?? 0}
               min={g.min}
               max={g.max}
               label={g.label}
@@ -187,22 +185,22 @@ export function VerpressenScreen({ readings, vorgaben, config, onKorrigieren }: 
 }
 
 export const INJEKTIONSBOHREN_VERPRESSEN: VerpressenConfig = {
-  depthSensor: 'Tiefe',
-  volumeSensor: 'Q_verpressen',
+  depth: { sensor: 'Bohrtiefe', topic: 'Tiefe' },
+  volume: { sensor: 'Q_verpressen', topic: 'Verpresspumpe/Volumen' },
   gauges: [
     // Same capture as the drilling screen's bars — see the note there.
     // Druck_Medium reached 119.93 bar; Verpresspumpe/Durchfluss only 167.44
     // l/min, which is why this one is a fifth of the Spülpumpe's scale.
-    { sensor: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', min: 0, max: 150, vorgabeName: 'Suspensionsdruck' },
-    { sensor: 'Verpresspumpe/Durchfluss', label: 'Durchfluss V', unit: 'l/min', min: 0, max: 200, vorgabeName: 'DurchflussV' },
-    { sensor: 'Druck_innen', label: 'Drehm. Innen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'IDrehmoment' },
-    { sensor: 'Druck_aussen', label: 'Drehm. Aussen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'ADrehmoment' },
+    { sensor: 'Suspensionsdruck', topic: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', min: 0, max: 150, vorgabeName: 'Suspensionsdruck' },
+    { sensor: 'DurchflussV', topic: 'Verpresspumpe/Durchfluss', label: 'Durchfluss V', unit: 'l/min', min: 0, max: 200, vorgabeName: 'DurchflussV' },
+    { sensor: 'IDrehmoment', topic: 'Druck_innen', label: 'Drehm. Innen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'IDrehmoment' },
+    { sensor: 'ADrehmoment', topic: 'Druck_aussen', label: 'Drehm. Aussen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'ADrehmoment' },
   ],
   chartTraces: [
-    { sensor: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', color: '#42a5f5', scale: 'bar' },
-    { sensor: 'Verpresspumpe/Durchfluss', label: 'Durchfluss V', unit: 'l/min', color: '#66bb6a', scale: 'high' },
-    { sensor: 'Druck_innen', label: 'Drehm. Innen', unit: 'Nm', color: '#ffa726', scale: 'high' },
-    { sensor: 'Druck_aussen', label: 'Drehm. Aussen', unit: 'Nm', color: '#ef5350', scale: 'high' },
+    { sensor: 'Suspensionsdruck', topic: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', color: '#42a5f5', scale: 'bar' },
+    { sensor: 'DurchflussV', topic: 'Verpresspumpe/Durchfluss', label: 'Durchfluss V', unit: 'l/min', color: '#66bb6a', scale: 'high' },
+    { sensor: 'IDrehmoment', topic: 'Druck_innen', label: 'Drehm. Innen', unit: 'Nm', color: '#ffa726', scale: 'high' },
+    { sensor: 'ADrehmoment', topic: 'Druck_aussen', label: 'Drehm. Aussen', unit: 'Nm', color: '#ef5350', scale: 'high' },
   ],
   chartScales: [
     { key: 'bar', min: 0, max: 80, side: 1 },

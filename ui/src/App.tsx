@@ -479,7 +479,8 @@ export function App() {
 
   const liveTiefe = useMemo(() => {
     if (setup.verfahren !== 'injektionsbohren') return null;
-    return sensorValue(buildSensorValues(readings), INJEKTIONSBOHREN_BOHREN.depthSensor) ?? null;
+    const { sensor, topic } = INJEKTIONSBOHREN_BOHREN.depth;
+    return sensorValue(buildSensorValues(readings), sensor, topic) ?? null;
   }, [readings, setup.verfahren]);
 
   /**

@@ -61,6 +61,7 @@
 
 import { findByNr } from '@coded-aesthetics/din4023';
 import {
+  countSessionSensorReadings,
   deletePendingSensorReadings,
   inTransaction,
   getElementVorgaben,
@@ -699,9 +700,34 @@ export function recordLiveLayer(
   const samples = depthSamples(session.id, sensors.depthId);
   const latest = samples[samples.length - 1];
   if (!latest) {
+    /*
+     * Two very different machines look the same from here, and the operator
+     * can fix either one — but only if told which it is. Both cost a field
+     * setup on 2026-10-26, where the message named neither.
+     *
+     * Nothing recorded at all means the channel is not reaching the kiosk
+     * under this sensor: a topic the box publishes the depth under that
+     * nothing has been wired to. The measurements are not being uploaded
+     * either, which is the more expensive half and is why the message says
+     * where to go.
+     *
+     * Readings that exist but are all held back means the Klemmbacke is
+     * reading "zu" for everything, so every depth is tagged as a pipe change
+     * and dropped from the profile. On a rig publishing an absolute depth that
+     * is invisible otherwise — the depth keeps moving on screen, because an
+     * absolute depth is not frozen during a Rohrwechsel.
+     */
+    const roh = countSessionSensorReadings(session.id, sensors.depthId);
     return {
-      fehler: `Noch kein Messwert von „${sensors.depthName}" — `
-        + 'die Geologie kann erst ab dem ersten Tiefenmesswert erfasst werden.',
+      fehler: roh === 0
+        ? `Noch kein Messwert von „${sensors.depthName}" — die Geologie kann erst ab `
+          + 'dem ersten Tiefenmesswert erfasst werden. Bitte prüfen, ob dem Sensor '
+          + `„${sensors.depthName}" ein Topic zugeordnet ist `
+          + '(Einstellungen → Messwerte → Sensorzuordnung).'
+        : `Alle Messwerte von „${sensors.depthName}" sind als Rohrwechsel markiert, `
+          + 'deshalb lässt sich die Geologie keiner Tiefe zuordnen. Bitte in den '
+          + 'Einstellungen unter „Rohrverlängerung" den aktuellen Wert der Klemmbacke '
+          + 'ablesen und die Schwellen danach setzen.',
     };
   }
 

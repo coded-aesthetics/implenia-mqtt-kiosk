@@ -564,6 +564,22 @@ const getDepthSamplesUntilStmt = db.prepare(`
     AND received_at <= ?
   ORDER BY received_at ASC
 `);
+/**
+ * How many readings of one sensor a session holds **without any filter** —
+ * clipped ones and pipe-change ones included.
+ *
+ * What tells "this channel is not arriving" apart from "everything it sent was
+ * held back", which is the whole content of the two messages in
+ * `recordLiveLayer`. Both look identical from `getSessionDepthSamples`, and
+ * they need opposite things done about them: a topic to assign, or a
+ * Klemmbacke threshold to correct.
+ */
+const countSensorReadingsStmt = db.prepare(`
+  SELECT COUNT(*) AS count
+  FROM session_readings
+  WHERE session_id = ? AND sensor_id = ?
+`);
+
 // The text counterpart of getDepthSamplesStmt, without the drilling filters.
 // Geology reads the committed `Geologieprofil` value back through it — one
 // value at a sentinel instant, not session data — to recover the layers a
@@ -1312,6 +1328,12 @@ export function getSessionDepthSamples(
     received_at: number; value_numeric: number;
   }[];
   return rows.map((r) => ({ receivedAt: r.received_at, value: r.value_numeric }));
+}
+
+/** See countSensorReadingsStmt. */
+export function countSessionSensorReadings(sessionId: number, sensorId: string): number {
+  const row = countSensorReadingsStmt.get(sessionId, sensorId) as { count: number };
+  return row.count;
 }
 
 /** Every recorded *text* value of one sensor in a session, oldest first. */

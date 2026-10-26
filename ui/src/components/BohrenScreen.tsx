@@ -7,7 +7,7 @@ import { SensorGauge } from './SensorGauge';
 import { SensorBar } from './SensorBar';
 import { KlemmbackeIndicator } from './KlemmbackeIndicator';
 import { formatNumber } from '../utils/format';
-import { findSoll, sensorValue } from '../utils/sensors';
+import { findSoll, sensorValue, type Kanal } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
 import { useClampState } from '../hooks/useClampState';
 import { useBoxFit } from '../hooks/useFitScale';
@@ -17,8 +17,7 @@ import { GeologieSpalte } from './GeologieSpalte';
 import { bisZurBohrung } from '../utils/geologie';
 import type { GeologieErfassung } from '../hooks/useGeologieErfassung';
 
-export interface GaugeSlot {
-  sensor: string;
+export interface GaugeSlot extends Kanal {
   label: string;
   unit: string;
   min: number;
@@ -26,8 +25,7 @@ export interface GaugeSlot {
   vorgabeName?: string;
 }
 
-export interface BarSlot {
-  sensor: string;
+export interface BarSlot extends Kanal {
   label: string;
   unit: string;
   min: number;
@@ -36,8 +34,8 @@ export interface BarSlot {
 }
 
 export interface BohrenConfig {
-  depthSensor: string;
-  volumeSensor: string;
+  depth: Kanal;
+  volume: Kanal;
   leftGauges: GaugeSlot[];
   centerGauge: GaugeSlot;
   rightGauges: GaugeSlot[];
@@ -89,8 +87,8 @@ export function BohrenScreen({
   const sensorValues = useSensorValues(readings);
   const { clampConfig, clampValue, isClampOpen } = useClampState(sensorValues);
 
-  const depth = sensorValue(sensorValues, config.depthSensor) ?? 0;
-  const volume = sensorValue(sensorValues, config.volumeSensor) ?? 0;
+  const depth = sensorValue(sensorValues, config.depth.sensor, config.depth.topic) ?? 0;
+  const volume = sensorValue(sensorValues, config.volume.sensor, config.volume.topic) ?? 0;
   /*
    * The total runs to five figures on a real shift — 41 912,50 l on the only
    * rig that has been captured — and its cell is whatever the Klemmbacke and
@@ -212,7 +210,7 @@ export function BohrenScreen({
               {config.leftGauges.map((g) => (
                 <div key={g.sensor} style={styles.gaugeLabelWrap}>
                   <SensorGauge
-                    value={sensorValue(sensorValues, g.sensor) ?? 0}
+                    value={sensorValue(sensorValues, g.sensor, g.topic) ?? 0}
                     min={g.min}
                     max={g.max}
                     label={g.label}
@@ -229,7 +227,7 @@ export function BohrenScreen({
             {/* Center: full dial */}
             <div style={styles.gaugeCenterWrap}>
               <SensorGauge
-                value={sensorValue(sensorValues, config.centerGauge.sensor) ?? 0}
+                value={sensorValue(sensorValues, config.centerGauge.sensor, config.centerGauge.topic) ?? 0}
                 min={config.centerGauge.min}
                 max={config.centerGauge.max}
                 label={config.centerGauge.label}
@@ -246,7 +244,7 @@ export function BohrenScreen({
               {config.rightGauges.map((g) => (
                 <div key={g.sensor} style={styles.gaugeLabelWrap}>
                   <SensorGauge
-                    value={sensorValue(sensorValues, g.sensor) ?? 0}
+                    value={sensorValue(sensorValues, g.sensor, g.topic) ?? 0}
                     min={g.min}
                     max={g.max}
                     label={g.label}
@@ -265,7 +263,7 @@ export function BohrenScreen({
             {config.bars.map((b) => (
               <SensorBar
                 key={b.sensor}
-                value={sensorValue(sensorValues, b.sensor) ?? 0}
+                value={sensorValue(sensorValues, b.sensor, b.topic) ?? 0}
                 min={b.min}
                 max={b.max}
                 label={b.label}
@@ -320,21 +318,21 @@ export function BohrenScreen({
  * carries the sign.
  */
 export const INJEKTIONSBOHREN_BOHREN: BohrenConfig = {
-  depthSensor: 'Tiefe',
-  volumeSensor: 'Q_Bohren',
+  depth: { sensor: 'Bohrtiefe', topic: 'Tiefe' },
+  volume: { sensor: 'Q_Bohren', topic: 'Spuelpumpe/Volumen' },
   leftGauges: [
-    { sensor: 'Druck_Hammer', label: 'Druck Hammer', unit: 'bar', min: 0, max: 300, vorgabeName: 'Druck Hammer' },
-    { sensor: 'Druck_Vorschub', label: 'Vorschubdruck', unit: 'bar', min: 0, max: 300, vorgabeName: 'Vorschubdruck' },
+    { sensor: 'Druck Hammer', topic: 'Druck_Hammer', label: 'Druck Hammer', unit: 'bar', min: 0, max: 300, vorgabeName: 'Druck Hammer' },
+    { sensor: 'Vorschubdruck', topic: 'Druck_Vorschub', label: 'Vorschubdruck', unit: 'bar', min: 0, max: 300, vorgabeName: 'Vorschubdruck' },
   ],
   centerGauge: { sensor: 'Drehzahl', label: 'Drehzahl', unit: '1/min', min: 0, max: 100 },
   rightGauges: [
-    { sensor: 'Druck_innen', label: 'Drehm. Innen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'IDrehmoment' },
-    { sensor: 'Druck_aussen', label: 'Drehm. Aussen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'ADrehmoment' },
+    { sensor: 'IDrehmoment', topic: 'Druck_innen', label: 'Drehm. Innen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'IDrehmoment' },
+    { sensor: 'ADrehmoment', topic: 'Druck_aussen', label: 'Drehm. Aussen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'ADrehmoment' },
   ],
   bars: [
-    { sensor: 'Ziehgeschwindigkeit', label: 'Vorschub', unit: 'cm/min', min: 0, max: 150, vorgabeName: 'Vorschubgeschw.' },
-    { sensor: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', min: 0, max: 150, vorgabeName: 'Suspensionsdruck' },
-    { sensor: 'Spuelpumpe/Durchfluss', label: 'Durchfluss B', unit: 'l/min', min: 0, max: 1200, vorgabeName: 'DurchflussB' },
+    { sensor: 'Vorschubgeschw.', topic: 'Ziehgeschwindigkeit', label: 'Vorschub', unit: 'cm/min', min: 0, max: 150, vorgabeName: 'Vorschubgeschw.' },
+    { sensor: 'Suspensionsdruck', topic: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', min: 0, max: 150, vorgabeName: 'Suspensionsdruck' },
+    { sensor: 'DurchflussB', topic: 'Spuelpumpe/Durchfluss', label: 'Durchfluss B', unit: 'l/min', min: 0, max: 1200, vorgabeName: 'DurchflussB' },
   ],
 };
 
