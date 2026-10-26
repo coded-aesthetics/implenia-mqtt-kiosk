@@ -190,9 +190,10 @@ export function getSensorRole(sensorKey: string): string | null {
  * By role rather than by name, because the name differs per machine type: the
  * `depth` sensor is `Bohrtiefe` for Injektionsbohren and Ankerbohren but
  * `Tiefe` for DSV. Anything resolving a sensor by a hardcoded name works on one
- * Verfahren and silently reads nothing on the next — see
- * `INJEKTIONSBOHREN_BOHREN.depthSensor` in the UI, which names a sensor the
- * Injektionsbohren CSV does not define.
+ * Verfahren and silently reads nothing on the next. The UI's drilling screens
+ * used to do exactly that — `INJEKTIONSBOHREN_BOHREN.depthSensor` was `Tiefe`,
+ * which the Injektionsbohren CSV does not define — and it cost a field setup on
+ * 2026-10-26: see `Kanal` in `ui/src/utils/sensors.ts`.
  *
  * Returns the first match. `getSensorRole` already warns when a Verfahren
  * declares more than one `depth` sensor, which would be a mistake in the shared
