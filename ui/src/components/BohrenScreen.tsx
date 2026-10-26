@@ -10,6 +10,7 @@ import { formatNumber } from '../utils/format';
 import { findSoll, sensorValue } from '../utils/sensors';
 import { useSensorValues } from '../hooks/useSensorValues';
 import { useClampState } from '../hooks/useClampState';
+import { useBoxFit } from '../hooks/useFitScale';
 import { buildSchichten, collectVorgabeEntries } from '../utils/vorgaben';
 import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import { GeologieSpalte } from './GeologieSpalte';
@@ -90,6 +91,15 @@ export function BohrenScreen({
 
   const depth = sensorValue(sensorValues, config.depthSensor) ?? 0;
   const volume = sensorValue(sensorValues, config.volumeSensor) ?? 0;
+  /*
+   * The total runs to five figures on a real shift — 41 912,50 l on the only
+   * rig that has been captured — and its cell is whatever the Klemmbacke and
+   * the pipe counter leave over. At 3rem in the kiosk's font that number is
+   * wider than the gap, so it used to paint over both its neighbours and off
+   * its own left edge. Shrinking it is the only option that keeps every digit.
+   */
+  const volumeText = formatNumber(volume);
+  const { inner: volumeTextRef, outer: volumeCellRef, scale: volumeScale } = useBoxFit(volumeText);
 
   const showRohr = recordingState.active && operatingMode === 'bohren' && rohrwechsel;
 
@@ -160,10 +170,16 @@ export function BohrenScreen({
         <div style={styles.rightArea}>
           {/* Status row: Gesamtvolumen | Klemmbacke + Rohr */}
           <div style={styles.statusRow}>
-            <div style={styles.volumeCell}>
+            <div style={styles.volumeCell} ref={volumeCellRef as React.RefObject<HTMLDivElement>}>
               <div style={styles.heroLabel}>Gesamtvolumen</div>
-              <div style={styles.heroValueRow}>
-                <span style={styles.heroValue}>{formatNumber(volume)}</span>
+              <div
+                ref={volumeTextRef as React.RefObject<HTMLDivElement>}
+                style={{
+                  ...styles.heroValueRow,
+                  transform: volumeScale < 1 ? `scale(${volumeScale})` : undefined,
+                }}
+              >
+                <span style={styles.heroValue}>{volumeText}</span>
                 <span style={styles.heroUnit}>l</span>
               </div>
             </div>
@@ -265,6 +281,44 @@ export function BohrenScreen({
   );
 }
 
+/*
+ * The three bar ranges come from Bohrung G08, Marktbreit, the one full shift
+ * captured off a real Injektionsbohren rig. They were set by eye before that
+ * capture existed and every one of them was too small — so the bar sat pinned
+ * at its right end through the whole of the phase it is there to report, which
+ * is the one thing a bar may not do: it then shows no change at all while the
+ * value moves, and a worker watching it has no way to know that.
+ *
+ * `assets/reference/README.md` is the in-repo record of the capture, including
+ * the full-session range of every topic. The raw 15 MB dump
+ * (`assets/bohrung_g8_marktbreit_mqtt.txt`) is gitignored and kept beside the
+ * repo — ask for a copy. The two slices in `server/test-fixtures/` are in the
+ * repo, and the distributions below can be recomputed from them.
+ *
+ *                          was      full session    while actually running
+ *   Ziehgeschwindigkeit    0..60   -121.7 / 144.0   median  56, max  143
+ *   Druck_Medium           0..70    -76.8 / 119.9   median  63, max   81
+ *   Spuelpumpe/Durchfluss  0..300     0.0 / 1046.5  median 698, max  872
+ *
+ * The last column is what settles it, and it is the column the first pass at
+ * this did not have: the pump's *median* while pumping is 698 l/min against an
+ * old scale that ended at 300, and the feed's median while advancing is 56
+ * against one that ended at 60. These are sustained working values, not
+ * spikes on an otherwise quiet channel, so the old bars were off their own
+ * scale for most of a shift rather than occasionally.
+ *
+ * The maxima are rounded up past the full-session extreme for headroom — one
+ * rig is one rig, and a scale that is slightly generous costs resolution while
+ * one that is too short costs the reading. `Druck_Medium` keeps the Verpressen
+ * screen's scale for the same sensor (0..150), so the operator reads one
+ * number in one place on both screens; that leaves its working band in the
+ * lower half of the bar, which is the price of agreeing with the gauge next
+ * door and of the clean 0/50/100/150 ticks `autoLabelStep` gives it.
+ *
+ * Negative values (retraction, suction) still clamp to the left end — the
+ * drilling screen is about what goes down the hole. The reading beside the bar
+ * carries the sign.
+ */
 export const INJEKTIONSBOHREN_BOHREN: BohrenConfig = {
   depthSensor: 'Tiefe',
   volumeSensor: 'Q_Bohren',
@@ -278,9 +332,9 @@ export const INJEKTIONSBOHREN_BOHREN: BohrenConfig = {
     { sensor: 'Druck_aussen', label: 'Drehm. Aussen', unit: 'Nm', min: 0, max: 300, vorgabeName: 'ADrehmoment' },
   ],
   bars: [
-    { sensor: 'Ziehgeschwindigkeit', label: 'Vorschub', unit: 'cm/min', min: 0, max: 60, vorgabeName: 'Vorschubgeschw.' },
-    { sensor: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', min: 0, max: 70, vorgabeName: 'Suspensionsdruck' },
-    { sensor: 'Spuelpumpe/Durchfluss', label: 'Durchfluss B', unit: 'l/min', min: 0, max: 300, vorgabeName: 'DurchflussB' },
+    { sensor: 'Ziehgeschwindigkeit', label: 'Vorschub', unit: 'cm/min', min: 0, max: 150, vorgabeName: 'Vorschubgeschw.' },
+    { sensor: 'Druck_Medium', label: 'Druck Medium', unit: 'bar', min: 0, max: 150, vorgabeName: 'Suspensionsdruck' },
+    { sensor: 'Spuelpumpe/Durchfluss', label: 'Durchfluss B', unit: 'l/min', min: 0, max: 1200, vorgabeName: 'DurchflussB' },
   ],
 };
 
@@ -331,7 +385,12 @@ const styles: Record<string, CSSProperties> = {
     // Wide enough for `Tippen zum Korrigieren` on one line under the depth.
     // The profile itself is 150px; the slack it costs comes out of the gauge
     // row, which has ~80px of it, rather than out of the profile's height.
-    width: 192,
+    //
+    // 192 was measured against the font a development machine resolved before
+    // `--font-body` was applied to anything; in the kiosk's own font the hint
+    // is 212px and wrapped to two lines on the machine and nowhere else. The
+    // string is the measurement — if it changes, re-measure.
+    width: 224,
     minHeight: 0,
   },
   depthHero: {
@@ -399,8 +458,12 @@ const styles: Record<string, CSSProperties> = {
     flexShrink: 0,
     padding: '0 1rem',
   },
+  // `1 1 auto`, not `1`: with a zero basis this cell took only what the
+  // Klemmbacke left over, so a wide total shrank itself to fit while 80px of
+  // give sat unused next door. Sized from its content, the two give way in
+  // proportion and the reading stays as large as it can be.
   volumeCell: {
-    flex: 1,
+    flex: '1 1 auto',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -434,12 +497,26 @@ const styles: Record<string, CSSProperties> = {
   klemmRohrCell: {
     display: 'flex',
     alignItems: 'center',
-    gap: '1rem',
-    flexShrink: 0,
+    gap: '0.75rem',
+    flexShrink: 1,
+    // Neither the indicator nor the pipe counter can shrink, so a cell that
+    // shrinks anyway does not make them smaller — it pushes the counter out
+    // through the right edge of the screen, where `rightArea`'s overflow
+    // quietly cuts it off. The floor has to be what the two of them measure.
+    minWidth: 'fit-content',
   },
+  // Was a hard 360. The total volume beside it has no width of its own — it
+  // takes what is left — so a fixed Klemmbacke meant a wide reading had
+  // nowhere to go but over the top of this one. It gives up 80px before the
+  // number has to shrink, and never goes below a bar worth looking at.
   klemmGauge: {
-    width: 360,
-    flexShrink: 0,
+    flex: '0 1 360px',
+    // `fit-content`, not a number: the floor is whatever "Klemmbacke Auf" plus
+    // the pressure actually measures in the font of the day. A hand-picked
+    // 280 was narrower than that text, so the row shrank past it and the unit
+    // disappeared behind the pipe counter — the same class of mistake as the
+    // column width this is next to, and this one cannot be made again.
+    minWidth: 'fit-content',
   },
   gaugeLayout: {
     display: 'flex',

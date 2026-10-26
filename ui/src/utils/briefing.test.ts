@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { briefingBeimOeffnen, hatBriefingInhalt, wertGroesse } from './briefing';
+import { briefingBeimOeffnen, hatBriefingInhalt } from './briefing';
 import type { VorgabenData } from '../hooks/useImplenia';
 
 const VORGABEN: VorgabenData = {
@@ -100,30 +100,5 @@ describe('hatBriefingInhalt', () => {
 
   it('is false for absent vorgaben', () => {
     expect(hatBriefingInhalt(null)).toBe(false);
-  });
-});
-
-describe('wertGroesse', () => {
-  it('leaves an ordinary value at full size', () => {
-    expect(wertGroesse('40,84', 5.5)).toBe('5.5rem');
-    expect(wertGroesse('123,45', 5.5)).toBe('5.5rem');
-  });
-
-  /*
-   * „2.500,00" is 434px in DejaVu Sans Bold at 5.5rem against a 385px cell —
-   * see the function. The step is what keeps a four-digit Sollvolumen from
-   * running into the Bohrlänge beside it on a kiosk, where nothing clips it
-   * visibly except the container's `overflow: hidden`.
-   */
-  it('steps a four-digit value down to fit its cell', () => {
-    expect(wertGroesse('2.500,00', 5.5)).toBe('4.125rem');
-  });
-
-  it('steps further when the number is longer still', () => {
-    expect(wertGroesse('12.500,00', 5.5)).toBe('3.3rem');
-  });
-
-  it('scales from whatever size the row is set at', () => {
-    expect(wertGroesse('-123,4°', 5)).toBe('3.75rem');
   });
 });

@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
-import { BohrprofilLog, normalisiere } from '@coded-aesthetics/din4023/profile';
+import type { CSSProperties, ReactNode, RefObject } from 'react';
+import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
+import { useBoxFit } from '../hooks/useFitScale';
 import type { VorgabenData } from '../hooks/useImplenia';
-import { wertGroesse } from '../utils/briefing';
 import { findSoll } from '../utils/sensors';
 import { formatNumber } from '../utils/format';
 import { grad, VORGABE_HORIZONTAL, VORGABE_VERTIKAL } from '../utils/ausrichtung';
@@ -30,14 +30,6 @@ import type { CoordinateGroup } from '../utils/vorgaben';
  * screen takes over by itself. The forward button is a convenience, not a gate.
  */
 
-/*
- * The full size of each of the two value rows. Not in `styles`, because
- * `wertGroesse` steps them down for a number too long for its cell — see
- * there for the measurement that makes that necessary.
- */
-const HERO_REM = 5.5;
-const WINKEL_REM = 5;
-
 interface Props {
   vorgaben: VorgabenData | null;
   /** Where the forward button goes, and what it is called. */
@@ -60,6 +52,37 @@ function soll(vorgaben: VorgabenData | null, name: string): string {
  */
 function koordinate(wert: string): string {
   return formatNumber(wert);
+}
+
+/**
+ * The transform that makes a value fit the cell it is in, or nothing.
+ *
+ * Every number on this screen is set at a size chosen for the ordinary case
+ * and sits in a cell that is a sixth of the column — 385px at 1024x768 — and
+ * the ordinary case is not the only one: `Sollvolumen` is four digits on a
+ * routine element, an LV95 easting is eleven characters, and `Bohrlänge` runs
+ * past 100 m. At 5.5rem a four-digit litre figure is wider than its cell and
+ * used to paint over the Bohrlänge beside it, clipped only by the container's
+ * `overflow: hidden`.
+ *
+ * This replaced a step-down keyed on the string's **length** — 6 characters
+ * full size, 8 characters three quarters, longer three fifths. That had to
+ * assume a font to convert characters into pixels, and assuming the font is
+ * the mistake this whole area exists to undo (see `--font-body` in tokens.css:
+ * until it was applied to anything, the kiosk drew these screens in DejaVu
+ * *Serif*). It also overshot — a seven-character value lost a quarter of its
+ * size where a twentieth would have done.
+ *
+ * `useBoxFit` measures instead, so the number is as large as it can be in
+ * whatever face the machine resolves, and `scale === 1` for everything that
+ * already fits. Scaled about the centre, because the cell centres its content.
+ *
+ * A `transform` rather than a smaller `fontSize`: the latter re-flows, and
+ * re-flowing changes the width that was just measured. The rows are sized by
+ * flex and already hold the full line box, so the layout does not care.
+ */
+function schrumpf(scale: number): CSSProperties {
+  return scale < 1 ? { transform: `scale(${scale})` } : {};
 }
 
 export function BriefingScreen({ vorgaben, weiter }: Props) {
@@ -86,34 +109,21 @@ export function BriefingScreen({ vorgaben, weiter }: Props) {
   const grenze = profil !== null && profil.vermessenBis > 0
     && profil.vermessenBis < profil.endTiefe ? profil.vermessenBis : null;
 
-  /*
-   * The layers the chart will actually draw.
-   *
-   * Never `profil.schichten.length`, which is what the Schichtauftrag listed
-   * and not what appears: `normalisiere` — which the chart runs on its input
-   * anyway — collapses layers sharing a depth, merges adjacent ones of the
-   * same ground type, and drops anything at or below `endTiefe`. A pillar
-   * whose bore was keyed shallower than its geology read „4 Schichten" over a
-   * column showing one. Counting the same list the chart draws is what keeps
-   * the two from ever disagreeing again.
-   */
-  const gezeichnet = useMemo(
-    () => (profil ? normalisiere(profil.schichten, profil.endTiefe) : []),
-    [profil],
-  );
-
-  const profilUntertitel = profil === null
-    ? 'Keine Vorgabe'
-    : `${gezeichnet.length} ${gezeichnet.length === 1 ? 'Schicht' : 'Schichten'}`
-      + ` bis ${formatNumber(profil.endTiefe)} m`;
-
   return (
     <div style={styles.container}>
       {/* Left: the planned profile, bottoming out at the planned depth */}
       <div style={styles.geoSpalte}>
+        {/*
+          * Just the heading. It used to carry „4 Schichten bis 36,00 m"
+          * underneath, counted off the normalised layer list so it could not
+          * disagree with the drawing — but the drawing is the better answer to
+          * both halves: the layers are the bands, and the bottom depth is the
+          * last tick on the axis beside them. A line of prose restating a
+          * picture is a line that can be wrong about it, and this one also
+          * wrapped, stranding its unit on a second line in a 194px column.
+          */}
         <div style={styles.geoKopf}>
           <div style={styles.geoTitel}>Geologie Soll</div>
-          <div style={styles.geoUntertitel}>{profilUntertitel}</div>
         </div>
         {profil ? (
           <div ref={profilRef} data-testid="briefing-profil" style={styles.profil}>
@@ -132,9 +142,17 @@ export function BriefingScreen({ vorgaben, weiter }: Props) {
             Der Schichtauftrag nennt für dieses Element keine Geologie.
           </div>
         )}
+        {/*
+          * The one thing the drawing cannot say. It marks the boundary with a
+          * dashed line; that below it nobody surveyed needs words.
+          *
+          * `&nbsp;` because this wraps — it is the only running text left on
+          * the screen, in a 194px column — and an ordinary space would let the
+          * break fall between the depth and its unit.
+          */}
         {grenze !== null && (
           <div style={styles.geoFuss}>
-            Unterhalb {formatNumber(grenze)} m ist die Geologie nicht erkundet.
+            Unterhalb {formatNumber(grenze)}&nbsp;m ist die Geologie nicht erkundet.
           </div>
         )}
       </div>
@@ -191,10 +209,14 @@ function Zelle({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function Hero({ label, wert, einheit }: { label: string; wert: string; einheit: string }) {
+  const { inner, scale } = useBoxFit(`${wert} ${einheit}`);
   return (
     <Zelle label={label}>
-      <div style={styles.heroZeile}>
-        <span style={{ ...styles.heroWert, fontSize: wertGroesse(wert, HERO_REM) }}>{wert}</span>
+      <div
+        ref={inner as RefObject<HTMLDivElement>}
+        style={{ ...styles.heroZeile, ...schrumpf(scale) }}
+      >
+        <span style={styles.heroWert}>{wert}</span>
         <span style={styles.heroEinheit}>{einheit}</span>
       </div>
     </Zelle>
@@ -210,9 +232,13 @@ function Hero({ label, wert, einheit }: { label: string; wert: string; einheit: 
  */
 function Winkel({ label, wert }: { label: string; wert: number | null }) {
   const text = wert === null ? '–' : grad(wert);
+  const { inner, scale } = useBoxFit(text);
   return (
     <Zelle label={label}>
-      <span style={{ ...styles.winkelWert, fontSize: wertGroesse(text, WINKEL_REM) }}>
+      <span
+        ref={inner as RefObject<HTMLSpanElement>}
+        style={{ ...styles.winkelWert, ...schrumpf(scale) }}
+      >
         {text}
       </span>
     </Zelle>
@@ -230,12 +256,20 @@ function Winkel({ label, wert }: { label: string; wert: number | null }) {
  * the other, which is the comparison worth making here.
  */
 function Punkt({ punkt }: { punkt: CoordinateGroup }) {
+  const x = koordinate(punkt.x), y = koordinate(punkt.y), z = koordinate(punkt.z);
+  // The grid is as wide as its widest row, so the longest of the three is what
+  // decides the shape — but all three go into the key, because which one is
+  // longest changes between elements.
+  const { inner, scale } = useBoxFit(`${x}|${y}|${z}`);
   return (
     <Zelle label={punkt.label}>
-      <div style={styles.koordinaten}>
-        <span style={styles.achse}>X</span><span>{koordinate(punkt.x)}</span>
-        <span style={styles.achse}>Y</span><span>{koordinate(punkt.y)}</span>
-        <span style={styles.achse}>Z</span><span>{koordinate(punkt.z)}</span>
+      <div
+        ref={inner as RefObject<HTMLDivElement>}
+        style={{ ...styles.koordinaten, ...schrumpf(scale) }}
+      >
+        <span style={styles.achse}>X</span><span>{x}</span>
+        <span style={styles.achse}>Y</span><span>{y}</span>
+        <span style={styles.achse}>Z</span><span>{z}</span>
       </div>
     </Zelle>
   );
@@ -295,10 +329,6 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--text-muted)',
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
-  },
-  geoUntertitel: {
-    fontSize: 'var(--font-sm)',
-    color: 'var(--text-muted)',
   },
   /*
    * The chart is given a measured pixel height, so the padding that keeps the
@@ -367,6 +397,7 @@ const styles: Record<string, CSSProperties> = {
     gap: '0.35rem',
   },
   heroWert: {
+    fontSize: '5.5rem',
     fontWeight: 800,
     lineHeight: 1.05,
     fontVariantNumeric: 'tabular-nums',
@@ -378,6 +409,7 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--text-muted)',
   },
   winkelWert: {
+    fontSize: '5rem',
     fontWeight: 800,
     lineHeight: 1.05,
     fontVariantNumeric: 'tabular-nums',

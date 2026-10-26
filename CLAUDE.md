@@ -31,6 +31,9 @@ This runs on construction sites, not office desks. Every UI decision should refl
 - **Danger button style** — Default state: `var(--surface-3)` background, `var(--color-danger)` text. Confirmation state: `var(--color-danger)` background, white text. Consistent across all destructive buttons
 - **No scrolling** — All content must fit within the viewport. Scrollbars mean the layout is wrong. Workers glance at a screen, they don't scroll. Design layouts to fill available space (e.g. use flex with `min-height: 0`, `modus="vollbild"` for visualizations) rather than overflowing
 - **Keep screens shallow** — A screen with more than 3–4 cards or sections is too dense; split it into a hub page with navigation tiles and dedicated sub-screens. This applies especially to settings and configuration, where fields accumulate over time. When adding a new setting, check whether the page it lands on still fits at 1024x768 — if not, introduce a sub-screen rather than making the page scroll. Service-personnel screens (wizard steps, Rohrverlängerung) may scroll when the density is justified, but worker-facing screens never do
+- **The font is part of the layout** — `--font-body` leads with **DejaVu Sans**, which is what a provisioned Debian actually has (no Segoe UI, no Noto, no Liberation), and `tokens.css` applies it to `html, body`. It did not do that until 2026-10-19: the token had three readers in the whole UI and everything else inherited the browser default, which is a *serif* — so the kiosk drew its screens in DejaVu Serif while a development box drew them in Liberation or Noto Serif. Every width measured locally was the wrong width, which is how `Tippen zum Korrigieren` came to wrap on the machine and nowhere else. Naming the machine's font first is what makes a local 1024x768 check mean something. Anything sized against a *string* (a column width, a reserved column in an SVG) has to be re-measured when the string changes, and the comment at that constant should say so
+- **Readings must fit the space they are given** — Field values are wider than the ones on screen while a layout is built: `Durchfluss B` passes 1000 l/min, the dials pass 200, the total volume passes 100 000 l. Each of those drew its digits over the graphic it is measured against. `useFitScale.ts` is the answer — `useSvgTextFit` for a dial or bar reading, `useBoxFit` for an HTML one — and it **measures**; a character-width table would be a second place the font matters, wrong on exactly the machine nobody is watching. Normal values are untouched and only the rare wide one shrinks. Never reserve room for the worst case instead: that sizes every bar and dial for a number nobody sees, and a measurement is the one thing that may not be covered up. **And never count characters.** The briefing screen stepped its Soll values down in three buckets keyed on string length, with the pixels-per-digit measured by hand in DejaVu Sans — which is a second place the font is assumed, overshoots (a seven-character value lost a quarter of its size where a twentieth would have done), and has to be re-derived every time a size or a column changes. `useBoxFit` with no `outer` ref measures against the value's own parent, so a cell rendered by one component and filled by another costs nothing to fit
+- **Bar and dial ranges come from the Bohrung G08 capture** — the one recorded shift, documented in `assets/reference/README.md`; the raw dump is gitignored and kept beside the repo, and the two slices in `server/test-fixtures/` are what is actually in it. Three bars were set by eye before that data existed and all three were too small — `Durchfluss B` 0–300 against a **median of 698 l/min while the pump runs** and a session max of 1046, `Vorschub` 0–60 against a median of 56 while advancing, `Druck Medium` 0–70 against a median of 63. They sat pinned at the right end through the whole of the phase they report, showing no change at all while the value moved. Justify a range from what the channel does *while it is working*, not from its min/max alone: a max tells you nothing about whether the bar is usable, and the first pass at this had only the max. A scale that is slightly generous costs resolution; one that is too short costs the reading
 - **Landscape-first** — Industry PCs are typically widescreen. Use CSS Grid for responsive tile layouts
 - **No emoji** — The kiosk installs `fonts-dejavu-core` and nothing else, so there is no emoji font on the machine: anything above `U+FFFF` renders as a tofu box. `✓` `✕` `⚠` `·` `„" ` `—` are covered and in use; a padlock, a wifi glyph or a warning emoji are not. Check a new symbol on the machine (`fc-list ':charset=<codepoint>' | wc -l`) rather than in a browser on a developer laptop, which has fonts the kiosk does not
 - **Minimal text** — Use numbers, colors, and icons over paragraphs. Workers glance, they don't read
@@ -1472,6 +1475,41 @@ They exist for the failures no unit test can see: the viewport is a hard constra
 - **The browser logs every 4xx/5xx response as a console error.** An unconfigured kiosk answering 503 from `/api/…` is correct degradation, so console errors are filtered to real script errors while *non-API* request failures stay strict — a 404 on a JS chunk is exactly what this should catch.
 
 `e2e/seed.mjs` prepares a throwaway database through the server's own `db` module (importing it is what creates the schema, and it avoids a second copy of the DDL). It refuses to touch a path ending in `kiosk.db`, the same rule the vitest config enforces.
+
+**Checking a layout against real values, without a kiosk.** The smoke tests
+answer "does anything overflow" for a seeded database at rest. They cannot
+answer "what does this screen look like while a rig is running", which is the
+question every width on the drilling screen actually turns on — and getting it
+wrong is how a PR ships layout numbers nobody has seen. Three pieces, none of
+them new, which have to be used together:
+
+- **The replay server** (`npm run replay`, or `npx tsx
+  server/src/replay-server.ts`) publishes a recorded dump onto an embedded
+  broker. `POST /api/replay/load` takes a path relative to the repo root, so
+  `server/test-fixtures/g8-rohrwechsel.txt` works with nothing else on the
+  machine. Point the kiosk at it with **`MQTT_BROKER_URL`** — not `MQTT_URL`,
+  which is what the replay server's own banner says and which is silently
+  ignored — and `MQTT_TOPICS='#'`, since a rig's topics match no default
+  filter.
+- **The screen reads raw topics.** `buildSensorValues` keys every reading
+  under its topic, its last segment *and* its resolved sensor, so the drilling
+  screen renders off the dump with no topic wiring at all. Wiring
+  `Spuelpumpe/Volumen → Q_Bohren` as a topic override is what puts a real
+  five-figure total in the Gesamtvolumen cell without a recording; the
+  Klemmbacke row needs `rohrwechsel_clamp_topic` plus the 3500/2500 thresholds
+  from the reference README, and is simply absent without them.
+- **Force a wide font in the measuring browser.** This repo is developed on
+  machines that have no DejaVu at all, so `--font-body` falls through to
+  something narrower than the kiosk's and a local render is optimistic.
+  `* { font-family: Verdana }` in an init script is wider than DejaVu and
+  therefore errs safe. Measure `scrollWidth` against the parent's
+  `clientWidth`, and check every element's bounding rect against 1024x768 —
+  the document's own `scrollWidth` says nothing about a value clipped inside
+  an `overflow: hidden` container, which is how all of these fail.
+
+This is a throwaway harness, deliberately: it lives in a scratch directory for
+the change being checked, not in the repo. What belongs here is the recipe,
+because each of the four footguns above cost a cycle to find.
 
 **Pre-update health check** (server-side): Before the auto-updater commits to a new version, the new server must boot and respond to `/health` with a passing status (DB accessible, config loadable, static assets present). If the health check fails, the updater keeps the previous version. No browser involved — this runs on the kiosk itself.
 

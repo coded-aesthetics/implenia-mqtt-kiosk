@@ -46,7 +46,17 @@
   --axis-ticks: rgba(0, 0, 0, 0.12);
 
   /* ── Typography ───────────────────────────────────────────────── */
-  --font-body: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  /*
+   * DejaVu Sans is named first because it is what the kiosk actually has.
+   *
+   * A provisioned Debian carries DejaVu, Nimbus and the URW set — no Segoe UI,
+   * no Noto, no Liberation. Naming it first makes a Linux development box
+   * render the same metrics the machine will, which is the whole point: every
+   * layout here is pinned to 1024x768, so a font that measures differently in
+   * development is a layout that is only ever verified against the wrong
+   * widths. See the `html, body` rule below for what this used to be.
+   */
+  --font-body: 'DejaVu Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 
   --font-hero: 3.5rem;      /* hero sensor values */
@@ -117,4 +127,25 @@
 .replay-slider::-moz-range-track {
   height: 8px;
   background: transparent;
+}
+
+/*
+ * The app's font, applied.
+ *
+ * `--font-body` existed from the start and was read by three inline styles out
+ * of the whole UI, so `body` kept the browser default — and that default is a
+ * *serif*. Chromium reports it as "Times New Roman" and resolves it through
+ * fontconfig, which means the kiosk drew almost every screen in DejaVu Serif
+ * while a development box drew it in Liberation or Noto Serif. Different
+ * family, different widths, same source: layouts verified at 1024x768 locally
+ * came out crowded on the machine, "Tippen zum Korrigieren" wrapped to two
+ * lines there and not here, and the drilling screen's numbers ran into the
+ * graphics they are measured against.
+ *
+ * Everything inherits from here. An element that wants a different family says
+ * so; nothing has to opt in to the normal one.
+ */
+html,
+body {
+  font-family: var(--font-body);
 }
