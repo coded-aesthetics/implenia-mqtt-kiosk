@@ -282,21 +282,42 @@ export function BohrenScreen({
 }
 
 /*
- * The ranges come from `assets/bohrung_g8.txt`, the one full shift that has
- * been captured off a real rig. Three of these were set by eye before there
- * was any data and were too small by a wide margin, so the bar sat pinned at
- * its right end for long stretches — which is the one thing a bar may not
- * do, since it then shows no change at all while the value moves.
+ * The three bar ranges come from Bohrung G08, Marktbreit, the one full shift
+ * captured off a real Injektionsbohren rig. They were set by eye before that
+ * capture existed and every one of them was too small — so the bar sat pinned
+ * at its right end through the whole of the phase it is there to report, which
+ * is the one thing a bar may not do: it then shows no change at all while the
+ * value moves, and a worker watching it has no way to know that.
  *
- * Observed over that shift (min / max):
- *   Ziehgeschwindigkeit  -121.69 / 143.98   was 0..60
- *   Druck_Medium          -76.76 / 119.93   was 0..70
- *   Spuelpumpe/Durchfluss   0.00 / 1046.51  was 0..300   (mean 321.84)
+ * `assets/reference/README.md` is the in-repo record of the capture, including
+ * the full-session range of every topic. The raw 15 MB dump
+ * (`assets/bohrung_g8_marktbreit_mqtt.txt`) is gitignored and kept beside the
+ * repo — ask for a copy. The two slices in `server/test-fixtures/` are in the
+ * repo, and the distributions below can be recomputed from them.
  *
- * The maxima are rounded up for headroom; one rig is one rig, and a scale
- * that is slightly generous costs resolution while one that is too short
- * costs the reading. Negative values (retraction, suction) still clamp to
- * the left end — the drilling screen is about what goes down the hole.
+ *                          was      full session    while actually running
+ *   Ziehgeschwindigkeit    0..60   -121.7 / 144.0   median  56, max  143
+ *   Druck_Medium           0..70    -76.8 / 119.9   median  63, max   81
+ *   Spuelpumpe/Durchfluss  0..300     0.0 / 1046.5  median 698, max  872
+ *
+ * The last column is what settles it, and it is the column the first pass at
+ * this did not have: the pump's *median* while pumping is 698 l/min against an
+ * old scale that ended at 300, and the feed's median while advancing is 56
+ * against one that ended at 60. These are sustained working values, not
+ * spikes on an otherwise quiet channel, so the old bars were off their own
+ * scale for most of a shift rather than occasionally.
+ *
+ * The maxima are rounded up past the full-session extreme for headroom — one
+ * rig is one rig, and a scale that is slightly generous costs resolution while
+ * one that is too short costs the reading. `Druck_Medium` keeps the Verpressen
+ * screen's scale for the same sensor (0..150), so the operator reads one
+ * number in one place on both screens; that leaves its working band in the
+ * lower half of the bar, which is the price of agreeing with the gauge next
+ * door and of the clean 0/50/100/150 ticks `autoLabelStep` gives it.
+ *
+ * Negative values (retraction, suction) still clamp to the left end — the
+ * drilling screen is about what goes down the hole. The reading beside the bar
+ * carries the sign.
  */
 export const INJEKTIONSBOHREN_BOHREN: BohrenConfig = {
   depthSensor: 'Tiefe',

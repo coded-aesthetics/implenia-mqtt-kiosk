@@ -22,6 +22,21 @@ import type { RefObject } from 'react';
  * machine nobody is looking at.
  */
 
+/**
+ * The gap a fitted reading keeps to each edge of its box, in px.
+ *
+ * Fitting flush is what the arithmetic says and not what it should do. Measured
+ * on the briefing screen at 1024x768 in a deliberately wide face: a 2 500 l
+ * `Sollvolumen` — an ordinary value, not a stress case — shrank to exactly its
+ * 385px cell, so its `l` was painted hard against the boundary with the
+ * Bohrlänge's cell 12px away. It reads as clipped whether or not it is, and a
+ * worker glancing at a kiosk has no way to tell the difference.
+ *
+ * 8px costs a value at the limit about 4% of its size and nothing at all to a
+ * value that already fits, which is almost all of them.
+ */
+const POLSTER = 8;
+
 /** A string's shape, so re-measuring happens per *width class*, not per value. */
 function shapeOf(text: string): string {
   return text.replace(/\d/g, '0');
@@ -62,7 +77,15 @@ export function useSvgTextFit(
  *
  * Used where the available width is itself the product of a flex layout and so
  * is not a constant anybody can write down — the total volume beside the
- * Klemmbacke, whose cell narrows as the pipe counter appears.
+ * Klemmbacke, whose cell narrows as the pipe counter appears, and the
+ * briefing's six Soll cells, which share the column between them.
+ *
+ * `outer` is optional. Attached, it names the box the reading is measured
+ * against; left alone, the reading's own parent is the box. The briefing wants
+ * the latter: its cell is rendered by `Zelle` and the value by whichever of
+ * `Hero`/`Winkel`/`Punkt` sits inside it, so threading a ref between the two
+ * would buy nothing over asking the DOM which element the value is actually
+ * in.
  */
 export function useBoxFit(
   text: string,
@@ -74,15 +97,15 @@ export function useBoxFit(
 
   useLayoutEffect(() => {
     const el = inner.current;
-    const box = outer.current;
+    const box = outer.current ?? el?.parentElement ?? null;
     if (!el || !box) return;
 
     const measure = () => {
-      const available = box.clientWidth;
+      const available = box.clientWidth - 2 * POLSTER;
       // The element is drawn scaled, so its rect is not its intrinsic width.
       // scrollWidth is laid out before the transform and stays honest.
       const needed = el.scrollWidth;
-      if (!available || !needed) return;
+      if (available <= 0 || !needed) return;
       setScale(needed > available ? available / needed : 1);
     };
 
