@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { CSSProperties, ReactNode, RefObject } from 'react';
-import { BohrprofilLog, normalisiere } from '@coded-aesthetics/din4023/profile';
+import { BohrprofilLog } from '@coded-aesthetics/din4023/profile';
 import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 import { useBoxFit } from '../hooks/useFitScale';
 import type { VorgabenData } from '../hooks/useImplenia';
@@ -109,34 +109,21 @@ export function BriefingScreen({ vorgaben, weiter }: Props) {
   const grenze = profil !== null && profil.vermessenBis > 0
     && profil.vermessenBis < profil.endTiefe ? profil.vermessenBis : null;
 
-  /*
-   * The layers the chart will actually draw.
-   *
-   * Never `profil.schichten.length`, which is what the Schichtauftrag listed
-   * and not what appears: `normalisiere` — which the chart runs on its input
-   * anyway — collapses layers sharing a depth, merges adjacent ones of the
-   * same ground type, and drops anything at or below `endTiefe`. A pillar
-   * whose bore was keyed shallower than its geology read „4 Schichten" over a
-   * column showing one. Counting the same list the chart draws is what keeps
-   * the two from ever disagreeing again.
-   */
-  const gezeichnet = useMemo(
-    () => (profil ? normalisiere(profil.schichten, profil.endTiefe) : []),
-    [profil],
-  );
-
-  const profilUntertitel = profil === null
-    ? 'Keine Vorgabe'
-    : `${gezeichnet.length} ${gezeichnet.length === 1 ? 'Schicht' : 'Schichten'}`
-      + ` bis ${formatNumber(profil.endTiefe)} m`;
-
   return (
     <div style={styles.container}>
       {/* Left: the planned profile, bottoming out at the planned depth */}
       <div style={styles.geoSpalte}>
+        {/*
+          * Just the heading. It used to carry „4 Schichten bis 36,00 m"
+          * underneath, counted off the normalised layer list so it could not
+          * disagree with the drawing — but the drawing is the better answer to
+          * both halves: the layers are the bands, and the bottom depth is the
+          * last tick on the axis beside them. A line of prose restating a
+          * picture is a line that can be wrong about it, and this one also
+          * wrapped, stranding its unit on a second line in a 194px column.
+          */}
         <div style={styles.geoKopf}>
           <div style={styles.geoTitel}>Geologie Soll</div>
-          <div style={styles.geoUntertitel}>{profilUntertitel}</div>
         </div>
         {profil ? (
           <div ref={profilRef} data-testid="briefing-profil" style={styles.profil}>
@@ -155,9 +142,17 @@ export function BriefingScreen({ vorgaben, weiter }: Props) {
             Der Schichtauftrag nennt für dieses Element keine Geologie.
           </div>
         )}
+        {/*
+          * The one thing the drawing cannot say. It marks the boundary with a
+          * dashed line; that below it nobody surveyed needs words.
+          *
+          * `&nbsp;` because this wraps — it is the only running text left on
+          * the screen, in a 194px column — and an ordinary space would let the
+          * break fall between the depth and its unit.
+          */}
         {grenze !== null && (
           <div style={styles.geoFuss}>
-            Unterhalb {formatNumber(grenze)} m ist die Geologie nicht erkundet.
+            Unterhalb {formatNumber(grenze)}&nbsp;m ist die Geologie nicht erkundet.
           </div>
         )}
       </div>
@@ -334,10 +329,6 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--text-muted)',
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
-  },
-  geoUntertitel: {
-    fontSize: 'var(--font-sm)',
-    color: 'var(--text-muted)',
   },
   /*
    * The chart is given a measured pixel height, so the padding that keeps the
