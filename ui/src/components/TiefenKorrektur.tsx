@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { formatNumber } from '../utils/format';
 import { useGestenSperre } from '../hooks/useGestenSperre';
+import { naechsteKorrektur, nurTieferMoeglich } from '../utils/tiefenkorrektur';
 
 /**
  * Correct the depth of the hole being drilled.
@@ -75,9 +76,6 @@ const SCHRITTE: readonly { cm: number; wiederholt: boolean }[] = [
   { cm: 1, wiederholt: true },
 ];
 
-/** Must match MAX_DEPTH_CORRECTION_M on the server. */
-const MAX_CM = 5000;
-
 /** No touch for this long and the screen gives the drilling profile back. */
 const LEERLAUF_MS = 20_000;
 
@@ -103,13 +101,10 @@ export function TiefenKorrektur({ tiefe, bisherigeKorrektur, onUebernehmen, onAb
 
   const schritt = (cm: number) => {
     setFehler(null);
-    setDeltaCm((vorher) => {
-      const tiefeCm = Math.round((tiefeRef.current ?? 0) * 100);
-      // A depth above the ground is not a depth. The server refuses it too;
-      // stopping at 0 means the worker never has to read that message.
-      const min = -tiefeCm;
-      return Math.max(-MAX_CM, Math.min(MAX_CM, Math.max(min, vorher + cm)));
-    });
+    // The bound is read off the live depth on every press, because what is
+    // submitted is a difference — see naechsteKorrektur, which is also where
+    // the one thing that is easy to get wrong about it is written down.
+    setDeltaCm((vorher) => naechsteKorrektur(vorher, cm, tiefeRef.current));
   };
 
   const uebernehmen = async () => {
@@ -182,6 +177,18 @@ export function TiefenKorrektur({ tiefe, bisherigeKorrektur, onUebernehmen, onAb
               <span style={styles.anzeigeZeile}>
                 Bisher auf diesem Element: {bisherigeKorrektur > 0 ? '+' : ''}
                 {formatNumber(bisherigeKorrektur)} m
+              </span>
+            )}
+            {/*
+              Said, rather than left to be discovered by pressing: the three
+              „Flacher" buttons cannot move a depth that is already at or above
+              ground level, and three buttons that do nothing for no stated
+              reason is the dead end this screen is not allowed to be.
+            */}
+            {nurTieferMoeglich(tiefe) && (
+              <span style={styles.anzeigeHinweis}>
+                Das Gerät meldet {formatNumber(tiefe)} m, also keine Tiefe unter Grund.
+                Deshalb ist nur „Tiefer" möglich.
               </span>
             )}
           </div>
@@ -408,6 +415,15 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 600,
     color: 'var(--text-muted)',
     fontVariantNumeric: 'tabular-nums',
+  },
+  anzeigeHinweis: {
+    marginTop: 'var(--space-xs)',
+    maxWidth: 360,
+    textAlign: 'center',
+    fontSize: 'var(--font-base)',
+    fontWeight: 700,
+    lineHeight: 1.35,
+    color: 'var(--text-primary)',
   },
   anzeigeDelta: {
     fontSize: 'var(--font-md)',
