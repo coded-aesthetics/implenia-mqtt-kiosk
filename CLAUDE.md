@@ -1476,6 +1476,41 @@ They exist for the failures no unit test can see: the viewport is a hard constra
 
 `e2e/seed.mjs` prepares a throwaway database through the server's own `db` module (importing it is what creates the schema, and it avoids a second copy of the DDL). It refuses to touch a path ending in `kiosk.db`, the same rule the vitest config enforces.
 
+**Checking a layout against real values, without a kiosk.** The smoke tests
+answer "does anything overflow" for a seeded database at rest. They cannot
+answer "what does this screen look like while a rig is running", which is the
+question every width on the drilling screen actually turns on — and getting it
+wrong is how a PR ships layout numbers nobody has seen. Three pieces, none of
+them new, which have to be used together:
+
+- **The replay server** (`npm run replay`, or `npx tsx
+  server/src/replay-server.ts`) publishes a recorded dump onto an embedded
+  broker. `POST /api/replay/load` takes a path relative to the repo root, so
+  `server/test-fixtures/g8-rohrwechsel.txt` works with nothing else on the
+  machine. Point the kiosk at it with **`MQTT_BROKER_URL`** — not `MQTT_URL`,
+  which is what the replay server's own banner says and which is silently
+  ignored — and `MQTT_TOPICS='#'`, since a rig's topics match no default
+  filter.
+- **The screen reads raw topics.** `buildSensorValues` keys every reading
+  under its topic, its last segment *and* its resolved sensor, so the drilling
+  screen renders off the dump with no topic wiring at all. Wiring
+  `Spuelpumpe/Volumen → Q_Bohren` as a topic override is what puts a real
+  five-figure total in the Gesamtvolumen cell without a recording; the
+  Klemmbacke row needs `rohrwechsel_clamp_topic` plus the 3500/2500 thresholds
+  from the reference README, and is simply absent without them.
+- **Force a wide font in the measuring browser.** This repo is developed on
+  machines that have no DejaVu at all, so `--font-body` falls through to
+  something narrower than the kiosk's and a local render is optimistic.
+  `* { font-family: Verdana }` in an init script is wider than DejaVu and
+  therefore errs safe. Measure `scrollWidth` against the parent's
+  `clientWidth`, and check every element's bounding rect against 1024x768 —
+  the document's own `scrollWidth` says nothing about a value clipped inside
+  an `overflow: hidden` container, which is how all of these fail.
+
+This is a throwaway harness, deliberately: it lives in a scratch directory for
+the change being checked, not in the repo. What belongs here is the recipe,
+because each of the four footguns above cost a cycle to find.
+
 **Pre-update health check** (server-side): Before the auto-updater commits to a new version, the new server must boot and respond to `/health` with a passing status (DB accessible, config loadable, static assets present). If the health check fails, the updater keeps the previous version. No browser involved — this runs on the kiosk itself.
 
 ## Logging
